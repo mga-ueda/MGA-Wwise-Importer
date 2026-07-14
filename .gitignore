@@ -1,0 +1,17 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.dbmdl
+*.jfm
+.vs/
+*.nupkg
+*.snupkg
+project.lock.json
+artifacts/
+
+# Local test assets (do not commit)
+test/

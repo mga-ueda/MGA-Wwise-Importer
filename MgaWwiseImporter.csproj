@@ -1,0 +1,28 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>MgaWwiseImporter</RootNamespace>
+    <AssemblyName>MgaWwiseImporter</AssemblyName>
+    <Product>MGA Wwise Importer</Product>
+    <ApplicationTitle>MGA Wwise Importer</ApplicationTitle>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Update="UI\Form1.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="UI\Form1.Designer.cs">
+      <DependentUpon>Form1.cs</DependentUpon>
+    </Compile>
+  </ItemGroup>
+
+</Project>

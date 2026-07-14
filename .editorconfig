@@ -1,0 +1,5 @@
+root = true
+
+[*.cs]
+# Namespaces follow folder structure (e.g. UI -> MgaWwiseImporter.UI).
+dotnet_style_namespace_match_folder = true
