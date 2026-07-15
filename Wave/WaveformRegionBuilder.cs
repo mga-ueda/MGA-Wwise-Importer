@@ -165,7 +165,7 @@ internal static class WaveformRegionBuilder
         IReadOnlyList<(long Start, long End)> loopLeftRanges,
         IReadOnlyList<(long Start, long End)> anacrusisRanges)
     {
-        // 例: "-L" / "-A"（複数可）。-R は IsExcluded で表し、接尾辞には付けない。
+        // 例: "-L" / "-A"（排他想定）。-R は IsExcluded で表し、接尾辞には付けない。
         var suffix = string.Empty;
         if (!excluded && ContainsSample(loopLeftRanges, midSample))
         {

@@ -4,7 +4,7 @@ using System.Text;
 namespace MgaWwiseImporter.Wave;
 
 /// <summary>
-/// 出力計画（<see cref="WaveformOutputPart"/>）に従い、リージョン付き WAV を分割書き出しする。
+/// 出力計画（<see cref="WaveformOutputPart"/>）に従い、リージョン／マーカー付き WAV を分割書き出しする。
 /// 除外区画（-R など）は書き出さず、その前後でファイルが分かれる。
 /// </summary>
 internal static class WaveformExporter
@@ -15,6 +15,7 @@ internal static class WaveformExporter
         IReadOnlyList<WaveformOutputPart> outputParts,
         IReadOnlyList<WaveformRegionMark> regions,
         IReadOnlyList<WaveformBarMark> bars,
+        IReadOnlyList<WaveformMarkerMark> markers,
         Action<WaveformOutputPart>? onPartBegin = null)
     {
         var sb = new StringBuilder();
@@ -41,7 +42,7 @@ internal static class WaveformExporter
             var destPath = Path.Combine(directory, part.FileName);
             try
             {
-                var cues = BuildCuesForPart(part, regions, bars);
+                var cues = BuildCuesForPart(part, regions, bars, markers);
                 WavCueWriter.WriteSegment(
                     sourcePath,
                     destPath,
@@ -55,6 +56,8 @@ internal static class WaveformExporter
                 var durationSec = wavInfo.SampleRate == 0
                     ? 0d
                     : frames / (double)wavInfo.SampleRate;
+                var regionCount = cues.Count(c => c.IsRegion);
+                var markerCount = cues.Count - regionCount;
 
                 sb.AppendLine($"--- Part #{part.Number} ---");
                 sb.AppendLine($"File    : {destPath}");
@@ -63,13 +66,16 @@ internal static class WaveformExporter
                     + $"  frames={frames:N0}"
                     + $"  duration={durationSec:0.000}s");
                 sb.AppendLine($"Size    : {info.Length:N0} bytes");
-                sb.AppendLine($"Regions : {cues.Count}");
+                sb.AppendLine($"Cues    : {cues.Count} (Regions={regionCount}, Markers={markerCount})");
                 foreach (var cue in cues)
                 {
+                    var kind = cue.IsRegion ? "Region" : "Marker";
                     sb.AppendLine(
-                        $"  - Region#{cue.Id}"
+                        $"  - {kind}#{cue.Id}"
                         + $"  sample={cue.SampleOffset.ToString(CultureInfo.InvariantCulture)}"
-                        + $"  length={cue.SampleLength.ToString(CultureInfo.InvariantCulture)}"
+                        + (cue.IsRegion
+                            ? $"  length={cue.SampleLength.ToString(CultureInfo.InvariantCulture)}"
+                            : string.Empty)
                         + $"  \"{cue.Comment}\"");
                 }
 
@@ -95,7 +101,8 @@ internal static class WaveformExporter
     private static IReadOnlyList<WavCueItem> BuildCuesForPart(
         WaveformOutputPart part,
         IReadOnlyList<WaveformRegionMark> regions,
-        IReadOnlyList<WaveformBarMark> bars)
+        IReadOnlyList<WaveformBarMark> bars,
+        IReadOnlyList<WaveformMarkerMark> markers)
     {
         var cues = new List<WavCueItem>();
         uint nextId = 1;
@@ -126,7 +133,58 @@ internal static class WaveformExporter
                 SampleOffset = localStart,
                 SampleLength = length,
                 Comment = comment,
+                IsRegion = true,
             });
+        }
+
+        foreach (var marker in markers)
+        {
+            if (marker.SampleOffset < part.StartSampleOffset
+                || marker.SampleOffset >= part.EndSampleOffset)
+            {
+                continue;
+            }
+
+            var comment = marker.Comment?.Trim() ?? string.Empty;
+            if (comment.Length == 0)
+            {
+                continue;
+            }
+
+            cues.Add(new WavCueItem
+            {
+                Id = nextId++,
+                SampleOffset = marker.SampleOffset - part.StartSampleOffset,
+                SampleLength = 0,
+                Comment = comment,
+                IsRegion = false,
+            });
+        }
+
+        // cue チャンク上はサンプル位置順の方が扱いやすい
+        cues.Sort((a, b) =>
+        {
+            var cmp = a.SampleOffset.CompareTo(b.SampleOffset);
+            if (cmp != 0)
+            {
+                return cmp;
+            }
+
+            // 同一位置ならリージョンを先に
+            return b.IsRegion.CompareTo(a.IsRegion);
+        });
+
+        // Id を並び順に振り直す
+        for (var i = 0; i < cues.Count; i++)
+        {
+            cues[i] = new WavCueItem
+            {
+                Id = (uint)(i + 1),
+                SampleOffset = cues[i].SampleOffset,
+                SampleLength = cues[i].SampleLength,
+                Comment = cues[i].Comment,
+                IsRegion = cues[i].IsRegion,
+            };
         }
 
         return cues;

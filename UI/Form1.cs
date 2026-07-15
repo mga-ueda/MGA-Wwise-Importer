@@ -319,6 +319,7 @@ public partial class Form1 : Form
                 preview.OutputParts,
                 preview.Regions,
                 preview.Bars,
+                preview.Markers,
                 onPartBegin: part =>
                 {
                     if (exportGeneration != _exportGeneration || IsDisposed)

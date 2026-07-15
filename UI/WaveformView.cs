@@ -987,20 +987,47 @@ internal sealed class WaveformView : Control
             var x0 = wave.Left + (float)(t0 * wave.Width);
             var x1 = wave.Left + (float)(t1 * wave.Width);
             var width = x1 - x0;
-            if (width < 8f)
+            if (width < 1f)
             {
                 continue;
             }
 
             var size = g.MeasureString(part.FileName, labelFont);
-            if (size.Width + 4f > width)
-            {
-                continue;
-            }
-
-            var x = x0 + (width - size.Width) * 0.5f;
+            // 理想はパート中央。幅不足／右端はみ出し時は左へ寄せつつ必ず描画する
+            var preferredX = x0 + (width - size.Width) * 0.5f;
+            var x = ClampLabelX(preferredX, size.Width, wave.Left, wave.Right);
             DrawLabeledShadow(g, part.FileName, labelFont, brush, shadow, x, y);
         }
+    }
+
+    /// <summary>
+    /// ラベルの理想 X を、描画範囲内に収まるよう補正する（右はみ出しは左寄せ）。
+    /// </summary>
+    private static float ClampLabelX(float preferredX, float textWidth, float leftBound, float rightBound)
+    {
+        var maxWidth = rightBound - leftBound;
+        if (maxWidth <= 0f)
+        {
+            return leftBound;
+        }
+
+        if (textWidth >= maxWidth)
+        {
+            return leftBound;
+        }
+
+        var x = preferredX;
+        if (x + textWidth > rightBound)
+        {
+            x = rightBound - textWidth;
+        }
+
+        if (x < leftBound)
+        {
+            x = leftBound;
+        }
+
+        return x;
     }
 
     /// <summary>
@@ -1219,8 +1246,7 @@ internal sealed class WaveformView : Control
         using var triangleBrush = new SolidBrush(UiColors.MarkerTriangle);
         using var textBrush = new SolidBrush(UiColors.MarkerFg);
 
-        var lastLabelRight = float.NegativeInfinity;
-
+        // 三角は時刻順に描画
         foreach (var marker in _markers)
         {
             var t = Math.Clamp(marker.SampleOffset / (double)frameCount, 0d, 1d);
@@ -1233,18 +1259,32 @@ internal sealed class WaveformView : Control
                 new(x + triHalfW, tipY - triH),
             ];
             g.FillPolygon(triangleBrush, triangle);
+        }
 
-            if (x < lastLabelRight + 4f)
+        // コメントは右から着地優先（後のマーカーを隠しにくい）。重なり時は左へ寄せて必ず描く。
+        var nextOccupiedLeft = (float)labels.Right;
+        for (var i = _markers.Count - 1; i >= 0; i--)
+        {
+            var marker = _markers[i];
+            if (string.IsNullOrEmpty(marker.Comment))
             {
                 continue;
             }
 
-            var text = marker.Comment;
-            var size = g.MeasureString(text, Font);
-            var textX = x + triHalfW + 2f;
+            var t = Math.Clamp(marker.SampleOffset / (double)frameCount, 0d, 1d);
+            var x = labels.Left + (float)(t * labels.Width);
+            var size = g.MeasureString(marker.Comment, Font);
+            var preferredX = x + triHalfW + 2f;
+            var rightLimit = Math.Min(labels.Right, nextOccupiedLeft - 2f);
+            if (rightLimit <= labels.Left)
+            {
+                rightLimit = labels.Right;
+            }
+
+            var textX = ClampLabelX(preferredX, size.Width, labels.Left, rightLimit);
             var textY = markerRowTop + Math.Max(0f, (rowHeight - size.Height) * 0.5f);
-            g.DrawString(text, Font, textBrush, textX, textY);
-            lastLabelRight = textX + size.Width;
+            g.DrawString(marker.Comment, Font, textBrush, textX, textY);
+            nextOccupiedLeft = textX;
         }
     }
 
@@ -1271,18 +1311,15 @@ internal sealed class WaveformView : Control
             var width = Math.Max(1f, x1 - x0);
             g.FillRectangle(rangeBrush, x0, cycleRowTop, width, rowHeight);
 
-            if (string.IsNullOrEmpty(cycle.Comment) || width < 12f)
+            if (string.IsNullOrEmpty(cycle.Comment))
             {
                 continue;
             }
 
             var size = g.MeasureString(cycle.Comment, Font);
-            if (size.Width + 6f > width)
-            {
-                continue;
-            }
-
-            g.DrawString(cycle.Comment, Font, textBrush, x0 + 3f, labelY);
+            var preferredX = x0 + 3f;
+            var textX = ClampLabelX(preferredX, size.Width, labels.Left, labels.Right);
+            g.DrawString(cycle.Comment, Font, textBrush, textX, labelY);
         }
     }
 

@@ -190,7 +190,14 @@ internal static class WavCueWriter
             foreach (var cue in cues)
             {
                 WriteAdtlTextChunk(writer, "labl", cue.Id, cue.Comment);
-                WriteLtxtChunk(writer, cue.Id, cue.SampleLength, cue.Comment);
+                if (cue.IsRegion)
+                {
+                    WriteLtxtChunk(writer, cue.Id, cue.SampleLength, cue.Comment);
+                }
+                else
+                {
+                    WriteAdtlTextChunk(writer, "note", cue.Id, cue.Comment);
+                }
             }
         }
 

@@ -60,7 +60,7 @@ partial class Form1
         Controls.Add(editorTextBox);
         Controls.Add(waveformView);
         ForeColor = UiColors.WindowFore;
-        MaximizeBox = false;
+        MaximizeBox = true;
         MinimizeBox = true;
         MinimumSize = new Size(480, 320);
         Name = "Form1";
