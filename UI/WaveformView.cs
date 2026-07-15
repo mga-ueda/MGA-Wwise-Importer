@@ -31,7 +31,17 @@ internal sealed class WaveformView : Control
     ];
 
     private WavPeakData? _peaks;
+    private WavFileInfo? _wavInfo;
     private string? _sourcePath;
+    private WavPeakData? _detailPeaks;
+    private double _detailViewStart = double.NaN;
+    private double _detailViewEnd = double.NaN;
+    private int _detailPixelWidth = -1;
+    private bool _detailIsApproximate;
+    private WavPeakPyramid? _peakPyramid;
+    private int _pyramidGeneration;
+    private (double ViewStart, double ViewEnd, int Width)? _rawDetailWanted;
+    private bool _rawDetailReading;
     private IReadOnlyList<WaveformBarMark> _bars = [];
     private IReadOnlyList<WaveformMarkerMark> _markers = [];
     private IReadOnlyList<WaveformCycleMark> _cycles = [];
@@ -39,6 +49,21 @@ internal sealed class WaveformView : Control
     private IReadOnlyList<WaveformOutputPart> _outputParts = [];
     private int? _exportHighlightPartNumber;
     private readonly System.Windows.Forms.Timer _exportGlowTimer;
+
+    // 時間軸ズーム（1=全体表示。既定より縮小しない）
+    private const double TimeZoomMin = 1.0;
+    private const double TimeZoomMax = 8192.0;
+    // 約 1/12 oct 相当（旧 1.25 より細かく滑らか）
+    private const double TimeZoomStep = 1.09050773267; // ≈ 2^(1/8)
+    private double _timeZoom = TimeZoomMin;
+    private double _viewStart; // 表示左端の絶対進捗 0..1
+
+    // 振幅ズーム（1=既定。既定より縮小しない）
+    private const double AmpZoomMin = 1.0;
+    private const double AmpZoomMax = 128.0;
+    private const double AmpZoomStep = 1.09050773267;
+    private double _ampZoom = AmpZoomMin;
+
     private double? _playheadProgress;
     private readonly List<(double Progress, long TickMs)> _trailSamples = [];
     private float[]? _trailColumnAlpha;
@@ -83,6 +108,7 @@ internal sealed class WaveformView : Control
     public void SetPreview(
         WavPeakData peaks,
         string sourcePath,
+        WavFileInfo? wavInfo = null,
         IReadOnlyList<WaveformBarMark>? bars = null,
         IReadOnlyList<WaveformMarkerMark>? markers = null,
         IReadOnlyList<WaveformCycleMark>? cycles = null,
@@ -91,12 +117,17 @@ internal sealed class WaveformView : Control
     {
         StopRevealAnimation();
         _peaks = peaks;
+        _wavInfo = wavInfo;
         _sourcePath = sourcePath;
+        ClearDetailPeaks();
+        StartPeakPyramidBuild(wavInfo);
         _bars = bars ?? [];
         _markers = markers ?? [];
         _cycles = cycles ?? [];
         _regions = regions ?? [];
         _outputParts = outputParts ?? [];
+        ResetTimeZoom(refresh: false);
+        ResetAmpZoom(refresh: false);
         ClearExportHighlight();
         ClearPlayhead();
         _mouseGuideX = null;
@@ -166,12 +197,18 @@ internal sealed class WaveformView : Control
         StopRevealAnimation();
         _holdScaffold = false;
         _peaks = null;
+        _wavInfo = null;
         _sourcePath = null;
+        ClearDetailPeaks();
+        _peakPyramid = null;
+        _pyramidGeneration++;
         _bars = [];
         _markers = [];
         _cycles = [];
         _regions = [];
         _outputParts = [];
+        ResetTimeZoom(refresh: false);
+        ResetAmpZoom(refresh: false);
         ClearExportHighlight();
         _isDraggingSeek = false;
         _mouseGuideX = null;
@@ -186,6 +223,7 @@ internal sealed class WaveformView : Control
     /// <summary>
     /// 再生位置を更新する。progress は 0〜1。null で非表示。
     /// recordTrail が false のとき残光を消す（停止時など）。
+    /// recordTrail が true（再生中）のときは、ズーム表示で画面外へ出たらページめくり追従する。
     /// </summary>
     public void SetPlayhead(double? progress, bool recordTrail = false)
     {
@@ -206,9 +244,55 @@ internal sealed class WaveformView : Control
         else
         {
             RecordTrailSample(clamped);
+            FollowPlayheadPaged(clamped);
         }
 
         Invalidate();
+    }
+
+    /// <summary>
+    /// 再生ヘッドが表示窓の外へ出たとき、ページ単位で表示窓を進める／戻す。
+    /// 右はみ出し: 新ページの左端にプレイヘッド。左はみ出し: 新ページの右端付近に。
+    /// </summary>
+    private void FollowPlayheadPaged(double progress)
+    {
+        if (_peaks is null || _peaks.IsEmpty || _timeZoom <= TimeZoomMin + 1e-9)
+        {
+            return;
+        }
+
+        var span = ViewSpan;
+        if (span >= 1.0 - 1e-12)
+        {
+            return;
+        }
+
+        var viewEnd = _viewStart + span;
+        double newStart;
+        if (progress >= viewEnd)
+        {
+            // ページ送り: はみ出した位置を次ページの左端に
+            newStart = progress;
+        }
+        else if (progress < _viewStart)
+        {
+            // ページ戻し: プレイヘッドが新ページ右端に来るようずらす
+            newStart = progress - span;
+        }
+        else
+        {
+            return;
+        }
+
+        var previous = _viewStart;
+        _viewStart = newStart;
+        ClampTimeViewWindow();
+        if (Math.Abs(_viewStart - previous) < 1e-12)
+        {
+            return;
+        }
+
+        NotifyTimeViewChanged();
     }
 
     /// <summary>
@@ -240,6 +324,443 @@ internal sealed class WaveformView : Control
     }
 
     public void ClearExportHighlight() => SetExportHighlight(null);
+
+    /// <summary>時間軸を拡大（既定より縮小しない）。</summary>
+    public void ZoomTimeIn() => AdjustTimeZoom(TimeZoomStep, AnchorProgressForKeyboardZoom());
+
+    /// <summary>時間軸を縮小（既定未満にはしない）。</summary>
+    public void ZoomTimeOut() => AdjustTimeZoom(1.0 / TimeZoomStep, AnchorProgressForKeyboardZoom());
+
+    /// <summary>時間軸ズームを既定（全体表示）に戻す。</summary>
+    public void ResetTimeZoom() => ResetTimeZoom(refresh: true);
+
+    /// <summary>時間軸を最大倍率にする。</summary>
+    public void ZoomTimeToMax() => SetTimeZoomAbsolute(TimeZoomMax, AnchorProgressForKeyboardZoom());
+
+    /// <summary>振幅を拡大（既定より縮小しない）。</summary>
+    public void ZoomAmpIn() => AdjustAmpZoom(AmpZoomStep);
+
+    /// <summary>振幅を縮小（既定未満にはしない）。</summary>
+    public void ZoomAmpOut() => AdjustAmpZoom(1.0 / AmpZoomStep);
+
+    /// <summary>振幅ズームを既定に戻す。</summary>
+    public void ResetAmpZoom() => ResetAmpZoom(refresh: true);
+
+    /// <summary>振幅を最大倍率にする。</summary>
+    public void ZoomAmpToMax() => SetAmpZoomAbsolute(AmpZoomMax);
+
+    /// <summary>表示窓を波形先頭へ。</summary>
+    public void PanTimeToStart()
+    {
+        if (_peaks is null || _peaks.IsEmpty)
+        {
+            return;
+        }
+
+        _viewStart = 0;
+        NotifyTimeViewChanged();
+    }
+
+    /// <summary>表示窓を波形末尾へ。</summary>
+    public void PanTimeToEnd()
+    {
+        if (_peaks is null || _peaks.IsEmpty)
+        {
+            return;
+        }
+
+        _viewStart = Math.Max(0d, 1.0 - ViewSpan);
+        NotifyTimeViewChanged();
+    }
+
+    /// <summary>再生位置を直前の小節線へ。成功したら true。</summary>
+    public bool SeekToPreviousBar() => TrySeekAlongSamples(CollectBarSamples(), previous: true);
+
+    /// <summary>再生位置を直後の小節線へ。成功したら true。</summary>
+    public bool SeekToNextBar() => TrySeekAlongSamples(CollectBarSamples(), previous: false);
+
+    /// <summary>再生位置を直前のリージョン分割点へ。成功したら true。</summary>
+    public bool SeekToPreviousRegionSplit() =>
+        TrySeekAlongSamples(CollectRegionSplitSamples(), previous: true);
+
+    /// <summary>再生位置を直後のリージョン分割点へ。成功したら true。</summary>
+    public bool SeekToNextRegionSplit() =>
+        TrySeekAlongSamples(CollectRegionSplitSamples(), previous: false);
+
+    private List<long> CollectBarSamples()
+    {
+        var result = new List<long>();
+        if (_peaks is null || _peaks.IsEmpty || _peaks.FrameCount <= 0)
+        {
+            return result;
+        }
+
+        var frameCount = _peaks.FrameCount;
+        var seen = new HashSet<long>();
+        foreach (var bar in _bars)
+        {
+            if (bar.IsTempoChangeOnly)
+            {
+                continue;
+            }
+
+            var sample = Math.Clamp(bar.SampleOffset, 0L, frameCount);
+            if (seen.Add(sample))
+            {
+                result.Add(sample);
+            }
+        }
+
+        return result;
+    }
+
+    private List<long> CollectRegionSplitSamples()
+    {
+        var result = new List<long>();
+        if (_peaks is null || _peaks.IsEmpty || _peaks.FrameCount <= 0 || _regions.Count == 0)
+        {
+            return result;
+        }
+
+        var frameCount = _peaks.FrameCount;
+        var seen = new HashSet<long>();
+        foreach (var region in _regions)
+        {
+            var start = Math.Clamp(region.StartSampleOffset, 0L, frameCount);
+            if (seen.Add(start))
+            {
+                result.Add(start);
+            }
+
+            var end = Math.Clamp(region.EndSampleOffset, 0L, frameCount);
+            if (seen.Add(end))
+            {
+                result.Add(end);
+            }
+        }
+
+        return result;
+    }
+
+    private bool TrySeekAlongSamples(List<long> samples, bool previous)
+    {
+        if (_peaks is null || _peaks.IsEmpty || _peaks.FrameCount <= 0 || samples.Count == 0)
+        {
+            return false;
+        }
+
+        samples.Sort();
+        var frameCount = _peaks.FrameCount;
+        // 再生エンジンは時間ベースで僅かに手前へ着地し得るため、表示上の位置でサンプルを出す
+        var currentSample = (long)Math.Round((_playheadProgress ?? 0d) * frameCount);
+        currentSample = Math.Clamp(currentSample, 0L, frameCount);
+
+        long? targetSample = null;
+        if (previous)
+        {
+            for (var i = samples.Count - 1; i >= 0; i--)
+            {
+                if (samples[i] < currentSample)
+                {
+                    targetSample = samples[i];
+                    break;
+                }
+            }
+        }
+        else
+        {
+            for (var i = 0; i < samples.Count; i++)
+            {
+                if (samples[i] > currentSample)
+                {
+                    targetSample = samples[i];
+                    break;
+                }
+            }
+        }
+
+        if (targetSample is not long sample)
+        {
+            return false;
+        }
+
+        var progress = Math.Clamp(sample / (double)frameCount, 0d, 1d);
+        // エンジン着地誤差の前に表示位置を確定し、連続ジャンプを可能にする
+        _playheadProgress = progress;
+        EnsureAbsoluteVisible(progress);
+        SeekRequested?.Invoke(this, progress);
+        return true;
+    }
+
+    /// <summary>指定の絶対進捗が見えるよう表示窓をずらす（既に見えていれば何もしない）。</summary>
+    private void EnsureAbsoluteVisible(double absoluteProgress)
+    {
+        if (_peaks is null || _peaks.IsEmpty || _timeZoom <= TimeZoomMin + 1e-9)
+        {
+            return;
+        }
+
+        absoluteProgress = Math.Clamp(absoluteProgress, 0d, 1d);
+        var span = ViewSpan;
+        var margin = span * 0.05d;
+        if (absoluteProgress >= _viewStart + margin && absoluteProgress <= ViewEnd - margin)
+        {
+            return;
+        }
+
+        _viewStart = absoluteProgress - span * 0.5d;
+        ClampTimeViewWindow();
+        NotifyTimeViewChanged();
+    }
+
+    /// <summary>
+    /// マウスホイールによる時間軸ズーム。
+    /// <paramref name="mouseX"/> は本コントロール座標系。アンカーはその X の絶対進捗。
+    /// </summary>
+    public void ZoomTimeByWheel(int wheelDelta, int mouseX)
+    {
+        if (_peaks is null || _peaks.IsEmpty || wheelDelta == 0)
+        {
+            return;
+        }
+
+        // ノッチに応じた連続倍率（ホイールもキーと同じ 1/8 oct 刻み）
+        var notches = Math.Max(1.0, Math.Abs(wheelDelta) / 120.0);
+        var factor = Math.Pow(TimeZoomStep, notches);
+        if (wheelDelta < 0)
+        {
+            factor = 1.0 / factor;
+        }
+
+        var anchor = TryGetProgressFromX(mouseX, out var progress)
+            ? progress
+            : AnchorProgressForKeyboardZoom();
+        AdjustTimeZoom(factor, anchor);
+    }
+
+    /// <summary>マウスホイールによる縦方向（振幅）ズーム（Shift+ホイール）。</summary>
+    public void ZoomAmpByWheel(int wheelDelta)
+    {
+        if (_peaks is null || _peaks.IsEmpty || wheelDelta == 0)
+        {
+            return;
+        }
+
+        var notches = Math.Max(1.0, Math.Abs(wheelDelta) / 120.0);
+        var factor = Math.Pow(AmpZoomStep, notches);
+        if (wheelDelta < 0)
+        {
+            factor = 1.0 / factor;
+        }
+
+        AdjustAmpZoom(factor);
+    }
+
+    private double AnchorProgressForKeyboardZoom()
+    {
+        if (_playheadProgress is double playhead
+            && playhead >= _viewStart
+            && playhead <= ViewEnd)
+        {
+            return playhead;
+        }
+
+        return _viewStart + ViewSpan * 0.5d;
+    }
+
+    private double ViewSpan => 1.0 / Math.Max(_timeZoom, TimeZoomMin);
+
+    private double ViewEnd => Math.Min(1.0, _viewStart + ViewSpan);
+
+    private void ResetTimeZoom(bool refresh)
+    {
+        _timeZoom = TimeZoomMin;
+        _viewStart = 0;
+        if (refresh)
+        {
+            NotifyTimeViewChanged();
+        }
+    }
+
+    private void ResetAmpZoom(bool refresh)
+    {
+        _ampZoom = AmpZoomMin;
+        if (refresh)
+        {
+            NotifyAmpViewChanged();
+        }
+    }
+
+    private void SetTimeZoomAbsolute(double zoom, double anchorAbsolute)
+    {
+        if (_peaks is null || _peaks.IsEmpty)
+        {
+            return;
+        }
+
+        zoom = Math.Clamp(zoom, TimeZoomMin, TimeZoomMax);
+        var oldSpan = ViewSpan;
+        var rel = oldSpan > 1e-12
+            ? Math.Clamp((anchorAbsolute - _viewStart) / oldSpan, 0d, 1d)
+            : 0.5d;
+        _timeZoom = zoom;
+        _viewStart = anchorAbsolute - rel * ViewSpan;
+        ClampTimeViewWindow();
+        NotifyTimeViewChanged();
+    }
+
+    private void SetAmpZoomAbsolute(double zoom)
+    {
+        if (_peaks is null || _peaks.IsEmpty)
+        {
+            return;
+        }
+
+        _ampZoom = Math.Clamp(zoom, AmpZoomMin, AmpZoomMax);
+        NotifyAmpViewChanged();
+    }
+
+    private void AdjustAmpZoom(double factor)
+    {
+        if (_peaks is null || _peaks.IsEmpty)
+        {
+            return;
+        }
+
+        var newZoom = Math.Clamp(_ampZoom * factor, AmpZoomMin, AmpZoomMax);
+        if (Math.Abs(newZoom - _ampZoom) < 1e-9)
+        {
+            return;
+        }
+
+        _ampZoom = newZoom;
+        NotifyAmpViewChanged();
+    }
+
+    private void AdjustTimeZoom(double factor, double anchorAbsolute)
+    {
+        if (_peaks is null || _peaks.IsEmpty)
+        {
+            return;
+        }
+
+        var newZoom = Math.Clamp(_timeZoom * factor, TimeZoomMin, TimeZoomMax);
+        if (Math.Abs(newZoom - _timeZoom) < 1e-9
+            && (newZoom <= TimeZoomMin || newZoom >= TimeZoomMax))
+        {
+            if (newZoom <= TimeZoomMin)
+            {
+                _viewStart = 0;
+                NotifyTimeViewChanged();
+            }
+
+            return;
+        }
+
+        SetTimeZoomAbsolute(newZoom, anchorAbsolute);
+    }
+
+    private void ClampTimeViewWindow()
+    {
+        if (_timeZoom <= TimeZoomMin + 1e-9)
+        {
+            _timeZoom = TimeZoomMin;
+            _viewStart = 0;
+            return;
+        }
+
+        var span = ViewSpan;
+        _viewStart = Math.Clamp(_viewStart, 0d, Math.Max(0d, 1.0 - span));
+    }
+
+    private void ClearDetailPeaks()
+    {
+        _detailPeaks = null;
+        _detailViewStart = double.NaN;
+        _detailViewEnd = double.NaN;
+        _detailPixelWidth = -1;
+        _detailIsApproximate = false;
+        _rawDetailWanted = null;
+    }
+
+    private void NotifyAmpViewChanged() => RebuildPresentationLayers(clearDetailPeaks: false);
+
+    private void NotifyTimeViewChanged() => RebuildPresentationLayers(clearDetailPeaks: true);
+
+    private void RebuildPresentationLayers(bool clearDetailPeaks)
+    {
+        if (clearDetailPeaks)
+        {
+            ClearDetailPeaks();
+        }
+
+        // Bitmap は破棄せずダーティ化のみ（直後の BuildStaticLayer で同サイズなら再利用）
+        _staticLayerDirty = true;
+        InvalidateRevealLayers();
+
+        if (!IsHandleCreated || IsDisposed)
+        {
+            Invalidate();
+            return;
+        }
+
+        var bounds = ClientRectangle;
+        if (bounds.Width > 2 && bounds.Height > 2 && _peaks is not null && !_peaks.IsEmpty)
+        {
+            if (_revealActive)
+            {
+                EnsureRevealLayers(bounds);
+            }
+            else
+            {
+                BuildStaticLayer(bounds);
+            }
+        }
+
+        Invalidate();
+    }
+
+    private static double SampleToAbsolute(long sampleOffset, long frameCount)
+    {
+        if (frameCount <= 0)
+        {
+            return 0;
+        }
+
+        return Math.Clamp(sampleOffset / (double)frameCount, 0d, 1d);
+    }
+
+    private float AbsoluteToX(double absoluteProgress, Rectangle area)
+    {
+        var t = (absoluteProgress - _viewStart) / ViewSpan;
+        return area.Left + (float)(t * area.Width);
+    }
+
+    private bool TryMapAbsoluteRange(
+        double absoluteStart,
+        double absoluteEnd,
+        Rectangle area,
+        out float x0,
+        out float x1)
+    {
+        x0 = 0;
+        x1 = 0;
+        if (absoluteEnd < _viewStart || absoluteStart > ViewEnd)
+        {
+            return false;
+        }
+
+        var a0 = Math.Clamp(absoluteStart, _viewStart, ViewEnd);
+        var a1 = Math.Clamp(absoluteEnd, _viewStart, ViewEnd);
+        x0 = AbsoluteToX(a0, area);
+        x1 = AbsoluteToX(a1, area);
+        if (x1 < x0)
+        {
+            (x0, x1) = (x1, x0);
+        }
+
+        return true;
+    }
 
     /// <summary>クリック／ドラッグでシーク（0〜1）。</summary>
     public event EventHandler<double>? SeekRequested;
@@ -368,8 +889,6 @@ internal sealed class WaveformView : Control
 
         base.Dispose(disposing);
     }
-
-    private bool IsRevealing => _revealActive;
 
     private void StartRevealAnimation()
     {
@@ -565,7 +1084,8 @@ internal sealed class WaveformView : Control
             return false;
         }
 
-        progress = Math.Clamp((mouseX - content.Left) / (double)content.Width, 0d, 1d);
+        var local = Math.Clamp((mouseX - content.Left) / (double)content.Width, 0d, 1d);
+        progress = Math.Clamp(_viewStart + local * ViewSpan, 0d, 1d);
         return true;
     }
 
@@ -590,7 +1110,7 @@ internal sealed class WaveformView : Control
             return;
         }
 
-        if (IsRevealing)
+        if (_revealActive)
         {
             // レイヤ未準備なら足場だけ（OnPaint 内で重い生成をしない）
             if (_revealLayersDirty || _revealLayers[0] is null)
@@ -833,8 +1353,18 @@ internal sealed class WaveformView : Control
 
     private void BuildStaticLayer(Rectangle bounds)
     {
-        DisposeStaticLayer();
-        _staticLayer = new Bitmap(bounds.Width, bounds.Height, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        // サイズが同じなら Bitmap を作り直さず再利用する（ズーム連打時の GC 圧を抑える）
+        if (_staticLayer is null
+            || _staticLayer.Width != bounds.Width
+            || _staticLayer.Height != bounds.Height)
+        {
+            DisposeStaticLayer();
+            _staticLayer = new Bitmap(
+                bounds.Width,
+                bounds.Height,
+                System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        }
+
         using var g = Graphics.FromImage(_staticLayer);
         g.Clear(UiColors.WaveformBack);
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
@@ -910,23 +1440,283 @@ internal sealed class WaveformView : Control
             return;
         }
 
-        // ±1.0 で波形エリアの上下端いっぱいに届く
-        var amplitude = wave.Height * 0.5f;
+        // 縦ズーム込み。±1.0 が既定で波形上下端、それ以上はクリップ
+        var amplitude = wave.Height * 0.5f * (float)_ampZoom;
         using var wavePen = new Pen(UiColors.WaveFill, 1f);
-        var bucketWidth = wave.Width / (float)peaks.Mins.Length;
 
-        for (var i = 0; i < peaks.Mins.Length; i++)
+        // 縦 1px 線に AA は不要。無効化すると列描画が大幅に速くなる
+        var smoothing = g.SmoothingMode;
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+        try
         {
-            var x = wave.Left + i * bucketWidth + bucketWidth * 0.5f;
-            var y1 = midY - peaks.Maxs[i] * amplitude;
-            var y2 = midY - peaks.Mins[i] * amplitude;
-            if (Math.Abs(y2 - y1) < 1f)
+            var detail = EnsureDetailPeaks(wave);
+            if (detail is not null && !detail.IsEmpty)
             {
-                y2 = y1 + 1f;
+                var bucketCount = detail.Mins.Length;
+                for (var px = 0; px < wave.Width; px++)
+                {
+                    var bucket = bucketCount == wave.Width
+                        ? Math.Clamp(px, 0, bucketCount - 1)
+                        : (int)Math.Clamp(
+                            Math.Floor((px + 0.5d) / wave.Width * bucketCount),
+                            0,
+                            bucketCount - 1);
+                    DrawPeakColumn(g, wavePen, wave, midY, amplitude, wave.Left + px + 0.5f,
+                        detail.Mins[bucket], detail.Maxs[bucket]);
+                }
+
+                return;
             }
 
-            g.DrawLine(wavePen, x, y1, x, y2);
+            // フォールバック: 全体概要ピークを表示窓に写像
+            var overviewCount = peaks.Mins.Length;
+            for (var px = 0; px < wave.Width; px++)
+            {
+                var abs = _viewStart + ((px + 0.5d) / wave.Width) * ViewSpan;
+                var bucket = (int)Math.Clamp(Math.Floor(abs * overviewCount), 0, overviewCount - 1);
+                DrawPeakColumn(g, wavePen, wave, midY, amplitude, wave.Left + px + 0.5f,
+                    peaks.Mins[bucket], peaks.Maxs[bucket]);
+            }
         }
+        finally
+        {
+            g.SmoothingMode = smoothing;
+        }
+    }
+
+    private static void DrawPeakColumn(
+        Graphics g,
+        Pen wavePen,
+        Rectangle wave,
+        float midY,
+        float amplitude,
+        float x,
+        float min,
+        float max)
+    {
+        var y1 = Math.Clamp(midY - max * amplitude, wave.Top, wave.Bottom);
+        var y2 = Math.Clamp(midY - min * amplitude, wave.Top, wave.Bottom);
+        if (Math.Abs(y2 - y1) < 1f)
+        {
+            y2 = Math.Min(wave.Bottom, y1 + 1f);
+        }
+
+        g.DrawLine(wavePen, x, y1, x, y2);
+    }
+
+    /// <summary>
+    /// 表示窓の範囲を画面幅分のピークに集計する（ズーム時の粒度を確保）。
+    /// UI スレッドではメモリ上のピーク階層だけを使い、ディスク読みは一切しない。
+    /// 階層の粒度が足りない深いズームでは、まず近似を即描画し、
+    /// 生サンプルの精密ピークをバックグラウンドで読んで完成後に差し替える。
+    /// </summary>
+    private WavPeakData? EnsureDetailPeaks(Rectangle wave)
+    {
+        if (_wavInfo is null || _peaks is null || _peaks.IsEmpty || wave.Width <= 0)
+        {
+            return null;
+        }
+
+        var viewEnd = ViewEnd;
+        if (_detailPeaks is not null
+            && !_detailPeaks.IsEmpty
+            && _detailPixelWidth == wave.Width
+            && Math.Abs(_detailViewStart - _viewStart) < 1e-12
+            && Math.Abs(_detailViewEnd - viewEnd) < 1e-12)
+        {
+            if (_detailIsApproximate)
+            {
+                RequestRawDetail(_viewStart, viewEnd, wave.Width);
+            }
+
+            return _detailPeaks;
+        }
+
+        var frameCount = _peaks.FrameCount;
+        var startFrame = (long)Math.Floor(_viewStart * frameCount);
+        var endFrame = (long)Math.Ceiling(viewEnd * frameCount);
+        startFrame = Math.Clamp(startFrame, 0, frameCount);
+        endFrame = Math.Clamp(endFrame, startFrame, frameCount);
+        if (endFrame <= startFrame)
+        {
+            ClearDetailPeaks();
+            return null;
+        }
+
+        var pyramid = _peakPyramid;
+        if (pyramid is not null)
+        {
+            _detailPeaks = pyramid.ReadRange(startFrame, endFrame, wave.Width);
+            _detailViewStart = _viewStart;
+            _detailViewEnd = viewEnd;
+            _detailPixelWidth = wave.Width;
+            _detailIsApproximate = !pyramid.HasFullDetailFor(startFrame, endFrame, wave.Width);
+            if (_detailIsApproximate)
+            {
+                RequestRawDetail(_viewStart, viewEnd, wave.Width);
+            }
+
+            return _detailPeaks;
+        }
+
+        // 階層構築中: 概要ピークのフォールバック描画で即応答する。
+        // 概要の粒度で足りない深さなら精密読みだけ背景に依頼する。
+        var rangeFrames = endFrame - startFrame;
+        var overviewFramesPerBucket = frameCount / (double)Math.Max(1, _peaks.Mins.Length);
+        if (rangeFrames / (double)wave.Width < overviewFramesPerBucket)
+        {
+            RequestRawDetail(_viewStart, viewEnd, wave.Width);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// 生サンプルからの精密ピーク読みを背景スレッドへ依頼する（最新の要求のみ実行）。
+    /// </summary>
+    private void RequestRawDetail(double viewStart, double viewEnd, int width)
+    {
+        _rawDetailWanted = (viewStart, viewEnd, width);
+        PumpRawDetailRead();
+    }
+
+    private void PumpRawDetailRead()
+    {
+        if (_rawDetailReading || _rawDetailWanted is not { } wanted)
+        {
+            return;
+        }
+
+        var info = _wavInfo;
+        var peaks = _peaks;
+        if (info is null || peaks is null || peaks.IsEmpty)
+        {
+            _rawDetailWanted = null;
+            return;
+        }
+
+        _rawDetailWanted = null;
+
+        // 既に同じ表示窓の精密ピークを持っているなら読み直さない
+        if (!_detailIsApproximate
+            && _detailPeaks is not null
+            && !_detailPeaks.IsEmpty
+            && _detailPixelWidth == wanted.Width
+            && Math.Abs(_detailViewStart - wanted.ViewStart) < 1e-12
+            && Math.Abs(_detailViewEnd - wanted.ViewEnd) < 1e-12)
+        {
+            return;
+        }
+
+        _rawDetailReading = true;
+        var generation = _pyramidGeneration;
+        var frameCount = peaks.FrameCount;
+        var startFrame = Math.Clamp((long)Math.Floor(wanted.ViewStart * frameCount), 0, frameCount);
+        var endFrame = Math.Clamp((long)Math.Ceiling(wanted.ViewEnd * frameCount), startFrame, frameCount);
+
+        Task.Run(() =>
+        {
+            WavPeakData? data = null;
+            try
+            {
+                data = WavPeakReader.ReadRange(info, startFrame, endFrame, wanted.Width);
+            }
+            catch
+            {
+                // 読み失敗時は近似のまま表示を続ける
+            }
+
+            try
+            {
+                BeginInvoke(() =>
+                {
+                    _rawDetailReading = false;
+                    if (IsDisposed)
+                    {
+                        return;
+                    }
+
+                    if (generation == _pyramidGeneration)
+                    {
+                        ApplyRawDetail(wanted, data);
+                    }
+
+                    PumpRawDetailRead();
+                });
+            }
+            catch (InvalidOperationException)
+            {
+                // ハンドル破棄後などは無視（次回 SetPreview で再構築）
+                _rawDetailReading = false;
+            }
+        });
+    }
+
+    private void ApplyRawDetail((double ViewStart, double ViewEnd, int Width) wanted, WavPeakData? data)
+    {
+        if (data is null || data.IsEmpty)
+        {
+            return;
+        }
+
+        // ズーム連打中に届いた古い結果は捨てる（表示窓が一致するときだけ反映）
+        if (Math.Abs(wanted.ViewStart - _viewStart) > 1e-12
+            || Math.Abs(wanted.ViewEnd - ViewEnd) > 1e-12)
+        {
+            return;
+        }
+
+        _detailPeaks = data;
+        _detailViewStart = wanted.ViewStart;
+        _detailViewEnd = wanted.ViewEnd;
+        _detailPixelWidth = wanted.Width;
+        _detailIsApproximate = false;
+        RebuildPresentationLayers(clearDetailPeaks: false);
+    }
+
+    /// <summary>ピーク階層をバックグラウンドで構築し、完成したら差し替える。</summary>
+    private void StartPeakPyramidBuild(WavFileInfo? wavInfo)
+    {
+        _peakPyramid = null;
+        var generation = ++_pyramidGeneration;
+        if (wavInfo is null)
+        {
+            return;
+        }
+
+        Task.Run(() =>
+        {
+            WavPeakPyramid pyramid;
+            try
+            {
+                pyramid = WavPeakPyramid.Build(wavInfo);
+            }
+            catch
+            {
+                return;
+            }
+
+            try
+            {
+                BeginInvoke(() =>
+                {
+                    if (generation != _pyramidGeneration || IsDisposed)
+                    {
+                        return;
+                    }
+
+                    _peakPyramid = pyramid;
+                    // 初回表示は概要の間引きピークのまま焼き付いていることがある。
+                    // 階層完成後に再構築しないと、初回ズーム時に初めて真のピークへ切り替わり
+                    // 「縦が少し大きくなった」ように見える。
+                    RebuildPresentationLayers(clearDetailPeaks: true);
+                });
+            }
+            catch (InvalidOperationException)
+            {
+                // ハンドル破棄後などは無視（次回 SetPreview で再構築）
+            }
+        });
     }
 
     private void DrawRegionBackgrounds(Graphics g, Rectangle wave)
@@ -944,10 +1734,18 @@ internal sealed class WaveformView : Control
         var coloredIndex = 0;
         foreach (var region in _regions)
         {
-            var t0 = Math.Clamp(region.StartSampleOffset / (double)frameCount, 0d, 1d);
-            var t1 = Math.Clamp(region.EndSampleOffset / (double)frameCount, 0d, 1d);
-            var x0 = wave.Left + (float)(t0 * wave.Width);
-            var x1 = wave.Left + (float)(t1 * wave.Width);
+            var a0 = SampleToAbsolute(region.StartSampleOffset, frameCount);
+            var a1 = SampleToAbsolute(region.EndSampleOffset, frameCount);
+            if (!TryMapAbsoluteRange(a0, a1, wave, out var x0, out var x1))
+            {
+                if (!region.IsExcluded)
+                {
+                    coloredIndex++;
+                }
+
+                continue;
+            }
+
             var width = Math.Max(1f, x1 - x0);
             Brush fill;
             if (region.IsExcluded)
@@ -972,31 +1770,81 @@ internal sealed class WaveformView : Control
         }
 
         var frameCount = _peaks.FrameCount;
-        var fontSize = Math.Clamp(wave.Height * 0.22f, 13f, 28f);
-        using var labelFont = new Font(Font.FontFamily, fontSize, FontStyle.Bold, GraphicsUnit.Pixel);
-        using var brush = new SolidBrush(UiColors.OutputPartFg);
-        using var shadow = new SolidBrush(UiColors.OutputPartShadow);
-        var labelHeight = labelFont.GetHeight(g);
-        // 下端より少し上げ、ソースファイル名とも重なりにくくする
-        var y = wave.Bottom - labelHeight - Math.Max(10f, wave.Height * 0.12f);
+        var idealFontSize = Math.Clamp(wave.Height * 0.22f, 13f, 28f);
+        const float minFontSize = 8f;
+        // 隣ラベルとのすき間は約2文字分（重なり無しでも密に見えないように）
+        float gap;
+        using (var gapProbe = new Font(Font.FontFamily, idealFontSize, FontStyle.Bold, GraphicsUnit.Pixel))
+        {
+            gap = g.MeasureString("WW", gapProbe).Width;
+        }
 
+        var parts = new List<(string Text, float X0, float X1, float Mid)>(_outputParts.Count);
         foreach (var part in _outputParts)
         {
-            var t0 = Math.Clamp(part.StartSampleOffset / (double)frameCount, 0d, 1d);
-            var t1 = Math.Clamp(part.EndSampleOffset / (double)frameCount, 0d, 1d);
-            var x0 = wave.Left + (float)(t0 * wave.Width);
-            var x1 = wave.Left + (float)(t1 * wave.Width);
-            var width = x1 - x0;
-            if (width < 1f)
+            var a0 = SampleToAbsolute(part.StartSampleOffset, frameCount);
+            var a1 = SampleToAbsolute(part.EndSampleOffset, frameCount);
+            if (!TryMapAbsoluteRange(a0, a1, wave, out var x0, out var x1))
             {
                 continue;
             }
 
-            var size = g.MeasureString(part.FileName, labelFont);
-            // 理想はパート中央。幅不足／右端はみ出し時は左へ寄せつつ必ず描画する
-            var preferredX = x0 + (width - size.Width) * 0.5f;
-            var x = ClampLabelX(preferredX, size.Width, wave.Left, wave.Right);
-            DrawLabeledShadow(g, part.FileName, labelFont, brush, shadow, x, y);
+            if (x1 - x0 < 1f)
+            {
+                continue;
+            }
+
+            parts.Add((part.FileName, x0, x1, (x0 + x1) * 0.5f));
+        }
+
+        if (parts.Count == 0)
+        {
+            return;
+        }
+
+        using var brush = new SolidBrush(UiColors.OutputPartFg);
+        using var shadow = new SolidBrush(UiColors.OutputPartShadow);
+        var bottomMargin = Math.Max(10f, wave.Height * 0.12f);
+
+        for (var i = 0; i < parts.Count; i++)
+        {
+            // 隣パートとの中間までをこのラベルの領域とする（リージョン外はみ出し可・他文字とは被らない）
+            var slotLeft = i == 0
+                ? wave.Left
+                : (parts[i - 1].Mid + parts[i].Mid) * 0.5f + gap * 0.5f;
+            var slotRight = i + 1 >= parts.Count
+                ? wave.Right
+                : (parts[i].Mid + parts[i + 1].Mid) * 0.5f - gap * 0.5f;
+            var slotWidth = Math.Max(1f, slotRight - slotLeft);
+
+            var fontSize = idealFontSize;
+            using (var probe = new Font(Font.FontFamily, idealFontSize, FontStyle.Bold, GraphicsUnit.Pixel))
+            {
+                var idealWidth = g.MeasureString(parts[i].Text, probe).Width;
+                if (idealWidth > slotWidth)
+                {
+                    fontSize = Math.Max(minFontSize, idealFontSize * slotWidth / idealWidth);
+                }
+            }
+
+            using var labelFont = new Font(Font.FontFamily, fontSize, FontStyle.Bold, GraphicsUnit.Pixel);
+            var textWidth = g.MeasureString(parts[i].Text, labelFont).Width;
+            var preferredX = parts[i].X0 + (parts[i].X1 - parts[i].X0 - textWidth) * 0.5f;
+            var x = ClampLabelX(preferredX, textWidth, slotLeft, slotRight);
+            var labelHeight = labelFont.GetHeight(g);
+            var y = wave.Bottom - labelHeight - bottomMargin;
+
+            // スロット外に描画しない（隣ラベルとの重なり防止）。狭いときは文字が切れる。
+            var clip = g.Clip;
+            g.SetClip(new RectangleF(slotLeft, y - 4f, slotWidth, labelHeight + 8f), System.Drawing.Drawing2D.CombineMode.Intersect);
+            try
+            {
+                DrawLabeledShadow(g, parts[i].Text, labelFont, brush, shadow, x, y);
+            }
+            finally
+            {
+                g.Clip = clip;
+            }
         }
     }
 
@@ -1065,10 +1913,13 @@ internal sealed class WaveformView : Control
         }
 
         var frameCount = _peaks.FrameCount;
-        var t0 = Math.Clamp(highlight.StartSampleOffset / (double)frameCount, 0d, 1d);
-        var t1 = Math.Clamp(highlight.EndSampleOffset / (double)frameCount, 0d, 1d);
-        var x0 = wave.Left + (float)(t0 * wave.Width);
-        var x1 = wave.Left + (float)(t1 * wave.Width);
+        var a0 = SampleToAbsolute(highlight.StartSampleOffset, frameCount);
+        var a1 = SampleToAbsolute(highlight.EndSampleOffset, frameCount);
+        if (!TryMapAbsoluteRange(a0, a1, wave, out var x0, out var x1))
+        {
+            return;
+        }
+
         var width = Math.Max(2f, x1 - x0);
         var rect = new RectangleF(x0, wave.Top, width, wave.Height);
 
@@ -1077,22 +1928,21 @@ internal sealed class WaveformView : Control
         var pulse = 0.40f + 0.60f * (0.5f + 0.5f * MathF.Sin(phase * MathF.PI * 2f));
         var baseColor = UiColors.ExportPartGlow;
 
-        // 外側ほど薄いハロー（発光）
-        for (var i = 5; i >= 1; i--)
+        // 内側を半透明で塗り、「今この固まり」をはっきり見せる
+        using (var fill = new SolidBrush(Color.FromArgb((int)(72 * pulse), baseColor)))
         {
-            var alpha = (int)(28 * pulse * i);
-            using var glowPen = new Pen(Color.FromArgb(Math.Clamp(alpha, 0, 255), baseColor), i * 2.2f);
-            g.DrawRectangle(glowPen, rect.X, rect.Y, rect.Width, rect.Height);
+            g.FillRectangle(fill, rect);
         }
 
-        using var corePen = new Pen(
-            Color.FromArgb((int)(230 * pulse), baseColor),
-            2.2f);
-        g.DrawRectangle(corePen, rect.X, rect.Y, rect.Width, rect.Height);
+        // 細い外光（太くしすぎない）
+        using (var softPen = new Pen(Color.FromArgb((int)(55 * pulse), baseColor), 2f))
+        {
+            g.DrawRectangle(softPen, rect.X, rect.Y, rect.Width, rect.Height);
+        }
 
-        // 内側の薄い塗りで「今この固まり」を強調
-        using var fill = new SolidBrush(Color.FromArgb((int)(36 * pulse), baseColor));
-        g.FillRectangle(fill, rect);
+        // コアの細線
+        using var corePen = new Pen(Color.FromArgb((int)(220 * pulse), baseColor), 1f);
+        g.DrawRectangle(corePen, rect.X, rect.Y, rect.Width, rect.Height);
     }
 
     private static void DrawLabeledShadow(
@@ -1130,16 +1980,17 @@ internal sealed class WaveformView : Control
         var barRowTop = labels.Top;
         var tempoRowTop = barRowTop + rowHeight;
         var signatureRowTop = tempoRowTop + rowHeight;
-        // 小節線はラベル帯〜波形まで通す（隙間は地の色のまま）
         var lineTop = labels.Top;
         var lineBottom = wave.Height > 0 ? wave.Bottom : labels.Bottom;
 
+        // 表示窓内の隣接小節頭の平均ピクセル間隔から、間引き段階を決める。
+        // 番号幅は常に 3 桁想定（"000"）で、拡大時に桁が増えても重ならないようにする。
+        var averageGapPx = EstimateVisibleBarGapPx(labels, frameCount);
+        var threeDigitWidth = g.MeasureString("000", Font).Width;
+        var minBarNumberGap = threeDigitWidth + 6f; // 描画オフセット分の余白
+        var barStep = ChooseBarThinningStep(averageGapPx, minBarNumberGap);
+
         using var barPen = new Pen(UiColors.BarLine, 1f);
-        using var anacrusisPen = new Pen(UiColors.AnacrusisLine, 1f)
-        {
-            DashStyle = System.Drawing.Drawing2D.DashStyle.Dash,
-            DashPattern = [4f, 3f],
-        };
         using var tempoChangePen = new Pen(UiColors.TempoChangeLine, 1f)
         {
             DashStyle = System.Drawing.Drawing2D.DashStyle.Dash,
@@ -1152,54 +2003,150 @@ internal sealed class WaveformView : Control
         var barLabelY = barRowTop + 1f;
         var tempoLabelY = tempoRowTop + 1f;
         var signatureLabelY = signatureRowTop + 1f;
-        var lastBarLabelX = float.NegativeInfinity;
         var lastTempoLabelX = float.NegativeInfinity;
-        var lastSignatureLabelX = float.NegativeInfinity;
-        // 表示比較用（丸め後 BPM / 拍子）。内部の mark.Bpm・Numerator/Denominator は各位置に保持済み。
+        int? prevBarTempo = null;
+        int? prevBarNumerator = null;
+        int? prevBarDenominator = null;
         int? lastShownTempo = null;
-        int? lastShownNumerator = null;
-        int? lastShownDenominator = null;
-        const float minLabelGap = 22f;
 
         foreach (var bar in _bars)
         {
-            var t = Math.Clamp(bar.SampleOffset / (double)frameCount, 0d, 1d);
-            var x = labels.Left + (float)(t * labels.Width);
             var tempoRounded = (int)Math.Round(bar.Bpm, MidpointRounding.AwayFromZero);
             var tempoLabel = tempoRounded.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var abs = SampleToAbsolute(bar.SampleOffset, frameCount);
+            var inView = abs >= _viewStart - 1e-9 && abs <= ViewEnd + 1e-9;
 
             if (bar.IsTempoChangeOnly)
             {
-                g.DrawLine(tempoChangePen, x, tempoRowTop, x, tempoRowTop + rowHeight);
-                TryDrawTempoLabel(g, tempoLabel, tempoRounded, x, tempoLabelY, tempoBrush,
-                    ref lastTempoLabelX, ref lastShownTempo, minLabelGap);
+                if (inView)
+                {
+                    var tempoX = AbsoluteToX(abs, labels);
+                    g.DrawLine(tempoChangePen, tempoX, tempoRowTop, tempoX, tempoRowTop + rowHeight);
+                    TryDrawTempoLabel(g, tempoLabel, tempoRounded, tempoX, tempoLabelY, tempoBrush,
+                        ref lastTempoLabelX, ref lastShownTempo, minLabelGap: 0f, force: true);
+                }
+
                 continue;
             }
 
-            var pen = bar.IsAnacrusis ? anacrusisPen : barPen;
-            g.DrawLine(pen, x, lineTop, x, lineBottom);
+            var tempoChanged = prevBarTempo is int pt && pt != tempoRounded;
+            var signatureChanged = prevBarNumerator is int pn
+                && prevBarDenominator is int pd
+                && (pn != bar.Numerator || pd != bar.Denominator);
+            var isStructural = tempoChanged || signatureChanged || prevBarTempo is null;
 
-            if (x - lastBarLabelX >= minLabelGap)
+            if (!inView)
+            {
+                prevBarTempo = tempoRounded;
+                prevBarNumerator = bar.Numerator;
+                prevBarDenominator = bar.Denominator;
+                continue;
+            }
+
+            var x = AbsoluteToX(abs, labels);
+            var onGrid = IsBarOnThinningGrid(bar.BarNumber, barStep);
+            var drawLine = isStructural || onGrid;
+            if (drawLine)
+            {
+                g.DrawLine(barPen, x, lineTop, x, lineBottom);
+            }
+
+            var drawNumber = isStructural || onGrid;
+            if (drawNumber)
             {
                 g.DrawString(bar.BarNumber.ToString(), Font, barBrush, x + 3f, barLabelY);
-                lastBarLabelX = x;
             }
 
-            TryDrawTempoLabel(g, tempoLabel, tempoRounded, x, tempoLabelY, tempoBrush,
-                ref lastTempoLabelX, ref lastShownTempo, minLabelGap);
+            // 拍子／テンポ変化（および先頭）では必ずテンポ・拍子ラベルも出す
+            TryDrawTempoLabel(
+                g,
+                tempoLabel,
+                tempoRounded,
+                x,
+                tempoLabelY,
+                tempoBrush,
+                ref lastTempoLabelX,
+                ref lastShownTempo,
+                minLabelGap: minBarNumberGap,
+                force: isStructural);
 
-            if (lastShownNumerator != bar.Numerator || lastShownDenominator != bar.Denominator)
+            if (isStructural)
             {
-                if (x - lastSignatureLabelX >= minLabelGap)
-                {
-                    var signatureLabel = $"{bar.Numerator}/{bar.Denominator}";
-                    g.DrawString(signatureLabel, Font, signatureBrush, x + 3f, signatureLabelY);
-                    lastSignatureLabelX = x;
-                    lastShownNumerator = bar.Numerator;
-                    lastShownDenominator = bar.Denominator;
-                }
+                var signatureLabel = $"{bar.Numerator}/{bar.Denominator}";
+                g.DrawString(signatureLabel, Font, signatureBrush, x + 3f, signatureLabelY);
+            }
+
+            prevBarTempo = tempoRounded;
+            prevBarNumerator = bar.Numerator;
+            prevBarDenominator = bar.Denominator;
+        }
+    }
+
+    /// <summary>
+    /// 十分な間隔がある限り密に。足りなければ 2→4→8→16→32→64 のグリッドへ間引く。
+    /// グリッドは「1 と N の倍数」（例: N=8 → 1,8,16,24…／N=2 → 1,2,4,6…）。
+    /// </summary>
+    private static int ChooseBarThinningStep(double averageGapPx, float minGapPx)
+    {
+        ReadOnlySpan<int> steps = [1, 2, 4, 8, 16, 32, 64];
+        foreach (var step in steps)
+        {
+            if (averageGapPx * step >= minGapPx)
+            {
+                return step;
             }
         }
+
+        return 64;
+    }
+
+    /// <summary>
+    /// step=1 は全小節。それ以外は 1 と step の倍数（2 → 1,2,4,6…／4 → 1,4,8,12…）。
+    /// </summary>
+    private static bool IsBarOnThinningGrid(int barNumber, int step)
+    {
+        if (step <= 1)
+        {
+            return true;
+        }
+
+        return barNumber == 1 || barNumber % step == 0;
+    }
+
+    /// <summary>表示窓内の隣接する小節頭の平均 X 間隔（無い／1 本だけなら十分広い値）。</summary>
+    private double EstimateVisibleBarGapPx(Rectangle labels, long frameCount)
+    {
+        float? prevX = null;
+        double sum = 0;
+        var count = 0;
+        foreach (var bar in _bars)
+        {
+            if (bar.IsTempoChangeOnly)
+            {
+                continue;
+            }
+
+            var abs = SampleToAbsolute(bar.SampleOffset, frameCount);
+            if (abs < _viewStart - 1e-9 || abs > ViewEnd + 1e-9)
+            {
+                continue;
+            }
+
+            var x = AbsoluteToX(abs, labels);
+            if (prevX is float px)
+            {
+                var gap = x - px;
+                if (gap > 0.5f)
+                {
+                    sum += gap;
+                    count++;
+                }
+            }
+
+            prevX = x;
+        }
+
+        return count > 0 ? sum / count : labels.Width;
     }
 
     private void TryDrawTempoLabel(
@@ -1211,14 +2158,15 @@ internal sealed class WaveformView : Control
         Brush brush,
         ref float lastTempoLabelX,
         ref int? lastShownTempo,
-        float minLabelGap)
+        float minLabelGap,
+        bool force = false)
     {
-        if (lastShownTempo == tempoRounded)
+        if (!force && lastShownTempo == tempoRounded)
         {
             return;
         }
 
-        if (x - lastTempoLabelX < minLabelGap)
+        if (!force && x - lastTempoLabelX < minLabelGap)
         {
             return;
         }
@@ -1249,8 +2197,13 @@ internal sealed class WaveformView : Control
         // 三角は時刻順に描画
         foreach (var marker in _markers)
         {
-            var t = Math.Clamp(marker.SampleOffset / (double)frameCount, 0d, 1d);
-            var x = labels.Left + (float)(t * labels.Width);
+            var abs = SampleToAbsolute(marker.SampleOffset, frameCount);
+            if (abs < _viewStart - 1e-9 || abs > ViewEnd + 1e-9)
+            {
+                continue;
+            }
+
+            var x = AbsoluteToX(abs, labels);
 
             PointF[] triangle =
             [
@@ -1271,8 +2224,13 @@ internal sealed class WaveformView : Control
                 continue;
             }
 
-            var t = Math.Clamp(marker.SampleOffset / (double)frameCount, 0d, 1d);
-            var x = labels.Left + (float)(t * labels.Width);
+            var abs = SampleToAbsolute(marker.SampleOffset, frameCount);
+            if (abs < _viewStart - 1e-9 || abs > ViewEnd + 1e-9)
+            {
+                continue;
+            }
+
+            var x = AbsoluteToX(abs, labels);
             var size = g.MeasureString(marker.Comment, Font);
             var preferredX = x + triHalfW + 2f;
             var rightLimit = Math.Min(labels.Right, nextOccupiedLeft - 2f);
@@ -1304,10 +2262,13 @@ internal sealed class WaveformView : Control
 
         foreach (var cycle in _cycles)
         {
-            var t0 = Math.Clamp(cycle.StartSampleOffset / (double)frameCount, 0d, 1d);
-            var t1 = Math.Clamp(cycle.EndSampleOffset / (double)frameCount, 0d, 1d);
-            var x0 = labels.Left + (float)(t0 * labels.Width);
-            var x1 = labels.Left + (float)(t1 * labels.Width);
+            var a0 = SampleToAbsolute(cycle.StartSampleOffset, frameCount);
+            var a1 = SampleToAbsolute(cycle.EndSampleOffset, frameCount);
+            if (!TryMapAbsoluteRange(a0, a1, labels, out var x0, out var x1))
+            {
+                continue;
+            }
+
             var width = Math.Max(1f, x1 - x0);
             g.FillRectangle(rangeBrush, x0, cycleRowTop, width, rowHeight);
 
@@ -1330,7 +2291,13 @@ internal sealed class WaveformView : Control
             return;
         }
 
-        var x = content.Left + (float)(_playheadProgress.Value * content.Width);
+        var abs = _playheadProgress.Value;
+        if (abs < _viewStart - 1e-9 || abs > ViewEnd + 1e-9)
+        {
+            return;
+        }
+
+        var x = AbsoluteToX(abs, content);
         DrawSeekPlaybackTrail(g, content, x);
 
         // ソフトグロー（細め）
@@ -1438,8 +2405,8 @@ internal sealed class WaveformView : Control
         float trailRightX,
         float[] cols)
     {
-        var x0 = content.Left + (float)(older.Progress * content.Width);
-        var x1 = content.Left + (float)(newer.Progress * content.Width);
+        var x0 = AbsoluteToX(older.Progress, content);
+        var x1 = AbsoluteToX(newer.Progress, content);
         var segL = Math.Min(x0, x1);
         var segR = Math.Max(x0, x1);
         if (segL >= trailRightX)

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>RegionDiag</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Include="MgaWwiseImporter.Nuendo" />
+    <Using Include="MgaWwiseImporter.Wave" />
+    <Compile Include="..\..\Nuendo\*.cs" />
+    <Compile Include="..\..\Wave\WavFileInfo.cs" />
+    <Compile Include="..\..\Wave\WavIxmlReader.cs" />
+    <Compile Include="..\..\Wave\WaveformBarOverlayBuilder.cs" />
+    <Compile Include="..\..\Wave\WaveformRegionBuilder.cs" />
+  </ItemGroup>
+
+</Project>

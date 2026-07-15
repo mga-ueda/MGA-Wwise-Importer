@@ -10,10 +10,6 @@ namespace MgaWwiseImporter.Wave;
 /// <param name="Bpm">その位置のテンポ（ランプ中は補間値）。</param>
 /// <param name="Numerator">その位置の拍子の分子。</param>
 /// <param name="Denominator">その位置の拍子の分母。</param>
-/// <param name="IsAnacrusis">
-/// true なら波形先頭が小節途中（アウフタクト）の開始。
-/// 表示ラベルに特別な接尾辞は付けない。
-/// </param>
 /// <param name="IsTempoChangeOnly">
 /// true なら小節線ではなく、小節途中のテンポ変更位置。
 /// テンポ行のラベル（と短いガイド線）のみ描画する。
@@ -24,7 +20,6 @@ internal readonly record struct WaveformBarMark(
     double Bpm,
     int Numerator,
     int Denominator,
-    bool IsAnacrusis = false,
     bool IsTempoChangeOnly = false);
 
 /// <summary>波形上の単発マーカーコメント 1 件。</summary>
@@ -53,7 +48,7 @@ internal readonly record struct WaveformCycleMark(
 /// true なら -R 範囲内など、出力計画から除外する区画（番号なし・別色）。
 /// </param>
 /// <param name="NameSuffix">
-/// リージョン名に添える接尾辞（例: <c>-L</c> / <c>-A</c>）。空なら無し。
+/// リージョン名に添える接尾辞（例: <c>-L</c> / <c>-E</c> / <c>-A</c>）。空なら無し。
 /// 除外（-R）は <see cref="IsExcluded"/> で表し、ここには含めない。
 /// </param>
 internal readonly record struct WaveformRegionMark(
@@ -166,8 +161,7 @@ internal static class WaveformBarOverlayBuilder
                 BarNumber: 1,
                 Bpm: tempoMap.GetBpmAt(waveStartPpq),
                 Numerator: sig.Numerator,
-                Denominator: sig.Denominator,
-                IsAnacrusis: true));
+                Denominator: sig.Denominator));
             nextBarNumber = 2;
         }
 

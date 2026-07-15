@@ -20,6 +20,10 @@ public partial class Form1 : Form
     private long _anchorTickMs;
     private ColorDevPanelForm? _colorDevPanel;
     private int _exportGeneration;
+    /// <summary>
+    /// 戻る方向ジャンプ中に再生を一時停止したとき true。キーアップで再開する。
+    /// </summary>
+    private bool _resumePlaybackAfterBackwardSeek;
 
     public Form1()
     {
@@ -40,12 +44,14 @@ public partial class Form1 : Form
 
             BeginInvoke(() =>
             {
+                _resumePlaybackAfterBackwardSeek = false;
                 _playheadTimer.Stop();
                 AnchorPlayhead(0);
                 waveformView.SetPlayhead(0, recordTrail: false);
             });
         };
         waveformView.SeekRequested += (_, progress) => SeekPlayback(progress);
+        editorTextBox.ShortcutHandler = TryProcessWaveformShortcut;
         editorTextBox.HandleCreated += (_, _) => ApplyDarkEditorChrome();
     }
 
@@ -74,9 +80,151 @@ public partial class Form1 : Form
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
+        if (keyData == Keys.Escape)
+        {
+            ConfirmAndExit();
+            return true;
+        }
+
+        if (TryProcessWaveformShortcut(keyData))
+        {
+            return true;
+        }
+
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    /// <summary>ESC からの終了。確認ダイアログで Yes のときだけ閉じる。</summary>
+    private void ConfirmAndExit()
+    {
+        var confirm = MessageBox.Show(
+            this,
+            "アプリケーションを終了しますか？",
+            "終了確認",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button1);
+
+        if (confirm == DialogResult.Yes)
+        {
+            Close();
+        }
+    }
+
+    protected override void OnKeyUp(KeyEventArgs e)
+    {
+        if (_resumePlaybackAfterBackwardSeek && IsBackwardSeekKey(e.KeyCode))
+        {
+            ResumePlaybackAfterBackwardSeek();
+            e.Handled = true;
+        }
+
+        base.OnKeyUp(e);
+    }
+
+    private static bool IsBackwardSeekKey(Keys keyCode) =>
+        keyCode is Keys.Home or Keys.Left;
+
+    /// <summary>
+    /// 波形ビュー操作用ショートカット。ログ欄フォーカス時も <see cref="ShortcutForwardingRichTextBox"/> 経由で呼ばれる。
+    /// </summary>
+    private bool TryProcessWaveformShortcut(Keys keyData)
+    {
         if (keyData == Keys.Space)
         {
+            // ホールド中の自動再開はキャンセル（Space のトグルに委ねる）
+            _resumePlaybackAfterBackwardSeek = false;
             TogglePlayback();
+            return true;
+        }
+
+        // 修飾キー付きを先に判定
+        if (keyData == (Keys.Control | Keys.Shift | Keys.Up))
+        {
+            waveformView.ZoomAmpToMax();
+            return true;
+        }
+
+        if (keyData == (Keys.Control | Keys.Shift | Keys.Down))
+        {
+            waveformView.ResetAmpZoom();
+            return true;
+        }
+
+        if (keyData == (Keys.Control | Keys.Up))
+        {
+            waveformView.ZoomTimeToMax();
+            return true;
+        }
+
+        if (keyData == (Keys.Control | Keys.Down))
+        {
+            waveformView.ResetTimeZoom();
+            return true;
+        }
+
+        if (keyData == (Keys.Control | Keys.Home))
+        {
+            PauseForBackwardSeekHold();
+            waveformView.PanTimeToStart();
+            SeekPlayback(0);
+            return true;
+        }
+
+        if (keyData == (Keys.Control | Keys.End))
+        {
+            waveformView.PanTimeToEnd();
+            SeekPlayback(1);
+            return true;
+        }
+
+        if (keyData == (Keys.Control | Keys.Left))
+        {
+            PauseForBackwardSeekHold();
+            waveformView.SeekToPreviousRegionSplit();
+            return true;
+        }
+
+        if (keyData == (Keys.Control | Keys.Right))
+        {
+            waveformView.SeekToNextRegionSplit();
+            return true;
+        }
+
+        if (keyData == Keys.Home)
+        {
+            PauseForBackwardSeekHold();
+            waveformView.SeekToPreviousBar();
+            return true;
+        }
+
+        if (keyData == Keys.End)
+        {
+            waveformView.SeekToNextBar();
+            return true;
+        }
+
+        if (keyData == (Keys.Shift | Keys.Up))
+        {
+            waveformView.ZoomAmpIn();
+            return true;
+        }
+
+        if (keyData == (Keys.Shift | Keys.Down))
+        {
+            waveformView.ZoomAmpOut();
+            return true;
+        }
+
+        if (keyData == Keys.Up)
+        {
+            waveformView.ZoomTimeIn();
+            return true;
+        }
+
+        if (keyData == Keys.Down)
+        {
+            waveformView.ZoomTimeOut();
             return true;
         }
 
@@ -86,7 +234,52 @@ public partial class Form1 : Form
             return true;
         }
 
-        return base.ProcessCmdKey(ref msg, keyData);
+        return false;
+    }
+
+    /// <summary>
+    /// 戻る方向ジャンプ中は再生ヘッドが進まないよう一時停止する（キーアップで再開）。
+    /// </summary>
+    private void PauseForBackwardSeekHold()
+    {
+        if (!_audioPlayer.HasSource || !_audioPlayer.IsPlaying || _resumePlaybackAfterBackwardSeek)
+        {
+            return;
+        }
+
+        // タイマー基準の現在位置を確定してから止める
+        var durationSec = _audioPlayer.Duration.TotalSeconds;
+        if (durationSec > 0)
+        {
+            var elapsedSec = (Environment.TickCount64 - _anchorTickMs) / 1000d;
+            _smoothProgress = Math.Clamp(_anchorProgress + elapsedSec / durationSec, 0d, 1d);
+        }
+
+        _playheadTimer.Stop();
+        _audioPlayer.Pause();
+        SeekPlayback(_smoothProgress);
+        _resumePlaybackAfterBackwardSeek = true;
+        UpdatePlayhead();
+    }
+
+    private void ResumePlaybackAfterBackwardSeek()
+    {
+        if (!_resumePlaybackAfterBackwardSeek)
+        {
+            return;
+        }
+
+        _resumePlaybackAfterBackwardSeek = false;
+        if (!_audioPlayer.HasSource)
+        {
+            return;
+        }
+
+        SeekPlayback(_smoothProgress);
+        _audioPlayer.Play();
+        AnchorPlayhead(_smoothProgress);
+        _playheadTimer.Start();
+        UpdatePlayhead();
     }
 
     private void ShowColorDevPanel()
@@ -238,7 +431,19 @@ public partial class Form1 : Form
         // 解析中に OS が白消ししないよう、先に暗いフレームを確定する
         waveformView.CommitDarkFrame();
 
-        var report = DroppedFilesProcessor.Process(files, out var preview);
+        // 巨大 WAV のピーク走査で UI を止めないよう、解析は背景スレッドで行う
+        var fileList = files.ToList();
+        var (report, preview) = await Task.Run(() =>
+        {
+            var text = DroppedFilesProcessor.Process(fileList, out var previewData);
+            return (text, previewData);
+        });
+
+        if (IsDisposed || exportGeneration != _exportGeneration)
+        {
+            return;
+        }
+
         AppendReport(report);
 
         if (preview is null)
@@ -251,6 +456,7 @@ public partial class Form1 : Form
         waveformView.SetPreview(
             preview.Peaks,
             preview.SourcePath,
+            preview.WavInfo,
             preview.Bars,
             preview.Markers,
             preview.Cycles,
@@ -310,10 +516,9 @@ public partial class Form1 : Form
 
     private async Task RunExportAsync(WaveformPreviewData preview, int exportGeneration)
     {
-        string exportReport;
         try
         {
-            exportReport = await Task.Run(() => WaveformExporter.Export(
+            await Task.Run(() => WaveformExporter.Export(
                 preview.SourcePath,
                 preview.WavInfo,
                 preview.OutputParts,
@@ -322,40 +527,27 @@ public partial class Form1 : Form
                 preview.Markers,
                 onPartBegin: part =>
                 {
-                    if (exportGeneration != _exportGeneration || IsDisposed)
-                    {
-                        return;
-                    }
-
-                    try
-                    {
-                        // 書き出し開始前に UI へ反映し、発光が見えてから I/O に入る
-                        Invoke(() =>
-                        {
-                            if (exportGeneration != _exportGeneration || IsDisposed)
-                            {
-                                return;
-                            }
-
-                            waveformView.SetExportHighlight(part.Number);
-                            waveformView.Update();
-                        });
-                    }
-                    catch (ObjectDisposedException)
-                    {
-                        // クローズ直後は無視
-                    }
-                    catch (InvalidOperationException)
-                    {
-                        // ハンドル破棄直後など
-                    }
-                }));
+                    // 書き出し開始の瞬間に発光を点ける（見えてから I/O へ）
+                    NotifyExportPartGlow(part.Number, exportGeneration, holdMs: 120);
+                },
+                onPartEnd: part =>
+                {
+                    // 書き出し完了の瞬間にもう一度発光を見せてから消す
+                    NotifyExportPartGlow(part.Number, exportGeneration, holdMs: 160);
+                    NotifyExportPartGlow(null, exportGeneration, holdMs: 40);
+                },
+                onLog: text => NotifyExportLog(text, exportGeneration)));
         }
         catch (Exception ex)
         {
-            exportReport =
+            if (IsDisposed || exportGeneration != _exportGeneration)
+            {
+                return;
+            }
+
+            AppendReport(
                 $"=== エラー ==={Environment.NewLine}"
-                + $"Message : 書き出しに失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}";
+                + $"Message : 書き出しに失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}");
         }
 
         if (IsDisposed || exportGeneration != _exportGeneration)
@@ -364,7 +556,75 @@ public partial class Form1 : Form
         }
 
         waveformView.ClearExportHighlight();
-        AppendReport(exportReport);
+    }
+
+    /// <summary>
+    /// 書き出しパートの枠発光を UI スレッドへ同期反映する。
+    /// holdMs &gt; 0 のときは描画が見えるよう短く待ってから返す（バックグラウンド側から呼ぶ想定）。
+    /// </summary>
+    private void NotifyExportPartGlow(int? partNumber, int exportGeneration, int holdMs = 0)
+    {
+        if (exportGeneration != _exportGeneration || IsDisposed)
+        {
+            return;
+        }
+
+        try
+        {
+            Invoke(() =>
+            {
+                if (exportGeneration != _exportGeneration || IsDisposed)
+                {
+                    return;
+                }
+
+                waveformView.SetExportHighlight(partNumber);
+                waveformView.Update();
+            });
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+        catch (InvalidOperationException)
+        {
+            return;
+        }
+
+        if (holdMs > 0)
+        {
+            Thread.Sleep(holdMs);
+        }
+    }
+
+    /// <summary>書き出しログをパート単位で UI へ逐次反映する。</summary>
+    private void NotifyExportLog(string text, int exportGeneration)
+    {
+        if (string.IsNullOrEmpty(text) || exportGeneration != _exportGeneration || IsDisposed)
+        {
+            return;
+        }
+
+        try
+        {
+            Invoke(() =>
+            {
+                if (exportGeneration != _exportGeneration || IsDisposed)
+                {
+                    return;
+                }
+
+                AppendReport(text);
+            });
+        }
+        catch (ObjectDisposedException)
+        {
+            // クローズ直後は無視
+        }
+        catch (InvalidOperationException)
+        {
+            // ハンドル破棄直後など
+        }
     }
 
     private void TogglePlayback()
@@ -398,10 +658,11 @@ public partial class Form1 : Form
             return;
         }
 
-        _audioPlayer.Seek(progress);
-        AnchorPlayhead(_audioPlayer.Progress);
-        // シーク直後は残光を付けない（ジャンプの残像を避ける）
-        waveformView.SetPlayhead(_smoothProgress, recordTrail: false);
+        var clamped = Math.Clamp(progress, 0d, 1d);
+        _audioPlayer.Seek(clamped);
+        // エンジンは時間丸めで僅かにずれるので、表示は要求位置を優先する
+        AnchorPlayhead(clamped);
+        waveformView.SetPlayhead(clamped, recordTrail: false);
     }
 
     private void UpdatePlayhead()
@@ -516,7 +777,32 @@ public partial class Form1 : Form
 
     protected override void WndProc(ref Message m)
     {
+        const int wmMouseWheel = 0x020A;
         const int wmEraseBkgnd = 0x0014;
+
+        if (m.Msg == wmMouseWheel && !IsDisposed && waveformView is { IsDisposed: false })
+        {
+            var screenPoint = Control.MousePosition;
+            var waveScreen = waveformView.RectangleToScreen(waveformView.ClientRectangle);
+            if (waveScreen.Contains(screenPoint))
+            {
+                // high word of wParam is signed wheel delta
+                var wheelDelta = (short)((m.WParam.ToInt64() >> 16) & 0xFFFF);
+                if ((ModifierKeys & Keys.Shift) == Keys.Shift)
+                {
+                    waveformView.ZoomAmpByWheel(wheelDelta);
+                }
+                else
+                {
+                    var client = waveformView.PointToClient(screenPoint);
+                    waveformView.ZoomTimeByWheel(wheelDelta, client.X);
+                }
+
+                m.Result = IntPtr.Zero;
+                return;
+            }
+        }
+
         if (m.Msg == wmEraseBkgnd)
         {
             if (m.WParam != IntPtr.Zero)

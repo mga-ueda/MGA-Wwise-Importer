@@ -16,23 +16,32 @@ internal static class WaveformExporter
         IReadOnlyList<WaveformRegionMark> regions,
         IReadOnlyList<WaveformBarMark> bars,
         IReadOnlyList<WaveformMarkerMark> markers,
-        Action<WaveformOutputPart>? onPartBegin = null)
+        Action<WaveformOutputPart>? onPartBegin = null,
+        Action<WaveformOutputPart>? onPartEnd = null,
+        Action<string>? onLog = null)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("=== Export ===");
-        sb.AppendLine($"Source : {sourcePath}");
-        sb.AppendLine($"Parts  : {outputParts.Count}");
+
+        void Log(string text)
+        {
+            sb.Append(text);
+            onLog?.Invoke(text);
+        }
+
+        Log("=== Export ===" + Environment.NewLine);
+        Log($"Source : {sourcePath}" + Environment.NewLine);
+        Log($"Parts  : {outputParts.Count}" + Environment.NewLine);
 
         if (outputParts.Count == 0)
         {
-            sb.AppendLine("Message : 出力パートが無いため書き出しをスキップします。");
-            sb.AppendLine();
+            Log("Message : 出力パートが無いため書き出しをスキップします。" + Environment.NewLine);
+            Log(Environment.NewLine);
             return sb.ToString();
         }
 
         var directory = Path.GetDirectoryName(sourcePath) ?? string.Empty;
-        sb.AppendLine($"OutputDir : {directory}");
-        sb.AppendLine();
+        Log($"OutputDir : {directory}" + Environment.NewLine);
+        Log(Environment.NewLine);
 
         var written = 0;
         foreach (var part in outputParts)
@@ -59,18 +68,19 @@ internal static class WaveformExporter
                 var regionCount = cues.Count(c => c.IsRegion);
                 var markerCount = cues.Count - regionCount;
 
-                sb.AppendLine($"--- Part #{part.Number} ---");
-                sb.AppendLine($"File    : {destPath}");
-                sb.AppendLine(
+                var partLog = new StringBuilder();
+                partLog.AppendLine($"--- Part #{part.Number} ---");
+                partLog.AppendLine($"File    : {destPath}");
+                partLog.AppendLine(
                     $"Samples : [{part.StartSampleOffset:N0} .. {part.EndSampleOffset:N0})"
                     + $"  frames={frames:N0}"
                     + $"  duration={durationSec:0.000}s");
-                sb.AppendLine($"Size    : {info.Length:N0} bytes");
-                sb.AppendLine($"Cues    : {cues.Count} (Regions={regionCount}, Markers={markerCount})");
+                partLog.AppendLine($"Size    : {info.Length:N0} bytes");
+                partLog.AppendLine($"Cues    : {cues.Count} (Regions={regionCount}, Markers={markerCount})");
                 foreach (var cue in cues)
                 {
                     var kind = cue.IsRegion ? "Region" : "Marker";
-                    sb.AppendLine(
+                    partLog.AppendLine(
                         $"  - {kind}#{cue.Id}"
                         + $"  sample={cue.SampleOffset.ToString(CultureInfo.InvariantCulture)}"
                         + (cue.IsRegion
@@ -79,22 +89,28 @@ internal static class WaveformExporter
                         + $"  \"{cue.Comment}\"");
                 }
 
-                sb.AppendLine();
+                partLog.AppendLine();
+                Log(partLog.ToString());
                 written++;
             }
             catch (Exception ex)
             {
-                sb.AppendLine("=== エラー ===");
-                sb.AppendLine($"File    : {destPath}");
-                sb.AppendLine($"Message : {ex.Message}");
-                sb.AppendLine();
+                Log("=== エラー ===" + Environment.NewLine);
+                Log($"File    : {destPath}" + Environment.NewLine);
+                Log($"Message : {ex.Message}" + Environment.NewLine);
+                Log(Environment.NewLine);
+            }
+            finally
+            {
+                // 成功／失敗いずれでも「このパートの書き出し終わり」を UI 側へ伝える
+                onPartEnd?.Invoke(part);
             }
         }
 
-        sb.AppendLine("=== Export complete ===");
-        sb.AppendLine($"Written : {written} / {outputParts.Count}");
-        sb.AppendLine($"Time    : {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        sb.AppendLine();
+        Log("=== Export complete ===" + Environment.NewLine);
+        Log($"Written : {written} / {outputParts.Count}" + Environment.NewLine);
+        Log($"Time    : {DateTime.Now:yyyy-MM-dd HH:mm:ss}" + Environment.NewLine);
+        Log(Environment.NewLine);
         return sb.ToString();
     }
 

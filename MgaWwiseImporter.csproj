@@ -13,6 +13,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- tools/・ローカル検証用ツリーを既定グロブから除外する -->
+    <Compile Remove="tools\**" />
+    <None Remove="tools\**" />
+    <Compile Remove="_probe\**" />
+    <None Remove="_probe\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
   </ItemGroup>

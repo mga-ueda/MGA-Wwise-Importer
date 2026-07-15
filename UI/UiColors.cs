@@ -27,7 +27,6 @@ internal static class UiColors
     public static Color SeekCyan { get; set; } = Color.FromArgb(0, 245, 255);
     public static Color MouseGuide { get; set; } = Color.FromArgb(220, 255, 255, 255);
     public static Color BarLine { get; set; } = Color.FromArgb(90, 170, 170, 170);
-    public static Color AnacrusisLine { get; set; } = Color.FromArgb(160, 230, 190, 70);
     public static Color TempoChangeLine { get; set; } = Color.FromArgb(180, 180, 255, 180);
 
     // --- ラベル行（背景／文字） ---
@@ -68,7 +67,6 @@ internal static class UiColors
         new("SeekCyan", "再生ヘッド", () => SeekCyan, c => SeekCyan = c),
         new("MouseGuide", "マウスガイド", () => MouseGuide, c => MouseGuide = c),
         new("BarLine", "小節線", () => BarLine, c => BarLine = c),
-        new("AnacrusisLine", "アウフタクト線", () => AnacrusisLine, c => AnacrusisLine = c),
         new("TempoChangeLine", "テンポ変更線", () => TempoChangeLine, c => TempoChangeLine = c),
         new("BarNumberBg", "小節番号・背景", () => BarNumberBg, c => BarNumberBg = c),
         new("BarNumberFg", "小節番号・文字", () => BarNumberFg, c => BarNumberFg = c),

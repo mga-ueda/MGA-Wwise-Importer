@@ -17,15 +17,23 @@ namespace MgaWwiseImporter.Wave;
 /// <item>波形冒頭が小節頭でないとき、次の小節線までを単独リージョンにする（名前に -A）。</item>
 /// <item>名前が -R で終わるサイクル範囲は Out で分割し、Out が小節途中なら次の小節頭までを 1 リージョンにする（-A）。範囲内は出力計画から除外（色分けのみ別扱い）。</item>
 /// <item>名前が -L で終わるサイクル範囲内のリージョン名には -L を添える。</item>
+/// <item>名前が -E で終わるサイクル範囲（Wwise の Exit Cue 以降に相当）内のリージョン名には -E を添える。</item>
 /// </list>
+/// -R / -L / -E / -A の各範囲は重ならない前提。重なっていたらエラー。
 /// </para>
 /// </summary>
 internal static class WaveformRegionBuilder
 {
     private const double PpqEpsilon = 1e-6;
     private const double BpmEpsilon = 1e-3;
+    /// <summary>
+    /// PPQ↔サンプル往復の丸めで末尾などに生まれる微小な空き区画の下限。
+    /// これ未満は独立リージョンにせず、直前の区画へ吸い込む。
+    /// </summary>
+    private const long MinRegionFrames = 2;
     private const string ExcludeRangeSuffix = "-R";
     private const string LoopLeftSuffix = "-L";
+    private const string LoopEndSuffix = "-E";
     private const string AnacrusisSuffix = "-A";
 
     public static IReadOnlyList<WaveformRegionMark> Build(
@@ -138,6 +146,10 @@ internal static class WaveformRegionBuilder
             .Where(IsLoopLeftRange)
             .Select(c => (c.StartSampleOffset, c.EndSampleOffset))
             .ToList();
+        var loopEndRanges = cycles
+            .Where(IsLoopEndRange)
+            .Select(c => (c.StartSampleOffset, c.EndSampleOffset))
+            .ToList();
 
         var points = splitSamples.ToList();
         var regions = new List<WaveformRegionMark>();
@@ -150,34 +162,82 @@ internal static class WaveformRegionBuilder
                 continue;
             }
 
+            // 末尾付近などで 1 サンプルだけ残る区画は独立させない（直前へ吸収）。
+            // 例: -R Out=frameCount-1 と frameCount のあいだにできるゴミ領域。
+            if (end - start < MinRegionFrames)
+            {
+                if (regions.Count > 0)
+                {
+                    var prev = regions[^1];
+                    regions[^1] = new WaveformRegionMark(
+                        prev.StartSampleOffset,
+                        end,
+                        prev.IsExcluded,
+                        prev.NameSuffix);
+                }
+
+                continue;
+            }
+
             var mid = start + (end - start) / 2;
             var excluded = ContainsSample(excludeRanges, mid);
-            var suffix = BuildNameSuffix(mid, excluded, loopLeftRanges, anacrusisRanges);
+            var suffix = BuildNameSuffix(
+                mid,
+                excluded,
+                loopLeftRanges,
+                loopEndRanges,
+                anacrusisRanges);
             regions.Add(new WaveformRegionMark(start, end, excluded, suffix));
         }
 
         return regions;
     }
 
+    /// <summary>
+    /// -R / -L / -E / -A は重ならない前提（マーカー運用ルール）。重なりを検出したらエラー。
+    /// </summary>
     private static string BuildNameSuffix(
         long midSample,
         bool excluded,
         IReadOnlyList<(long Start, long End)> loopLeftRanges,
+        IReadOnlyList<(long Start, long End)> loopEndRanges,
         IReadOnlyList<(long Start, long End)> anacrusisRanges)
     {
-        // 例: "-L" / "-A"（排他想定）。-R は IsExcluded で表し、接尾辞には付けない。
-        var suffix = string.Empty;
-        if (!excluded && ContainsSample(loopLeftRanges, midSample))
+        var hits = new List<string>();
+        if (excluded)
         {
-            suffix += LoopLeftSuffix;
+            hits.Add(ExcludeRangeSuffix);
         }
 
-        if (!excluded && ContainsSample(anacrusisRanges, midSample))
+        if (ContainsSample(loopLeftRanges, midSample))
         {
-            suffix += AnacrusisSuffix;
+            hits.Add(LoopLeftSuffix);
         }
 
-        return suffix;
+        if (ContainsSample(loopEndRanges, midSample))
+        {
+            hits.Add(LoopEndSuffix);
+        }
+
+        if (ContainsSample(anacrusisRanges, midSample))
+        {
+            hits.Add(AnacrusisSuffix);
+        }
+
+        if (hits.Count > 1)
+        {
+            throw new InvalidDataException(
+                $"リージョン範囲が重なっています: sample={midSample} ({string.Join(" と ", hits)})。"
+                + " -R / -L / -E（および内部生成の -A）は重ならないようにマーカーを配置してください。");
+        }
+
+        // -R は IsExcluded で表し、接尾辞には付けない。
+        if (excluded || hits.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        return hits[0];
     }
 
     private static bool ContainsSample(IReadOnlyList<(long Start, long End)> ranges, long sample)
@@ -196,6 +256,12 @@ internal static class WaveformRegionBuilder
     private static bool IsLoopLeftRange(WaveformCycleMark cycle)
     {
         return cycle.Comment.EndsWith(LoopLeftSuffix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Wwise の Exit Cue 以降の波形部分を示す範囲（-E）。</summary>
+    private static bool IsLoopEndRange(WaveformCycleMark cycle)
+    {
+        return cycle.Comment.EndsWith(LoopEndSuffix, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -219,7 +285,7 @@ internal static class WaveformRegionBuilder
 
         void Flush()
         {
-            if (runStart is not long start || runEnd <= start)
+            if (runStart is not long start || runEnd - start < MinRegionFrames)
             {
                 runStart = null;
                 return;

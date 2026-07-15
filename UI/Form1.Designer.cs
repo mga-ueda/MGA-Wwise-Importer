@@ -4,7 +4,7 @@ partial class Form1
 {
     private System.ComponentModel.IContainer components = null;
     private WaveformView waveformView;
-    private RichTextBox editorTextBox;
+    private ShortcutForwardingRichTextBox editorTextBox;
 
     protected override void Dispose(bool disposing)
     {
@@ -20,7 +20,7 @@ partial class Form1
     private void InitializeComponent()
     {
         waveformView = new WaveformView();
-        editorTextBox = new RichTextBox();
+        editorTextBox = new ShortcutForwardingRichTextBox();
         SuspendLayout();
         //
         // waveformView
