@@ -140,7 +140,7 @@ internal static class WaveformExporter
 
             var localStart = start - part.StartSampleOffset;
             var length = end - start;
-            // NameSuffix は RegionBuilder が付与（例: "-L" / "-A"。-R は除外のためここには来ない）
+            // NameSuffix は RegionBuilder が付与（例: "-L" / "-A" / 自動 "-E"。-R は除外のためここには来ない）
             var comment = BuildRegionComment(start, bars) + region.NameSuffix;
 
             cues.Add(new WavCueItem

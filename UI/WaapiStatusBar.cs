@@ -54,7 +54,7 @@ internal sealed class WaapiStatusBar : Panel
 
     public void ApplyColors()
     {
-        BackColor = UiColors.StatusBarBack;
+        BackColor = UiColors.ForControlBack(UiColors.StatusBarBack);
         _titleLabel.ForeColor = UiColors.LogMuted;
         _titleLabel.BackColor = BackColor;
         _badgeLabel.BackColor = BackColor;

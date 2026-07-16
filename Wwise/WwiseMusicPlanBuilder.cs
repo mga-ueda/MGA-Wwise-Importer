@@ -94,7 +94,12 @@ internal static class WwiseMusicPlanBuilder
                 continue;
             }
 
-            result.Add(new WaveformRegionMark(start, end, false, region.NameSuffix));
+            result.Add(new WaveformRegionMark(
+                start,
+                end,
+                false,
+                region.NameSuffix,
+                region.IsAutoNameSuffix));
         }
 
         result.Sort((a, b) => a.StartSampleOffset.CompareTo(b.StartSampleOffset));

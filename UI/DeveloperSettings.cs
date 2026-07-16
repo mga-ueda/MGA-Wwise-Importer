@@ -79,6 +79,24 @@ internal sealed class DeveloperSettings
         }
     }
 
+    /// <summary>[Developer] TopMost だけ更新する（他キーは維持）。</summary>
+    public static void SaveTopMost(bool topMost)
+    {
+        EnsureDefaultsWritten();
+        var values = IniFile.ReadSection(Section);
+        values["TopMost"] = topMost ? "1" : "0";
+        IniFile.WriteSection(Section, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["AutoLoadWavePath"] = values.TryGetValue("AutoLoadWavePath", out var wave)
+                ? wave
+                : ResolveDefaultAutoLoadWavePath(),
+            ["AutoLoadOnStartup"] = values.TryGetValue("AutoLoadOnStartup", out var autoLoad)
+                ? autoLoad
+                : "1",
+            ["TopMost"] = values["TopMost"],
+        });
+    }
+
     private static bool MigrateLegacyKeys(Dictionary<string, string> values)
     {
         // 旧プレビュー以前のキーは削除する（値は使わない）

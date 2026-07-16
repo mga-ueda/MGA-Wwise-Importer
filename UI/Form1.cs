@@ -24,6 +24,8 @@ public partial class Form1 : Form
     private long _anchorTickMs;
     private ColorDevPanelForm? _colorDevPanel;
     private int _exportGeneration;
+    private WaveformPreviewData? _loadedPreview;
+    private bool _exportBusy;
     /// <summary>
     /// 戻る方向ジャンプ中に再生を一時停止したとき true。キーアップで再開する。
     /// </summary>
@@ -33,10 +35,14 @@ public partial class Form1 : Form
     {
         UiColors.LoadFromIni();
         InitializeComponent();
+        actionBar.BackColor = UiColors.ForControlBack(UiColors.StatusBarBack);
+        ApplyActionBarButtonColors();
+        LayoutActionBarControls();
         KeyPreview = true;
         _developerSettings = DeveloperSettings.Load();
         _waapiSettings = WaapiSettings.Load();
         TopMost = _developerSettings.TopMost;
+        topMostCheckBox.Checked = _developerSettings.TopMost;
         RestoreWindowBounds();
 
         _playheadTimer.Tick += (_, _) => UpdatePlayhead();
@@ -54,6 +60,7 @@ public partial class Form1 : Form
                 _playheadTimer.Stop();
                 AnchorPlayhead(0);
                 waveformView.SetPlayhead(0, recordTrail: false);
+                waveformView.SetExitPlayhead(null);
             });
         };
         waveformView.SeekRequested += (_, progress) => SeekPlayback(progress);
@@ -256,6 +263,12 @@ public partial class Form1 : Form
     /// </summary>
     private bool TryProcessWaveformShortcut(Keys keyData)
     {
+        if (keyData == Keys.G)
+        {
+            ShowBarJumpDialog();
+            return true;
+        }
+
         if (keyData == Keys.Space)
         {
             // ホールド中の自動再開はキャンセル（Space のトグルに委ねる）
@@ -432,12 +445,75 @@ public partial class Form1 : Form
 
     private void ApplyUiColors()
     {
-        BackColor = UiColors.WindowBack;
+        // WinForms の BackColor はアルファ非対応（A≠255 だと起動／適用時に落ちる）
+        BackColor = UiColors.ForControlBack(UiColors.WindowBack);
         ForeColor = UiColors.WindowFore;
-        editorTextBox.BackColor = UiColors.LogBack;
+        editorTextBox.BackColor = UiColors.ForControlBack(UiColors.LogBack);
         editorTextBox.ForeColor = UiColors.LogDefault;
+        actionBar.BackColor = UiColors.ForControlBack(UiColors.StatusBarBack);
+        ApplyActionBarButtonColors();
+        topMostCheckBox.ForeColor = UiColors.WindowFore;
         waapiStatusBar.ApplyColors();
         waveformView.RefreshAppearance();
+    }
+
+    private void ApplyActionBarButtonColors()
+    {
+        exportButton.BackColor = Color.FromArgb(30, 110, 210);
+        exportButton.ForeColor = Color.White;
+        exportButton.HoverBackColor = Color.FromArgb(45, 130, 230);
+        exportButton.PressedBackColor = Color.FromArgb(20, 90, 180);
+
+        clearButton.BackColor = Color.FromArgb(190, 50, 50);
+        clearButton.ForeColor = Color.White;
+        clearButton.HoverBackColor = Color.FromArgb(210, 70, 70);
+        clearButton.PressedBackColor = Color.FromArgb(160, 35, 35);
+
+        topMostCheckBox.ForeColor = UiColors.WindowFore;
+        topMostCheckBox.BackColor = actionBar.BackColor;
+    }
+
+    private void LayoutActionBarControls()
+    {
+        const int pad = 10;
+        const int gap = 8;
+        var right = actionBar.ClientSize.Width - pad;
+        var buttonY = Math.Max(0, (actionBar.ClientSize.Height - exportButton.Height) / 2);
+
+        exportButton.Location = new Point(right - exportButton.Width, buttonY);
+        clearButton.Location = new Point(exportButton.Left - gap - clearButton.Width, buttonY);
+
+        var checkY = Math.Max(0, (actionBar.ClientSize.Height - topMostCheckBox.PreferredSize.Height) / 2);
+        topMostCheckBox.Location = new Point(
+            clearButton.Left - gap - topMostCheckBox.PreferredSize.Width,
+            checkY);
+    }
+
+    private void UpdateExportButtonState()
+    {
+        exportButton.Enabled =
+            !_exportBusy
+            && _loadedPreview is { OutputParts.Count: > 0 };
+    }
+
+    private void TopMostCheckBox_CheckedChanged(object? sender, EventArgs e)
+    {
+        TopMost = topMostCheckBox.Checked;
+        DeveloperSettings.SaveTopMost(topMostCheckBox.Checked);
+    }
+
+    private void ClearButton_Click(object? sender, EventArgs e)
+    {
+        _exportGeneration++;
+        _exportBusy = false;
+        _loadedPreview = null;
+        _resumePlaybackAfterBackwardSeek = false;
+        _playheadTimer.Stop();
+        _audioPlayer.Stop();
+        _audioPlayer.Clear();
+        waveformView.ClearPreview();
+        editorTextBox.Clear();
+        UpdateExportButtonState();
     }
 
     private void RestoreWindowBounds()
@@ -556,6 +632,9 @@ public partial class Form1 : Form
     private async void ProcessDroppedFiles(IEnumerable<string> files)
     {
         var exportGeneration = ++_exportGeneration;
+        _loadedPreview = null;
+        _exportBusy = false;
+        UpdateExportButtonState();
         waveformView.ClearExportHighlight();
         _playheadTimer.Stop();
         _audioPlayer.Stop();
@@ -582,6 +661,8 @@ public partial class Form1 : Form
         {
             _audioPlayer.Clear();
             waveformView.ClearPreview();
+            _loadedPreview = null;
+            UpdateExportButtonState();
             return;
         }
 
@@ -597,6 +678,7 @@ public partial class Form1 : Form
         try
         {
             _audioPlayer.Load(preview.SourcePath);
+            _audioPlayer.SetLoopPlans(WaveAudioPlayer.BuildLoopPlans(preview.Regions));
             waveformView.SetPlayhead(0, recordTrail: false);
         }
         catch (Exception ex)
@@ -606,51 +688,51 @@ public partial class Form1 : Form
                 + $"Message : 再生の準備に失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}");
         }
 
-        if (preview.OutputParts.Count == 0 || exportGeneration != _exportGeneration)
-        {
-            return;
-        }
+        _loadedPreview = preview;
+        UpdateExportButtonState();
 
-        // リージョン付きプレビューが画面に載ってから問い合わせる
-        await waveformView.WaitForRevealAsync();
-        if (IsDisposed || exportGeneration != _exportGeneration)
+        if (preview.OutputParts.Count == 0)
         {
             return;
         }
 
         var directory = Path.GetDirectoryName(preview.SourcePath) ?? string.Empty;
-        var confirm = MessageBox.Show(
-            this,
-            $"リージョン情報付きの分割 WAV を {preview.OutputParts.Count} ファイル書き出します。\n"
-            + $"保存先: {directory}\n\n"
-            + "エクスポートしますか？",
-            "WAV エクスポート",
-            MessageBoxButtons.YesNo,
-            MessageBoxIcon.Question,
-            MessageBoxDefaultButton.Button1);
+        AppendReport(
+            $"=== Export ==={Environment.NewLine}"
+            + $"Message : 出力パート {preview.OutputParts.Count} 件。［エクスポート］で分割 WAV を書き出せます。{Environment.NewLine}"
+            + $"保存先  : {directory}{Environment.NewLine}{Environment.NewLine}");
+    }
 
-        if (confirm != DialogResult.Yes)
-        {
-            AppendReport(
-                $"=== Export ==={Environment.NewLine}"
-                + "Message : エクスポートをスキップしました。"+ Environment.NewLine
-                + Environment.NewLine);
-            return;
-        }
-
-        if (exportGeneration != _exportGeneration)
+    private async void ExportButton_Click(object? sender, EventArgs e)
+    {
+        if (_exportBusy || _loadedPreview is not { OutputParts.Count: > 0 } preview)
         {
             return;
         }
 
-        await RunExportAsync(preview, exportGeneration);
+        var exportGeneration = _exportGeneration;
+        _exportBusy = true;
+        UpdateExportButtonState();
 
-        if (IsDisposed || exportGeneration != _exportGeneration)
+        try
         {
-            return;
-        }
+            await RunExportAsync(preview, exportGeneration);
 
-        await RunWwiseImportAsync(preview, exportGeneration);
+            if (IsDisposed || exportGeneration != _exportGeneration)
+            {
+                return;
+            }
+
+            await RunWwiseImportAsync(preview, exportGeneration);
+        }
+        finally
+        {
+            if (!IsDisposed)
+            {
+                _exportBusy = false;
+                UpdateExportButtonState();
+            }
+        }
     }
 
     /// <summary>
@@ -954,6 +1036,26 @@ public partial class Form1 : Form
         }
     }
 
+    private void ShowBarJumpDialog()
+    {
+        using var dialog = new BarJumpDialogForm(waveformView.GetNearestBarNumber())
+        {
+            // メインが最前面でもダイアログが背面に回らないようにする
+            TopMost = TopMost,
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK || dialog.BarNumber is not int barNumber)
+        {
+            return;
+        }
+
+        if (!waveformView.TrySeekToBarNumber(barNumber))
+        {
+            AppendReport(
+                $"=== 小節ジャンプ ==={Environment.NewLine}"
+                + $"Message : 小節 {barNumber} が見つかりません。{Environment.NewLine}{Environment.NewLine}");
+        }
+    }
+
     private void TogglePlayback()
     {
         if (!_audioPlayer.HasSource)
@@ -966,6 +1068,8 @@ public partial class Form1 : Form
         {
             // 再生開始時だけ位置を取り込み、以降は壁時計で表示（エンジンには触れない）
             AnchorPlayhead(_audioPlayer.Progress);
+            // 開始位置が -L 内ならその区間だけループ。外ならループなし
+            _audioPlayer.ArmLoopAtProgress(_smoothProgress);
             _playheadTimer.Start();
         }
         else
@@ -987,9 +1091,12 @@ public partial class Form1 : Form
 
         var clamped = Math.Clamp(progress, 0d, 1d);
         _audioPlayer.Seek(clamped);
+        // ジャンプ先が -L 内ならその区間に付け替え、外ならループ解除
+        _audioPlayer.ArmLoopAtProgress(clamped);
         // エンジンは時間丸めで僅かにずれるので、表示は要求位置を優先する
         AnchorPlayhead(clamped);
         waveformView.SetPlayhead(clamped, recordTrail: false);
+        waveformView.SetExitPlayhead(null);
     }
 
     private void UpdatePlayhead()
@@ -1007,15 +1114,73 @@ public partial class Form1 : Form
             if (durationSec > 0)
             {
                 var elapsedSec = (Environment.TickCount64 - _anchorTickMs) / 1000d;
-                _smoothProgress = Math.Clamp(_anchorProgress + elapsedSec / durationSec, 0d, 1d);
+                var progress = _anchorProgress + elapsedSec / durationSec;
+
+                // 未アームのまま -L に入ったら、そこで初めてループを有効化
+                if (!_audioPlayer.TryGetActiveLoopProgress(out _, out _)
+                    && _audioPlayer.TryGetLoopProgress(progress, out _, out _))
+                {
+                    _audioPlayer.ArmLoopAtProgress(progress);
+                }
+
+                progress = WrapProgressForLoop(progress);
+                _smoothProgress = Math.Clamp(progress, 0d, 1d);
             }
 
             waveformView.SetPlayhead(_smoothProgress, recordTrail: true);
+            if (_audioPlayer.TryGetExitPlaybackProgress(out var exitProgress))
+            {
+                waveformView.SetExitPlayhead(exitProgress, recordTrail: true);
+            }
+            else
+            {
+                waveformView.SetExitPlayhead(null);
+            }
         }
         else
         {
             waveformView.SetPlayhead(_smoothProgress, recordTrail: false);
+            waveformView.SetExitPlayhead(null);
         }
+    }
+
+    /// <summary>
+    /// アーム中の -L 区間だけ進捗を折り返す（シークで外へ出たらアーム解除済み）。
+    /// </summary>
+    private double WrapProgressForLoop(double progress)
+    {
+        if (!_audioPlayer.TryGetActiveLoopProgress(out var start, out var end))
+        {
+            return progress;
+        }
+
+        var span = end - start;
+        if (span <= 1e-12)
+        {
+            return progress;
+        }
+
+        // ループ開始より前なら、入るまでは直線再生
+        if (progress < start)
+        {
+            return progress;
+        }
+
+        var relative = progress - start;
+        var wrapped = start + (relative - Math.Floor(relative / span) * span);
+        if (wrapped >= end)
+        {
+            wrapped = start;
+        }
+
+        // 長時間再生での累積誤差を抑えるため、1 周以上回ったらアンカーを更新
+        if (progress - _anchorProgress >= span)
+        {
+            _anchorProgress = wrapped;
+            _anchorTickMs = Environment.TickCount64;
+        }
+
+        return wrapped;
     }
 
     private void AnchorPlayhead(double progress)

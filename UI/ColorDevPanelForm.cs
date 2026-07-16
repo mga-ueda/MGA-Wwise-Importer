@@ -2,13 +2,13 @@ namespace MgaWwiseIMImporter.UI;
 
 /// <summary>
 /// 開発者向け色調整パネル。開いたままメイン画面を見ながら変更できる。
+/// アルファはコード既定を維持し、パネルでは RGB（#RRGGBB）のみ編集・コピペする。
 /// </summary>
 internal sealed class ColorDevPanelForm : Form
 {
     private readonly Dictionary<string, Panel> _swatches = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, Label> _hexLabels = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, NumericUpDown> _alphaInputs = new(StringComparer.OrdinalIgnoreCase);
-    private bool _suppressAlphaEvents;
+    private readonly Dictionary<string, TextBox> _hexInputs = new(StringComparer.OrdinalIgnoreCase);
+    private bool _suppressHexEvents;
 
     public event EventHandler? ColorsChanged;
 
@@ -17,8 +17,8 @@ internal sealed class ColorDevPanelForm : Form
         Text = "色調整（開発者）";
         FormBorderStyle = FormBorderStyle.SizableToolWindow;
         StartPosition = FormStartPosition.Manual;
-        MinimumSize = new Size(420, 320);
-        Size = new Size(480, 640);
+        MinimumSize = new Size(540, 320);
+        Size = new Size(560, 640);
         ShowInTaskbar = false;
         KeyPreview = true;
         BackColor = Color.FromArgb(40, 40, 42);
@@ -44,15 +44,15 @@ internal sealed class ColorDevPanelForm : Form
 
         var list = new TableLayoutPanel
         {
-            ColumnCount = 4,
+            ColumnCount = 3,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             Dock = DockStyle.Top,
             Padding = new Padding(4),
         };
-        list.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150f));
+        // 最長ラベル「波形リージョン塗り（通常）」などが切れない幅
+        list.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 250f));
         list.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 48f));
-        list.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90f));
         list.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
 
         for (var i = 0; i < UiColors.Entries.Count; i++)
@@ -66,7 +66,6 @@ internal sealed class ColorDevPanelForm : Form
                 Text = entry.Label,
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleLeft,
-                AutoEllipsis = true,
             };
 
             var swatch = new Panel
@@ -81,30 +80,23 @@ internal sealed class ColorDevPanelForm : Form
             swatch.Click += (_, _) => PickColor(entry.Key);
             _swatches[entry.Key] = swatch;
 
-            var alpha = new NumericUpDown
-            {
-                Minimum = 0,
-                Maximum = 255,
-                Width = 70,
-                Margin = new Padding(4, 3, 4, 3),
-                Tag = entry.Key,
-            };
-            alpha.ValueChanged += Alpha_ValueChanged;
-            _alphaInputs[entry.Key] = alpha;
-
-            var hex = new Label
+            var hex = new TextBox
             {
                 Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new Padding(4, 3, 4, 3),
                 Font = new Font("Consolas", 9F),
-                ForeColor = Color.FromArgb(180, 180, 180),
+                BackColor = Color.FromArgb(28, 28, 30),
+                ForeColor = Color.FromArgb(220, 220, 220),
+                BorderStyle = BorderStyle.FixedSingle,
+                Tag = entry.Key,
             };
-            _hexLabels[entry.Key] = hex;
+            hex.Leave += Hex_Leave;
+            hex.KeyDown += Hex_KeyDown;
+            _hexInputs[entry.Key] = hex;
 
             list.Controls.Add(nameLabel, 0, i);
             list.Controls.Add(swatch, 1, i);
-            list.Controls.Add(alpha, 2, i);
-            list.Controls.Add(hex, 3, i);
+            list.Controls.Add(hex, 2, i);
         }
 
         scroll.Controls.Add(list);
@@ -129,16 +121,8 @@ internal sealed class ColorDevPanelForm : Form
             ColorsChanged?.Invoke(this, EventArgs.Empty);
         };
 
-        var saveButton = new Button { Text = "INI に保存", AutoSize = true, FlatStyle = FlatStyle.System };
-        saveButton.Click += (_, _) =>
-        {
-            UiColors.SaveToIni();
-            Text = "色調整（開発者） — 保存済み";
-        };
-
         buttons.Controls.Add(closeButton);
         buttons.Controls.Add(resetButton);
-        buttons.Controls.Add(saveButton);
 
         root.Controls.Add(scroll, 0, 0);
         root.Controls.Add(buttons, 0, 1);
@@ -160,7 +144,7 @@ internal sealed class ColorDevPanelForm : Form
 
     public void RefreshRows()
     {
-        _suppressAlphaEvents = true;
+        _suppressHexEvents = true;
         try
         {
             foreach (var entry in UiColors.Entries)
@@ -171,30 +155,41 @@ internal sealed class ColorDevPanelForm : Form
                     swatch.BackColor = Color.FromArgb(255, color.R, color.G, color.B);
                 }
 
-                if (_hexLabels.TryGetValue(entry.Key, out var hex))
+                if (_hexInputs.TryGetValue(entry.Key, out var hex))
                 {
                     hex.Text = UiColors.FormatColor(color);
-                }
-
-                if (_alphaInputs.TryGetValue(entry.Key, out var alpha))
-                {
-                    alpha.Value = color.A;
                 }
             }
         }
         finally
         {
-            _suppressAlphaEvents = false;
+            _suppressHexEvents = false;
         }
     }
 
-    private void Alpha_ValueChanged(object? sender, EventArgs e)
+    private void Hex_KeyDown(object? sender, KeyEventArgs e)
     {
-        if (_suppressAlphaEvents || sender is not NumericUpDown alpha || alpha.Tag is not string key)
+        if (e.KeyCode != Keys.Enter || sender is not TextBox hex || hex.Tag is not string key)
         {
             return;
         }
 
+        e.SuppressKeyPress = true;
+        ApplyHexText(key, hex.Text);
+    }
+
+    private void Hex_Leave(object? sender, EventArgs e)
+    {
+        if (_suppressHexEvents || sender is not TextBox hex || hex.Tag is not string key)
+        {
+            return;
+        }
+
+        ApplyHexText(key, hex.Text);
+    }
+
+    private void ApplyHexText(string key, string text)
+    {
         var entry = FindEntry(key);
         if (entry is null)
         {
@@ -202,8 +197,37 @@ internal sealed class ColorDevPanelForm : Form
         }
 
         var current = entry.Get();
-        var next = Color.FromArgb((int)alpha.Value, current.R, current.G, current.B);
-        ApplyColor(entry, next, saveImmediately: true);
+        var expected = UiColors.FormatColor(current);
+        if (string.Equals(text.Trim(), expected, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (!UiColors.TryParseColor(text, out var parsed))
+        {
+            // 不正値は表示を戻す
+            _suppressHexEvents = true;
+            try
+            {
+                if (_hexInputs.TryGetValue(key, out var hex))
+                {
+                    hex.Text = expected;
+                }
+            }
+            finally
+            {
+                _suppressHexEvents = false;
+            }
+
+            return;
+        }
+
+        var alpha = UiColors.GetDefaultAlpha(key);
+        var next = Color.FromArgb(alpha, parsed.R, parsed.G, parsed.B);
+        entry.Set(next);
+        RefreshRows();
+        UiColors.SaveToIni();
+        ColorsChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void PickColor(string key)
@@ -228,19 +252,12 @@ internal sealed class ColorDevPanelForm : Form
             return;
         }
 
-        var next = Color.FromArgb(current.A, dialog.Color.R, dialog.Color.G, dialog.Color.B);
-        ApplyColor(entry, next, saveImmediately: true);
-    }
-
-    private void ApplyColor(UiColorEntry entry, Color color, bool saveImmediately)
-    {
-        entry.Set(color);
+        // アルファはコード既定を維持（パネルでは変更しない）
+        var alpha = UiColors.GetDefaultAlpha(key);
+        var next = Color.FromArgb(alpha, dialog.Color.R, dialog.Color.G, dialog.Color.B);
+        entry.Set(next);
         RefreshRows();
-        if (saveImmediately)
-        {
-            UiColors.SaveToIni();
-        }
-
+        UiColors.SaveToIni();
         ColorsChanged?.Invoke(this, EventArgs.Empty);
     }
 

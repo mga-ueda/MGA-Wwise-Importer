@@ -51,11 +51,16 @@ internal readonly record struct WaveformCycleMark(
 /// リージョン名に添える接尾辞（例: <c>-L</c> / <c>-E</c> / <c>-A</c>）。空なら無し。
 /// 除外（-R）は <see cref="IsExcluded"/> で表し、ここには含めない。
 /// </param>
+/// <param name="IsAutoNameSuffix">
+/// true ならアプリが自動付与した接尾辞（例: アウフタクトの -A、 -L 直後の -E）。
+/// 波形リージョン塗りなどに反映する。
+/// </param>
 internal readonly record struct WaveformRegionMark(
     long StartSampleOffset,
     long EndSampleOffset,
     bool IsExcluded = false,
-    string NameSuffix = "");
+    string NameSuffix = "",
+    bool IsAutoNameSuffix = false);
 
 /// <summary>
 /// 連続する着色リージョンをまとめた、1 つの出力波形ファイル候補（表示用の計画ラベル）。

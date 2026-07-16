@@ -18,6 +18,7 @@ namespace MgaWwiseIMImporter.Wave;
 /// <item>名前が -R で終わるサイクル範囲は Out で分割し、Out が小節途中なら次の小節頭までを 1 リージョンにする（-A）。範囲内は出力計画から除外（色分けのみ別扱い）。</item>
 /// <item>名前が -L で終わるサイクル範囲内のリージョン名には -L を添える。</item>
 /// <item>名前が -E で終わるサイクル範囲（Wwise の Exit Cue 以降に相当）内のリージョン名には -E を添える。</item>
+/// <item>アプリ独自: -L が付いた連続リージョンの直後（接尾辞なし）には -E を自動付与する（明示の -E サイクル省略用）。</item>
 /// </list>
 /// -R / -L / -E / -A の各範囲は重ならない前提。重なっていたらエラー。
 /// </para>
@@ -173,7 +174,8 @@ internal static class WaveformRegionBuilder
                         prev.StartSampleOffset,
                         end,
                         prev.IsExcluded,
-                        prev.NameSuffix);
+                        prev.NameSuffix,
+                        prev.IsAutoNameSuffix);
                 }
 
                 continue;
@@ -187,10 +189,51 @@ internal static class WaveformRegionBuilder
                 loopLeftRanges,
                 loopEndRanges,
                 anacrusisRanges);
-            regions.Add(new WaveformRegionMark(start, end, excluded, suffix));
+            // -A は常にアプリ内部生成（サイクルコメント由来ではない）
+            var isAutoSuffix = suffix.Equals(AnacrusisSuffix, StringComparison.OrdinalIgnoreCase);
+            regions.Add(new WaveformRegionMark(start, end, excluded, suffix, isAutoSuffix));
         }
 
+        ApplyAutoExitSuffixAfterLoop(regions);
         return regions;
+    }
+
+    /// <summary>
+    /// -L 連続の直後リージョンに -E が無いとき、アプリ側で -E を付与する。
+    /// ユーザーが Exit 用サイクル（-E）を付け忘れた場合のフォロー。
+    /// 既に接尾辞がある／除外リージョンなら触らない。
+    /// </summary>
+    private static void ApplyAutoExitSuffixAfterLoop(List<WaveformRegionMark> regions)
+    {
+        for (var i = 0; i + 1 < regions.Count; i++)
+        {
+            var current = regions[i];
+            if (current.IsExcluded
+                || !current.NameSuffix.Equals(LoopLeftSuffix, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var next = regions[i + 1];
+            // -L 範囲が複数リージョンにまたがるときは、その連続の末尾の次だけが対象
+            if (next.IsExcluded
+                || next.NameSuffix.Equals(LoopLeftSuffix, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (next.NameSuffix.Length > 0)
+            {
+                continue;
+            }
+
+            regions[i + 1] = new WaveformRegionMark(
+                next.StartSampleOffset,
+                next.EndSampleOffset,
+                next.IsExcluded,
+                LoopEndSuffix,
+                IsAutoNameSuffix: true);
+        }
     }
 
     /// <summary>
