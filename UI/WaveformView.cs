@@ -9,6 +9,8 @@ internal sealed class WaveformView : Control
     private const int LabelRowCount = 4;
     private const int InfoLanePadX = 8;
     private const int InfoLaneSeparatorPx = 3;
+    private const int SourceMeterWidthPx = 12;
+    private const int SourceMeterGapPx = 8;
     private const float NameLaneFontMinPx = 8f;
     private const float NameLaneFontScale = 0.16f;
     private static readonly string[] InfoRowLabels = ["Measure", "Tempo", "Signature", "Marker"];
@@ -41,6 +43,7 @@ internal sealed class WaveformView : Control
     private WavFileInfo? _wavInfo;
     private string _sourceDisplayName = string.Empty;
     private int _infoLaneWidth = 120;
+    private float _outputLevel;
     private WavPeakData? _detailPeaks;
     private double _detailViewStart = double.NaN;
     private double _detailViewEnd = double.NaN;
@@ -56,6 +59,8 @@ internal sealed class WaveformView : Control
     private IReadOnlyList<WaveformRegionMark> _regions = [];
     private IReadOnlyList<WaveformOutputPart> _outputParts = [];
     private IReadOnlyList<WaveformSegmentNameMark> _segmentNames = [];
+    private int? _hoveredPlaylistPartNumber;
+    private int? _playlistHoverHighlightPartNumber;
     private int? _exportHighlightPartNumber;
     private readonly System.Windows.Forms.Timer _exportGlowTimer;
 
@@ -81,6 +86,13 @@ internal sealed class WaveformView : Control
     private double? _exitPlayheadProgress;
     private readonly List<(double Progress, long TickMs)> _exitTrailSamples = [];
     private bool _exitTrailActive;
+    private double? _anacrusisPlayheadProgress;
+    private readonly List<(double Progress, long TickMs)> _anacrusisTrailSamples = [];
+    private bool _anacrusisTrailActive;
+    private double? _fadeOutPlayheadProgress;
+    private readonly List<(double Progress, long TickMs)> _fadeOutTrailSamples = [];
+    private bool _fadeOutTrailActive;
+    private bool _fadeOutPlayheadIsExit;
     private bool _isDraggingSeek;
     private float? _mouseGuideX;
     private Bitmap? _staticLayer;
@@ -134,6 +146,7 @@ internal sealed class WaveformView : Control
         _sourceDisplayName = string.IsNullOrWhiteSpace(sourcePath)
             ? string.Empty
             : Path.GetFileName(sourcePath);
+        _outputLevel = 0f;
         ClearDetailPeaks();
         StartPeakPyramidBuild(wavInfo);
         _bars = bars ?? [];
@@ -141,6 +154,8 @@ internal sealed class WaveformView : Control
         _cycles = cycles ?? [];
         _regions = regions ?? [];
         _outputParts = outputParts ?? [];
+        SetHoveredPlaylistPart(null);
+        SetPlaylistHoverHighlight(null);
         _segmentNames = _outputParts.Count == 0
             ? []
             : WwiseMusicPlanBuilder.BuildSegmentLabelMarks(sourcePath, _outputParts, _regions);
@@ -217,6 +232,7 @@ internal sealed class WaveformView : Control
         _peaks = null;
         _wavInfo = null;
         _sourceDisplayName = string.Empty;
+        _outputLevel = 0f;
         ClearDetailPeaks();
         _peakPyramid = null;
         _pyramidGeneration++;
@@ -225,6 +241,8 @@ internal sealed class WaveformView : Control
         _cycles = [];
         _regions = [];
         _outputParts = [];
+        SetHoveredPlaylistPart(null);
+        SetPlaylistHoverHighlight(null);
         _segmentNames = [];
         ResetTimeZoom(refresh: false);
         ResetAmpZoom(refresh: false);
@@ -278,6 +296,27 @@ internal sealed class WaveformView : Control
         Invalidate();
     }
 
+    public void ClearPlayheadTrail()
+    {
+        ClearTrailSamples();
+        Invalidate();
+    }
+
+    public void SetOutputLevel(float level, bool decay)
+    {
+        var target = Math.Clamp(level, 0f, 1f);
+        var next = decay
+            ? Math.Max(target, _outputLevel * 0.92f)
+            : target;
+        if (Math.Abs(next - _outputLevel) < 0.001f)
+        {
+            return;
+        }
+
+        _outputLevel = next;
+        Invalidate();
+    }
+
     /// <summary>
     /// -E 二重再生ヘッド（赤）。progress は 0〜1。null で非表示。
     /// </summary>
@@ -300,6 +339,76 @@ internal sealed class WaveformView : Control
         else
         {
             RecordTrailSample(clamped, _exitTrailSamples, ref _exitTrailActive);
+        }
+
+        Invalidate();
+    }
+
+    /// <summary>
+    /// -A 先行再生ヘッド（緑）。progress は 0〜1。null で非表示。
+    /// </summary>
+    public void SetAnacrusisPlayhead(double? progress, bool recordTrail = false)
+    {
+        if (progress is null)
+        {
+            ClearAnacrusisPlayhead();
+            Invalidate();
+            return;
+        }
+
+        var clamped = Math.Clamp(progress.Value, 0d, 1d);
+        _anacrusisPlayheadProgress = clamped;
+        _anacrusisTrailActive = recordTrail;
+        if (!recordTrail)
+        {
+            _anacrusisTrailSamples.Clear();
+        }
+        else
+        {
+            RecordTrailSample(
+                clamped,
+                _anacrusisTrailSamples,
+                ref _anacrusisTrailActive);
+        }
+
+        Invalidate();
+    }
+
+    /// <summary>
+    /// Playlist 遷移元のフェードアウトヘッド（グレー）。null で非表示。
+    /// </summary>
+    public void SetFadeOutPlayhead(
+        double? progress,
+        bool recordTrail = false,
+        bool isExit = false)
+    {
+        if (progress is null)
+        {
+            ClearFadeOutPlayhead();
+            Invalidate();
+            return;
+        }
+
+        var clamped = Math.Clamp(progress.Value, 0d, 1d);
+        if (_fadeOutPlayheadIsExit != isExit)
+        {
+            _fadeOutTrailSamples.Clear();
+            _fadeOutTrailActive = false;
+        }
+
+        _fadeOutPlayheadIsExit = isExit;
+        _fadeOutPlayheadProgress = clamped;
+        _fadeOutTrailActive = recordTrail;
+        if (!recordTrail)
+        {
+            _fadeOutTrailSamples.Clear();
+        }
+        else
+        {
+            RecordTrailSample(
+                clamped,
+                _fadeOutTrailSamples,
+                ref _fadeOutTrailActive);
         }
 
         Invalidate();
@@ -379,6 +488,18 @@ internal sealed class WaveformView : Control
     }
 
     public void ClearExportHighlight() => SetExportHighlight(null);
+
+    /// <summary>Playlist 一覧のマウスオーバーに対応する波形範囲枠。null で解除。</summary>
+    public void SetPlaylistHoverHighlight(int? partNumber)
+    {
+        if (_playlistHoverHighlightPartNumber == partNumber)
+        {
+            return;
+        }
+
+        _playlistHoverHighlightPartNumber = partNumber;
+        Invalidate();
+    }
 
     /// <summary>時間軸を拡大（既定より縮小しない）。</summary>
     public void ZoomTimeIn() => AdjustTimeZoom(TimeZoomStep, AnchorProgressForKeyboardZoom());
@@ -1026,12 +1147,17 @@ internal sealed class WaveformView : Control
     /// <summary>クリック／ドラッグでシーク（0〜1）。</summary>
     public event EventHandler<double>? SeekRequested;
 
+    /// <summary>マウス直下の Music Playlist 番号。範囲外では null。</summary>
+    public event EventHandler<int?>? PlaylistHoverChanged;
+
     private void ClearPlayhead()
     {
         _playheadProgress = null;
         _trailActive = false;
         ClearTrailSamples();
         ClearExitPlayhead();
+        ClearAnacrusisPlayhead();
+        ClearFadeOutPlayhead();
     }
 
     private void ClearExitPlayhead()
@@ -1039,6 +1165,21 @@ internal sealed class WaveformView : Control
         _exitPlayheadProgress = null;
         _exitTrailActive = false;
         _exitTrailSamples.Clear();
+    }
+
+    private void ClearAnacrusisPlayhead()
+    {
+        _anacrusisPlayheadProgress = null;
+        _anacrusisTrailActive = false;
+        _anacrusisTrailSamples.Clear();
+    }
+
+    private void ClearFadeOutPlayhead()
+    {
+        _fadeOutPlayheadProgress = null;
+        _fadeOutTrailActive = false;
+        _fadeOutPlayheadIsExit = false;
+        _fadeOutTrailSamples.Clear();
     }
 
     private void ClearTrailSamples()
@@ -1319,6 +1460,7 @@ internal sealed class WaveformView : Control
     protected override void OnMouseLeave(EventArgs e)
     {
         base.OnMouseLeave(e);
+        SetHoveredPlaylistPart(null);
         if (_isDraggingSeek)
         {
             return;
@@ -1335,18 +1477,21 @@ internal sealed class WaveformView : Control
     {
         if (_peaks is null || _peaks.IsEmpty)
         {
+            SetHoveredPlaylistPart(null);
             return;
         }
 
         var timeline = GetTimelineContentRect();
         if (timeline.Width <= 0)
         {
+            SetHoveredPlaylistPart(null);
             return;
         }
 
         var x = Math.Clamp(mouseX, timeline.Left, timeline.Right);
         if (mouseX < timeline.Left)
         {
+            SetHoveredPlaylistPart(null);
             if (_mouseGuideX is not null)
             {
                 _mouseGuideX = null;
@@ -1356,6 +1501,7 @@ internal sealed class WaveformView : Control
             return;
         }
 
+        UpdateHoveredPlaylistPart(mouseX);
         if (_mouseGuideX is float prev && Math.Abs(prev - x) < 0.25f)
         {
             return;
@@ -1363,6 +1509,40 @@ internal sealed class WaveformView : Control
 
         _mouseGuideX = x;
         Invalidate();
+    }
+
+    private void UpdateHoveredPlaylistPart(int mouseX)
+    {
+        if (_peaks is null
+            || _peaks.IsEmpty
+            || _peaks.FrameCount <= 0
+            || !TryGetProgressFromX(mouseX, out var progress))
+        {
+            SetHoveredPlaylistPart(null);
+            return;
+        }
+
+        var frameCount = _peaks.FrameCount;
+        var sample = (long)Math.Clamp(
+            Math.Floor(progress * frameCount),
+            0d,
+            Math.Max(0L, frameCount - 1));
+        var partNumber = _outputParts
+            .Where(p => sample >= p.StartSampleOffset && sample < p.EndSampleOffset)
+            .Select(p => (int?)p.Number)
+            .FirstOrDefault();
+        SetHoveredPlaylistPart(partNumber);
+    }
+
+    private void SetHoveredPlaylistPart(int? partNumber)
+    {
+        if (_hoveredPlaylistPartNumber == partNumber)
+        {
+            return;
+        }
+
+        _hoveredPlaylistPartNumber = partNumber;
+        PlaylistHoverChanged?.Invoke(this, partNumber);
     }
 
     private bool TryGetProgressFromX(int mouseX, out double progress)
@@ -1431,9 +1611,25 @@ internal sealed class WaveformView : Control
 
         var content = Rectangle.Inflate(bounds, -4, -4);
         var timeline = GetTimelineRect(content);
+        DrawSourceLevelMeter(g, content);
+        DrawPlaylistHoverOutline(g);
         DrawExportPartGlow(g, timeline);
         DrawPlayhead(g, timeline, _playheadProgress, _trailSamples, UiColors.SeekCyan);
+        DrawPlayhead(
+            g,
+            timeline,
+            _fadeOutPlayheadProgress,
+            _fadeOutTrailSamples,
+            _fadeOutPlayheadIsExit
+                ? UiColors.SeekExit
+                : UiColors.SeekFadeOut);
         DrawPlayhead(g, timeline, _exitPlayheadProgress, _exitTrailSamples, UiColors.SeekExit);
+        DrawPlayhead(
+            g,
+            timeline,
+            _anacrusisPlayheadProgress,
+            _anacrusisTrailSamples,
+            UiColors.SeekAnacrusis);
         DrawMouseGuide(g, timeline);
     }
 
@@ -1702,10 +1898,22 @@ internal sealed class WaveformView : Control
 
         maxText = Math.Max(maxText, g.MeasureString("Music Playlist Name", Font).Width);
         maxText = Math.Max(maxText, g.MeasureString("Music Segment Name", Font).Width);
+        if (_sourceDisplayName.Length > 0)
+        {
+            using var nameFont = new Font(Font, FontStyle.Bold);
+            maxText = Math.Max(
+                maxText,
+                g.MeasureString(_sourceDisplayName, nameFont).Width
+                + 2f
+                + SourceMeterGapPx
+                + SourceMeterWidthPx);
+        }
 
-        // 左端に少し余白＋最長ラベル＋右余白（区切り線手前）。ファイル名は幅内で折り返す。
+        // ファイル名と右側メーターが一行で収まる必要幅へ自動調整する。
         var width = (int)Math.Ceiling(maxText) + InfoLanePadX * 2;
-        var maxAllowed = Math.Max(48, contentWidth / 2);
+        var maxAllowed = Math.Max(
+            InfoLanePadX * 2 + 1,
+            contentWidth - InfoLaneSeparatorPx);
         return Math.Clamp(width, InfoLanePadX * 2 + 1, maxAllowed);
     }
 
@@ -1846,8 +2054,13 @@ internal sealed class WaveformView : Control
             return;
         }
 
-        // マーカー行の下＝波形エリア左。上下左右中央。長い名前は改行
-        var nameWidth = Math.Max(0, info.Width - InfoLanePadX * 2);
+        // マーカー行の下＝波形エリア左。右側の縦メーターを避け、一行で表示する。
+        var nameWidth = Math.Max(
+            0,
+            info.Width
+            - InfoLanePadX * 2
+            - SourceMeterGapPx
+            - SourceMeterWidthPx);
         var nameHeight = Math.Max(0, wave.Height - 4f);
         if (nameWidth <= 0 || nameHeight <= 0)
         {
@@ -1855,19 +2068,59 @@ internal sealed class WaveformView : Control
         }
 
         using var nameFont = new Font(Font, FontStyle.Bold);
-        var wrappedName = WrapTextToWidth(g, _sourceDisplayName, nameFont, nameWidth);
         using var nameFormat = new StringFormat
         {
             Alignment = StringAlignment.Center,
             LineAlignment = StringAlignment.Center,
-            Trimming = StringTrimming.EllipsisCharacter,
+            Trimming = StringTrimming.None,
+            FormatFlags = StringFormatFlags.NoWrap,
         };
         g.DrawString(
-            wrappedName,
+            _sourceDisplayName,
             nameFont,
             textBrush,
             new RectangleF(info.Left + InfoLanePadX, wave.Top + 2f, nameWidth, nameHeight),
             nameFormat);
+    }
+
+    private void DrawSourceLevelMeter(Graphics g, Rectangle content)
+    {
+        if (_sourceDisplayName.Length == 0)
+        {
+            return;
+        }
+
+        var (info, _, wave, _, _, _) = GetLayout(content, g);
+        var meter = new Rectangle(
+            info.Right - SourceMeterWidthPx,
+            wave.Top,
+            SourceMeterWidthPx,
+            wave.Height);
+        if (meter.Width <= 0 || meter.Height <= 0)
+        {
+            return;
+        }
+
+        using var trackBrush = new SolidBrush(Color.FromArgb(18, 18, 18));
+        g.FillRectangle(trackBrush, meter);
+
+        var fillHeight = (int)Math.Round(meter.Height * _outputLevel);
+        if (fillHeight <= 0)
+        {
+            return;
+        }
+
+        using var levelBrush = new System.Drawing.Drawing2D.LinearGradientBrush(
+            meter,
+            UiColors.WaveformSourceMeterMaximum,
+            UiColors.WaveformSourceMeterMinimum,
+            System.Drawing.Drawing2D.LinearGradientMode.Vertical);
+        g.FillRectangle(
+            levelBrush,
+            meter.X,
+            meter.Bottom - fillHeight,
+            meter.Width,
+            fillHeight);
     }
 
     private static void DrawBottomLaneInfoLabel(
@@ -1897,50 +2150,6 @@ internal sealed class WaveformView : Control
                 Math.Max(0, info.Width - InfoLanePadX * 2),
                 lane.Height),
             format);
-    }
-
-    /// <summary>スペース無しのファイル名でも幅内で改行する。</summary>
-    private static string WrapTextToWidth(Graphics g, string text, Font font, float maxWidth)
-    {
-        if (text.Length == 0 || maxWidth <= 1f)
-        {
-            return text;
-        }
-
-        if (g.MeasureString(text, font).Width <= maxWidth)
-        {
-            return text;
-        }
-
-        var lines = new List<string>();
-        var line = new System.Text.StringBuilder();
-        foreach (var ch in text)
-        {
-            line.Append(ch);
-            if (g.MeasureString(line.ToString(), font).Width <= maxWidth)
-            {
-                continue;
-            }
-
-            if (line.Length <= 1)
-            {
-                lines.Add(line.ToString());
-                line.Clear();
-                continue;
-            }
-
-            line.Length--;
-            lines.Add(line.ToString());
-            line.Clear();
-            line.Append(ch);
-        }
-
-        if (line.Length > 0)
-        {
-            lines.Add(line.ToString());
-        }
-
-        return string.Join("\n", lines);
     }
 
     private void DrawLabelRows(Graphics g, Rectangle labels, float rowHeight, int visibleRowCount)
@@ -2919,6 +3128,52 @@ internal sealed class WaveformView : Control
         g.DrawRectangle(corePen, rect.X, rect.Y, rect.Width, rect.Height);
     }
 
+    /// <summary>Playlist 一覧でポイント中の出力パートを、波形内の 1px 枠で示す。</summary>
+    private void DrawPlaylistHoverOutline(Graphics g)
+    {
+        if (_playlistHoverHighlightPartNumber is not int partNumber
+            || _peaks is null
+            || _peaks.FrameCount <= 0)
+        {
+            return;
+        }
+
+        var target = _outputParts.FirstOrDefault(part => part.Number == partNumber);
+        if (target.Number != partNumber)
+        {
+            return;
+        }
+
+        var layoutContent = Rectangle.Inflate(ClientRectangle, -4, -4);
+        var (_, _, wave, _, _, _) = GetLayout(layoutContent, g);
+        if (wave.Width <= 0 || wave.Height <= 0)
+        {
+            return;
+        }
+
+        var frameCount = _peaks.FrameCount;
+        var start = SampleToAbsolute(target.StartSampleOffset, frameCount);
+        var end = SampleToAbsolute(target.EndSampleOffset, frameCount);
+        if (!TryMapAbsoluteRange(start, end, wave, out var x0, out var x1))
+        {
+            return;
+        }
+
+        var width = Math.Max(1f, x1 - x0);
+        var rect = new RectangleF(
+            x0,
+            wave.Top,
+            width,
+            Math.Max(1f, wave.Height - 1f));
+        using (var fill = new SolidBrush(Color.FromArgb(26, UiColors.PlaylistHoverBorder)))
+        {
+            g.FillRectangle(fill, rect);
+        }
+
+        using var pen = new Pen(UiColors.PlaylistHoverBorder, 1f);
+        g.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
+    }
+
     private void DrawBars(Graphics g, Rectangle labels, Rectangle wave, float rowHeight)
     {
         if (_peaks is null || _peaks.FrameCount <= 0 || _bars.Count == 0 || labels.Width <= 0)
@@ -2932,6 +3187,8 @@ internal sealed class WaveformView : Control
         var signatureRowTop = tempoRowTop + rowHeight;
         var lineTop = labels.Top;
         var lineBottom = wave.Height > 0 ? wave.Bottom : labels.Bottom;
+
+        DrawBeatLines(g, labels, wave, rowHeight, frameCount);
 
         // 表示窓内の隣接小節頭の平均ピクセル間隔から、間引き段階を決める。
         // 番号幅は常に 3 桁想定（"000"）で、拡大時に桁が増えても重ならないようにする。
@@ -3029,6 +3286,77 @@ internal sealed class WaveformView : Control
             prevBarTempo = tempoRounded;
             prevBarNumerator = bar.Numerator;
             prevBarDenominator = bar.Denominator;
+        }
+    }
+
+    private void DrawBeatLines(
+        Graphics g,
+        Rectangle labels,
+        Rectangle wave,
+        float rowHeight,
+        long frameCount)
+    {
+        var barStarts = _bars
+            .Where(bar => !bar.IsTempoChangeOnly)
+            .OrderBy(bar => bar.SampleOffset)
+            .ToArray();
+        if (barStarts.Length < 2)
+        {
+            return;
+        }
+
+        var visibleBarCount = 0d;
+        for (var i = 0; i + 1 < barStarts.Length; i++)
+        {
+            var start = SampleToAbsolute(barStarts[i].SampleOffset, frameCount);
+            var end = SampleToAbsolute(barStarts[i + 1].SampleOffset, frameCount);
+            if (end <= start)
+            {
+                continue;
+            }
+
+            var overlap = Math.Min(end, ViewEnd) - Math.Max(start, _viewStart);
+            if (overlap > 0d)
+            {
+                visibleBarCount += overlap / (end - start);
+            }
+        }
+
+        if (visibleBarCount >= 8d - 1e-9)
+        {
+            return;
+        }
+
+        var lineTop = labels.Top + rowHeight;
+        var lineBottom = wave.Height > 0 ? wave.Bottom : labels.Bottom;
+        if (lineBottom <= lineTop)
+        {
+            return;
+        }
+
+        using var beatPen = new Pen(UiColors.BeatLine, 1f);
+        for (var i = 0; i + 1 < barStarts.Length; i++)
+        {
+            var bar = barStarts[i];
+            var next = barStarts[i + 1];
+            if (bar.Numerator <= 1 || next.SampleOffset <= bar.SampleOffset)
+            {
+                continue;
+            }
+
+            for (var beat = 1; beat < bar.Numerator; beat++)
+            {
+                var sample = bar.SampleOffset
+                    + (next.SampleOffset - bar.SampleOffset) * beat / (double)bar.Numerator;
+                var absolute = sample / frameCount;
+                if (absolute < _viewStart - 1e-9 || absolute > ViewEnd + 1e-9)
+                {
+                    continue;
+                }
+
+                var x = AbsoluteToX(absolute, labels);
+                g.DrawLine(beatPen, x, lineTop, x, lineBottom);
+            }
         }
     }
 

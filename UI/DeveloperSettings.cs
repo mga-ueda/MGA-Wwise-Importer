@@ -18,6 +18,9 @@ internal sealed class DeveloperSettings
     /// <summary>ウィンドウを最前面に固定するか。既定はオフ。</summary>
     public bool TopMost { get; init; }
 
+    /// <summary>Playlist／再生エンジンの詳細診断ログを出すか。既定はオン。</summary>
+    public bool DetailedPlaybackLog { get; init; } = true;
+
     public static DeveloperSettings Load()
     {
         EnsureDefaultsWritten();
@@ -33,6 +36,9 @@ internal sealed class DeveloperSettings
                 : true,
             TopMost = values.TryGetValue("TopMost", out var topMost)
                 && ParseBool(topMost, defaultValue: false),
+            DetailedPlaybackLog = values.TryGetValue("DetailedPlaybackLog", out var detailedLog)
+                ? ParseBool(detailedLog, defaultValue: true)
+                : true,
         };
     }
 
@@ -68,6 +74,12 @@ internal sealed class DeveloperSettings
             changed = true;
         }
 
+        if (!values.ContainsKey("DetailedPlaybackLog"))
+        {
+            values["DetailedPlaybackLog"] = "1";
+            changed = true;
+        }
+
         if (changed)
         {
             IniFile.WriteSection(Section, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -75,6 +87,7 @@ internal sealed class DeveloperSettings
                 ["AutoLoadWavePath"] = values["AutoLoadWavePath"],
                 ["AutoLoadOnStartup"] = values["AutoLoadOnStartup"],
                 ["TopMost"] = values["TopMost"],
+                ["DetailedPlaybackLog"] = values["DetailedPlaybackLog"],
             });
         }
     }
@@ -94,6 +107,30 @@ internal sealed class DeveloperSettings
                 ? autoLoad
                 : "1",
             ["TopMost"] = values["TopMost"],
+            ["DetailedPlaybackLog"] = values.TryGetValue("DetailedPlaybackLog", out var detailedLog)
+                ? detailedLog
+                : "1",
+        });
+    }
+
+    /// <summary>[Developer] DetailedPlaybackLog だけ更新する（他キーは維持）。</summary>
+    public static void SaveDetailedPlaybackLog(bool enabled)
+    {
+        EnsureDefaultsWritten();
+        var values = IniFile.ReadSection(Section);
+        values["DetailedPlaybackLog"] = enabled ? "1" : "0";
+        IniFile.WriteSection(Section, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["AutoLoadWavePath"] = values.TryGetValue("AutoLoadWavePath", out var wave)
+                ? wave
+                : ResolveDefaultAutoLoadWavePath(),
+            ["AutoLoadOnStartup"] = values.TryGetValue("AutoLoadOnStartup", out var autoLoad)
+                ? autoLoad
+                : "1",
+            ["TopMost"] = values.TryGetValue("TopMost", out var topMost)
+                ? topMost
+                : "0",
+            ["DetailedPlaybackLog"] = values["DetailedPlaybackLog"],
         });
     }
 

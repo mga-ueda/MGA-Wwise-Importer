@@ -1,6 +1,17 @@
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Json;
 
 namespace MgaWwiseIMImporter.UI;
+
+internal enum PlaylistExitSourceMode
+{
+    Immediate,
+    NextBar,
+    NextBeat,
+    NextCue,
+    ExitCue,
+}
 
 public partial class Form1 : Form
 {
@@ -18,6 +29,8 @@ public partial class Form1 : Form
     private string _waapiLoggedSelectionPath = string.Empty;
     private readonly WaveAudioPlayer _audioPlayer = new();
     private readonly System.Windows.Forms.Timer _playheadTimer = new() { Interval = 16 };
+    private readonly System.Windows.Forms.Timer _playlistBlinkTimer = new() { Interval = 16 };
+    private readonly System.Windows.Forms.Timer _playlistTransitionGlowTimer = new() { Interval = 16 };
     private readonly System.Windows.Forms.Timer _waapiSelectionTimer = new() { Interval = 1500 };
     private double _smoothProgress;
     private double _anchorProgress;
@@ -26,10 +39,34 @@ public partial class Form1 : Form
     private int _exportGeneration;
     private WaveformPreviewData? _loadedPreview;
     private bool _exportBusy;
+    private bool _populatingPlaylistChoices;
+    private bool _automaticPlaylistPlayback;
+    private double _playlistFadeInSeconds;
+    private double _playlistFadeSeconds = 0.5d;
+    private PlaylistExitSourceMode _playlistExitSourceMode = PlaylistExitSourceMode.NextBar;
+    private PlaylistDestinationSyncMode _playlistDestinationSyncMode =
+        PlaylistDestinationSyncMode.EntryCue;
+    private int? _activeAutomaticPlaylistPartNumber;
+    private int? _requestedPlaylistPartNumber;
+    private int? _manualPlaylistPartNumber;
+    private int? _hoveredPlaylistPartNumber;
+    private int? _hoveredPlaylistListPartNumber;
+    private long _pendingPlaylistTransitionGeneration;
+    private long _pendingPlaylistBoundarySample;
+    private long _pendingPlaylistSyncBoundarySample;
+    private long _pendingPlaylistTargetSample;
+    private long _pendingPlaylistTargetEntrySample;
+    private bool _pendingPlaylistAudioStarted;
+    private double _pendingPlaylistBlinkLevel;
+    private int? _playlistTransitionGlowPartNumber;
+    private long _playlistTransitionGlowStartTickMs;
+    private double _playlistTransitionGlowDurationMs;
+    private double _playlistTransitionGlowLevel;
     /// <summary>
     /// 戻る方向ジャンプ中に再生を一時停止したとき true。キーアップで再開する。
     /// </summary>
     private bool _resumePlaybackAfterBackwardSeek;
+    private long _diagnosticSequence;
 
     public Form1()
     {
@@ -38,14 +75,22 @@ public partial class Form1 : Form
         actionBar.BackColor = UiColors.ForControlBack(UiColors.StatusBarBack);
         ApplyActionBarButtonColors();
         LayoutActionBarControls();
+        ClearPlaylistChoices("Playlist はありません");
+        ApplyPlaylistSelectorColors();
         KeyPreview = true;
         _developerSettings = DeveloperSettings.Load();
         _waapiSettings = WaapiSettings.Load();
         TopMost = _developerSettings.TopMost;
         topMostCheckBox.Checked = _developerSettings.TopMost;
+        detailedLogCheckBox.Checked = _developerSettings.DetailedPlaybackLog;
         RestoreWindowBounds();
 
         _playheadTimer.Tick += (_, _) => UpdatePlayhead();
+        _playlistBlinkTimer.Tick += (_, _) => UpdatePendingPlaylistBlink();
+        _playlistTransitionGlowTimer.Tick += (_, _) => UpdatePlaylistTransitionGlow();
+        logAreaPanel.Resize += (_, _) => UpdatePlaylistSelectorWidth();
+        logEditorPanel.Resize += (_, _) => PositionLogButtons();
+        PositionLogButtons();
         _waapiSelectionTimer.Tick += async (_, _) => await RefreshWaapiSelectionAsync();
         _audioPlayer.PlaybackEnded += (_, _) =>
         {
@@ -56,14 +101,42 @@ public partial class Form1 : Form
 
             BeginInvoke(() =>
             {
+                WritePlaybackDiagnostic("playback.ended");
                 _resumePlaybackAfterBackwardSeek = false;
+                ClearPendingPlaylistUiTransition();
+                ClearPlaylistPlaybackSelection();
                 _playheadTimer.Stop();
-                AnchorPlayhead(0);
-                waveformView.SetPlayhead(0, recordTrail: false, ensureVisible: true);
+                var resetProgress = _audioPlayer.Progress;
+                AnchorPlayhead(resetProgress);
+                waveformView.SetPlayhead(resetProgress, recordTrail: false, ensureVisible: true);
                 waveformView.SetExitPlayhead(null);
+                waveformView.SetFadeOutPlayhead(null);
             });
         };
+        _audioPlayer.Diagnostic += (_, message) =>
+        {
+            if (IsDisposed || !IsHandleCreated)
+            {
+                return;
+            }
+
+            try
+            {
+                BeginInvoke(() => WritePlaybackDiagnostic(
+                    "audio.engine",
+                    new { message }));
+            }
+            catch (InvalidOperationException)
+            {
+                // 終了処理と音声スレッドの診断通知が競合した場合は破棄する。
+            }
+        };
         waveformView.SeekRequested += (_, progress) => SeekPlayback(progress);
+        waveformView.PlaylistHoverChanged += (_, partNumber) =>
+        {
+            _hoveredPlaylistPartNumber = partNumber;
+            ApplyPlaylistSelectorColors();
+        };
         editorTextBox.ShortcutHandler = TryProcessWaveformShortcut;
         editorTextBox.HandleCreated += (_, _) => ApplyDarkEditorChrome();
     }
@@ -204,15 +277,27 @@ public partial class Form1 : Form
     {
         _waapiSelectionTimer.Stop();
         _playheadTimer.Stop();
+        _playlistBlinkTimer.Stop();
+        _playlistTransitionGlowTimer.Stop();
         _audioPlayer.Dispose();
         _waapiSelectionTimer.Dispose();
         _playheadTimer.Dispose();
+        _playlistBlinkTimer.Dispose();
+        _playlistTransitionGlowTimer.Dispose();
         WindowSettings.FromForm(this).Save();
         base.OnFormClosing(e);
     }
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
+        // Playlist一覧でも Space は全体の再生／一時停止を優先する。
+        // 矢印キーだけはボタン間のフォーカス移動へ渡す。
+        if ((playlistSelectorPanel.ContainsFocus || transitionTimePanel.ContainsFocus)
+            && keyData is Keys.Up or Keys.Down or Keys.Left or Keys.Right)
+        {
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
         if (keyData == Keys.Escape)
         {
             ConfirmAndExit();
@@ -463,9 +548,14 @@ public partial class Form1 : Form
         ForeColor = UiColors.WindowFore;
         editorTextBox.BackColor = UiColors.ForControlBack(UiColors.LogBack);
         editorTextBox.ForeColor = UiColors.LogDefault;
+        logEditorPanel.BackColor = editorTextBox.BackColor;
+        logButtonPanel.BackColor = editorTextBox.BackColor;
+        ApplyLogButtonColors();
+        ApplyPlaylistSelectorColors();
         actionBar.BackColor = UiColors.ForControlBack(UiColors.StatusBarBack);
         ApplyActionBarButtonColors();
         topMostCheckBox.ForeColor = UiColors.WindowFore;
+        detailedLogCheckBox.ForeColor = UiColors.WindowFore;
         waapiStatusBar.ApplyColors();
         waveformView.RefreshAppearance();
     }
@@ -484,6 +574,1152 @@ public partial class Form1 : Form
 
         topMostCheckBox.ForeColor = UiColors.WindowFore;
         topMostCheckBox.BackColor = actionBar.BackColor;
+        detailedLogCheckBox.ForeColor = UiColors.WindowFore;
+        detailedLogCheckBox.BackColor = actionBar.BackColor;
+    }
+
+    private void ApplyLogButtonColors()
+    {
+        foreach (var button in new[] { logClearButton, logCopyButton, logDownloadButton })
+        {
+            button.BackColor = UiColors.ForControlBack(UiColors.StatusBarBack);
+            button.ForeColor = UiColors.LogDefault;
+            button.FlatAppearance.BorderColor = UiColors.ForControlBack(UiColors.StatusBarBorder);
+            button.FlatAppearance.MouseOverBackColor = UiColors.ForControlBack(UiColors.MusicPlaylistLaneBg);
+        }
+    }
+
+    private void PositionLogButtons()
+    {
+        const int scrollbarGap = 0;
+        const int bottomGap = 10;
+        var scrollbarWidth = SystemInformation.VerticalScrollBarWidth;
+        logButtonPanel.Left = Math.Max(
+            0,
+            logEditorPanel.ClientSize.Width
+            - logButtonPanel.Width
+            - scrollbarWidth
+            - scrollbarGap);
+        logButtonPanel.Top = Math.Max(
+            0,
+            logEditorPanel.ClientSize.Height
+            - logButtonPanel.Height
+            - bottomGap);
+        logButtonPanel.BringToFront();
+    }
+
+    private void ApplyPlaylistSelectorColors()
+    {
+        var back = UiColors.ForControlBack(UiColors.PlaylistBack);
+        playlistSelectorPanel.BackColor = back;
+        playlistScrollPanel.BackColor = back;
+        playlistListLayout.BackColor = back;
+        playlistHeaderLabel.BackColor = back;
+        playlistHeaderLabel.ForeColor = UiColors.PlaylistDefaultFore;
+        playlistSeparator.BackColor = UiColors.ForControlBack(UiColors.StatusBarBorder);
+        transitionTimePanel.BackColor = back;
+        transitionSettingsPanel.BackColor = back;
+        fadeInSectionPanel.BackColor = back;
+        fadeInChoicesPanel.BackColor = back;
+        fadeInHeaderLabel.BackColor = back;
+        fadeInHeaderLabel.ForeColor = UiColors.PlaylistDefaultFore;
+        fadeOutSectionPanel.BackColor = back;
+        transitionTimeChoicesPanel.BackColor = back;
+        transitionTimeHeaderLabel.BackColor = back;
+        transitionTimeHeaderLabel.ForeColor = UiColors.PlaylistDefaultFore;
+        exitSourceAtSectionPanel.BackColor = back;
+        exitSourceAtChoicesPanel.BackColor = back;
+        exitSourceAtHeaderLabel.BackColor = back;
+        exitSourceAtHeaderLabel.ForeColor = UiColors.PlaylistDefaultFore;
+        destinationSyncSectionPanel.BackColor = back;
+        destinationSyncChoicesPanel.BackColor = back;
+        destinationSyncHeaderLabel.BackColor = back;
+        destinationSyncHeaderLabel.ForeColor = UiColors.PlaylistDefaultFore;
+        transitionTimeSeparator.BackColor =
+            UiColors.ForControlBack(UiColors.StatusBarBorder);
+        foreach (var radio in new[]
+        {
+            fadeInNoneRadio,
+            fadeInOneSecondRadio,
+            fadeInThreeSecondsRadio,
+            fadeInSixSecondsRadio,
+            fadeInNineSecondsRadio,
+            transitionTimeHalfSecondRadio,
+            transitionTimeOneSecondRadio,
+            transitionTimeThreeSecondsRadio,
+            transitionTimeSixSecondsRadio,
+            transitionTimeNineSecondsRadio,
+            exitSourceImmediateRadio,
+            exitSourceNextBarRadio,
+            exitSourceNextBeatRadio,
+            exitSourceNextCueRadio,
+            exitSourceExitCueRadio,
+            destinationSyncEntryCueRadio,
+            destinationSyncSameTimeRadio,
+        })
+        {
+            radio.BackColor = back;
+            radio.ForeColor = Color.White;
+        }
+
+        foreach (Control control in playlistListLayout.Controls)
+        {
+            control.BackColor = back;
+            control.ForeColor = UiColors.PlaylistDefaultFore;
+            if (control is not Button { Tag: WaveformOutputPart part } button)
+            {
+                continue;
+            }
+
+            button.Enabled = true;
+            button.FlatAppearance.BorderSize = 1;
+            button.FlatAppearance.BorderColor =
+                UiColors.ForControlBack(UiColors.PlaylistButtonBorder);
+            var isAutomatic = _automaticPlaylistPlayback
+                && _activeAutomaticPlaylistPartNumber == part.Number;
+            var isManual = !_automaticPlaylistPlayback
+                && _manualPlaylistPartNumber == part.Number;
+            var isPending = _pendingPlaylistTransitionGeneration != 0
+                && _requestedPlaylistPartNumber == part.Number;
+
+            if (_audioPlayer.IsPlaying && isPending)
+            {
+                button.BackColor = BlendColor(
+                    back,
+                    UiColors.ForControlBack(UiColors.PlaylistAutoBack),
+                    _pendingPlaylistBlinkLevel);
+                button.ForeColor = UiColors.PlaylistActiveFore;
+            }
+            else if (_audioPlayer.IsPlaying && (isAutomatic || isManual))
+            {
+                button.BackColor = isAutomatic
+                    ? UiColors.ForControlBack(UiColors.PlaylistAutoBack)
+                    : UiColors.ForControlBack(UiColors.PlaylistManualBack);
+                button.ForeColor = UiColors.PlaylistActiveFore;
+            }
+            else if (_hoveredPlaylistPartNumber == part.Number
+                || _hoveredPlaylistListPartNumber == part.Number)
+            {
+                button.ForeColor = UiColors.PlaylistHoverFore;
+            }
+
+            if (_playlistTransitionGlowPartNumber == part.Number
+                && _playlistTransitionGlowLevel > 0d)
+            {
+                button.FlatAppearance.BorderSize = 1;
+                button.FlatAppearance.BorderColor = BlendColor(
+                    button.BackColor,
+                    UiColors.ForControlBack(UiColors.PlaylistTransitionBorder),
+                    _playlistTransitionGlowLevel);
+            }
+        }
+    }
+
+    private void TransitionTimeRadio_CheckedChanged(object? sender, EventArgs e)
+    {
+        if (sender is not RadioButton { Checked: true, Tag: double fadeSeconds })
+        {
+            return;
+        }
+
+        _playlistFadeSeconds = fadeSeconds;
+        ApplyPlaylistSelectorColors();
+        WritePlaybackDiagnostic(
+            "playlist.fade-out-preset-changed",
+            new
+            {
+                fadeOutSeconds = fadeSeconds,
+                appliesFromNextRequest = _pendingPlaylistTransitionGeneration != 0,
+            });
+    }
+
+    private void FadeInTimeRadio_CheckedChanged(object? sender, EventArgs e)
+    {
+        if (sender is not RadioButton { Checked: true, Tag: double fadeInSeconds })
+        {
+            return;
+        }
+
+        _playlistFadeInSeconds = fadeInSeconds;
+        ApplyPlaylistSelectorColors();
+        WritePlaybackDiagnostic(
+            "playlist.fade-in-preset-changed",
+            new
+            {
+                fadeInSeconds,
+                appliesFromNextRequest = _pendingPlaylistTransitionGeneration != 0,
+            });
+    }
+
+    private void ExitSourceAtRadio_CheckedChanged(object? sender, EventArgs e)
+    {
+        if (sender is not RadioButton
+            {
+                Checked: true,
+                Tag: PlaylistExitSourceMode mode,
+            })
+        {
+            return;
+        }
+
+        _playlistExitSourceMode = mode;
+        ApplyPlaylistSelectorColors();
+        WritePlaybackDiagnostic(
+            "playlist.exit-source-mode-changed",
+            new
+            {
+                mode = mode.ToString(),
+                appliesFromNextRequest = _pendingPlaylistTransitionGeneration != 0,
+            });
+    }
+
+    private void DestinationSyncRadio_CheckedChanged(object? sender, EventArgs e)
+    {
+        if (sender is not RadioButton
+            {
+                Checked: true,
+                Tag: PlaylistDestinationSyncMode mode,
+            })
+        {
+            return;
+        }
+
+        _playlistDestinationSyncMode = mode;
+        ApplyPlaylistSelectorColors();
+        WritePlaybackDiagnostic(
+            "playlist.destination-sync-mode-changed",
+            new
+            {
+                mode = mode.ToString(),
+                appliesFromNextRequest = _pendingPlaylistTransitionGeneration != 0,
+            });
+    }
+
+    private static Color BlendColor(Color from, Color to, double amount)
+    {
+        amount = Math.Clamp(amount, 0d, 1d);
+        return Color.FromArgb(
+            255,
+            (int)Math.Round(from.R + (to.R - from.R) * amount),
+            (int)Math.Round(from.G + (to.G - from.G) * amount),
+            (int)Math.Round(from.B + (to.B - from.B) * amount));
+    }
+
+    private void UpdatePlaylistSelectorWidth()
+    {
+        if (logAreaPanel.ClientSize.Width <= 0)
+        {
+            return;
+        }
+
+        var textWidth = TextRenderer.MeasureText(
+            playlistHeaderLabel.Text,
+            playlistHeaderLabel.Font,
+            Size.Empty,
+            TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+        foreach (Control control in playlistListLayout.Controls)
+        {
+            textWidth = Math.Max(
+                textWidth,
+                TextRenderer.MeasureText(
+                    control.Text,
+                    control.Font,
+                    Size.Empty,
+                    TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width);
+        }
+
+        var chromeWidth = playlistScrollPanel.Padding.Horizontal
+            + SystemInformation.VerticalScrollBarWidth
+            + 20;
+        const int minimumWidth = 132;
+        var maximumWidth = Math.Max(
+            minimumWidth,
+            (int)Math.Round(logAreaPanel.ClientSize.Width * 0.45d));
+        var desiredWidth = Math.Clamp(
+            textWidth + chromeWidth,
+            minimumWidth,
+            maximumWidth);
+        if (playlistSelectorPanel.Width != desiredWidth)
+        {
+            playlistSelectorPanel.Width = desiredWidth;
+        }
+    }
+
+    private void PopulatePlaylistChoices(IReadOnlyList<WaveformOutputPart> parts)
+    {
+        _populatingPlaylistChoices = true;
+        try
+        {
+            DisposePlaylistChoiceControls();
+
+            if (parts.Count == 0)
+            {
+                AddPlaylistStatusLabel("Playlist はありません");
+                return;
+            }
+
+            foreach (var part in parts)
+            {
+                var name = Path.GetFileNameWithoutExtension(part.FileName);
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    name = part.FileName;
+                }
+
+                var button = new FlatPlaylistButton
+                {
+                    AccessibleName = name,
+                    AllowDrop = true,
+                    AutoEllipsis = true,
+                    BackColor = UiColors.ForControlBack(UiColors.PlaylistBack),
+                    Cursor = Cursors.Hand,
+                    Dock = DockStyle.Fill,
+                    Enabled = true,
+                    Font = new Font("Yu Gothic UI", 8.5F),
+                    ForeColor = UiColors.PlaylistDefaultFore,
+                    Height = 30,
+                    Margin = new Padding(3, 1, 3, 1),
+                    Padding = new Padding(2, 0, 2, 0),
+                    TabStop = true,
+                    Tag = part,
+                    Text = name,
+                    TextAlign = ContentAlignment.MiddleLeft,
+                    UseMnemonic = false,
+                    UseVisualStyleBackColor = false,
+                };
+                button.FlatAppearance.BorderSize = 1;
+                button.FlatAppearance.BorderColor =
+                    UiColors.ForControlBack(UiColors.PlaylistButtonBorder);
+                button.Click += PlaylistButton_Click;
+                button.MouseEnter += PlaylistButton_MouseEnter;
+                button.MouseLeave += PlaylistButton_MouseLeave;
+                button.DragEnter += EditorTextBox_DragEnter;
+                button.DragDrop += EditorTextBox_DragDrop;
+                playlistToolTip.SetToolTip(button, name);
+                playlistListLayout.Controls.Add(button);
+            }
+        }
+        finally
+        {
+            _populatingPlaylistChoices = false;
+            UpdatePlaylistSelectorWidth();
+            ApplyPlaylistSelectorColors();
+        }
+    }
+
+    private void ClearPlaylistChoices(string message)
+    {
+        _populatingPlaylistChoices = true;
+        try
+        {
+            DisposePlaylistChoiceControls();
+            AddPlaylistStatusLabel(message);
+        }
+        finally
+        {
+            _populatingPlaylistChoices = false;
+            UpdatePlaylistSelectorWidth();
+            ApplyPlaylistSelectorColors();
+        }
+    }
+
+    private void DisposePlaylistChoiceControls()
+    {
+        _automaticPlaylistPlayback = false;
+        _activeAutomaticPlaylistPartNumber = null;
+        _requestedPlaylistPartNumber = null;
+        _manualPlaylistPartNumber = null;
+        _hoveredPlaylistPartNumber = null;
+        _hoveredPlaylistListPartNumber = null;
+        ClearPlaylistTransitionGlow();
+        waveformView.SetPlaylistHoverHighlight(null);
+        var controls = playlistListLayout.Controls.Cast<Control>().ToArray();
+        playlistListLayout.Controls.Clear();
+        playlistListLayout.RowStyles.Clear();
+        playlistListLayout.RowCount = 0;
+        foreach (var control in controls)
+        {
+            control.Dispose();
+        }
+    }
+
+    private void ClearPlaylistPlaybackSelection()
+    {
+        _automaticPlaylistPlayback = false;
+        _activeAutomaticPlaylistPartNumber = null;
+        _requestedPlaylistPartNumber = null;
+        _manualPlaylistPartNumber = null;
+        ApplyPlaylistSelectorColors();
+    }
+
+    private void AddPlaylistStatusLabel(string message)
+    {
+        var label = new Label
+        {
+            AllowDrop = true,
+            AutoEllipsis = true,
+            Dock = DockStyle.Fill,
+            Font = new Font("Yu Gothic UI", 9F),
+            Height = 30,
+            Margin = new Padding(3, 1, 3, 1),
+            Padding = new Padding(2, 0, 2, 0),
+            Text = message,
+            TextAlign = ContentAlignment.MiddleLeft,
+        };
+        label.DragEnter += EditorTextBox_DragEnter;
+        label.DragDrop += EditorTextBox_DragDrop;
+        playlistListLayout.Controls.Add(label);
+    }
+
+    private void PlaylistButton_Click(object? sender, EventArgs e)
+    {
+        if (_populatingPlaylistChoices
+            || sender is not Button { Tag: WaveformOutputPart part })
+        {
+            return;
+        }
+
+        WritePlaybackDiagnostic(
+            "playlist.button-clicked",
+            new
+            {
+                part = part.Number,
+                part.FileName,
+                part.StartSampleOffset,
+                part.EndSampleOffset,
+            });
+        RequestPlaylistPlayback(part);
+    }
+
+    private void PlaylistButton_MouseEnter(object? sender, EventArgs e)
+    {
+        if (sender is not Button { Tag: WaveformOutputPart part })
+        {
+            return;
+        }
+
+        _hoveredPlaylistListPartNumber = part.Number;
+        waveformView.SetPlaylistHoverHighlight(part.Number);
+        ApplyPlaylistSelectorColors();
+    }
+
+    private void PlaylistButton_MouseLeave(object? sender, EventArgs e)
+    {
+        if (sender is not Button { Tag: WaveformOutputPart part }
+            || _hoveredPlaylistListPartNumber != part.Number)
+        {
+            return;
+        }
+
+        _hoveredPlaylistListPartNumber = null;
+        waveformView.SetPlaylistHoverHighlight(null);
+        ApplyPlaylistSelectorColors();
+    }
+
+    private void SetManualPlaylistHighlight(double progress)
+    {
+        if (_loadedPreview is not { } preview || preview.WavInfo.FrameCount <= 0)
+        {
+            return;
+        }
+
+        var frameCount = preview.WavInfo.FrameCount;
+        var sample = (long)Math.Clamp(
+            Math.Floor(Math.Clamp(progress, 0d, 1d) * frameCount),
+            0d,
+            Math.Max(0L, frameCount - 1));
+        var partNumber = preview.OutputParts
+            .Where(p => sample >= p.StartSampleOffset && sample < p.EndSampleOffset)
+            .Select(p => (int?)p.Number)
+            .FirstOrDefault();
+
+        if (!_automaticPlaylistPlayback && _manualPlaylistPartNumber == partNumber)
+        {
+            return;
+        }
+
+        _automaticPlaylistPlayback = false;
+        _activeAutomaticPlaylistPartNumber = null;
+        _requestedPlaylistPartNumber = null;
+        _manualPlaylistPartNumber = partNumber;
+        WritePlaybackDiagnostic(
+            "timeline.manual-part-changed",
+            new { progress, partNumber });
+        ApplyPlaylistSelectorColors();
+    }
+
+    private void RequestPlaylistPlayback(WaveformOutputPart target)
+    {
+        if (_loadedPreview is not { } preview
+            || !_audioPlayer.HasSource
+            || preview.WavInfo.FrameCount <= 0)
+        {
+            return;
+        }
+
+        var frameCount = preview.WavInfo.FrameCount;
+        WritePlaybackDiagnostic(
+            "playlist.request",
+            new
+            {
+                target = target.Number,
+                target.FileName,
+                target.StartSampleOffset,
+                target.EndSampleOffset,
+                wasPlaying = _audioPlayer.IsPlaying,
+            });
+        if (!_audioPlayer.IsPlaying)
+        {
+            ClearPendingPlaylistUiTransition();
+            _audioPlayer.CancelPlaylistTransition();
+            if (!_audioPlayer.StartPlaylistRange(target.StartSampleOffset, target.EndSampleOffset))
+            {
+                WritePlaybackDiagnostic(
+                    "playlist.immediate-start-rejected",
+                    new { target = target.Number });
+                ClearPlaylistPlaybackSelection();
+                return;
+            }
+
+            _automaticPlaylistPlayback = true;
+            _activeAutomaticPlaylistPartNumber = target.Number;
+            _requestedPlaylistPartNumber = null;
+            _manualPlaylistPartNumber = null;
+            var progress = target.StartSampleOffset / (double)frameCount;
+            AnchorPlayhead(progress);
+            waveformView.SetPlayhead(progress, recordTrail: false, ensureVisible: true);
+            waveformView.SetExitPlayhead(null);
+            waveformView.SetFadeOutPlayhead(null);
+            _playheadTimer.Start();
+            ApplyPlaylistSelectorColors();
+            WritePlaybackDiagnostic(
+                "playlist.immediate-started",
+                new { target = target.Number, progress });
+            return;
+        }
+
+        // 予約先と現在再生中の項目は別管理する。遷移完了までは現在色を維持する。
+        _requestedPlaylistPartNumber = target.Number;
+        ApplyPlaylistSelectorColors();
+        var currentSample = Math.Clamp(
+            (long)Math.Floor(_smoothProgress * frameCount),
+            0L,
+            Math.Max(0L, frameCount - 1));
+        var currentPart = preview.OutputParts
+            .Where(p => currentSample >= p.StartSampleOffset && currentSample < p.EndSampleOffset)
+            .Select(p => (WaveformOutputPart?)p)
+            .FirstOrDefault();
+        var currentPartStart = currentPart?.StartSampleOffset ?? 0L;
+        var currentPartEnd = currentPart?.EndSampleOffset ?? frameCount;
+
+        var transitionLimit = currentPartEnd;
+        var hasActiveLoop = _audioPlayer.TryGetActiveLoopProgress(
+            out _,
+            out var loopEndProgress);
+        if (hasActiveLoop)
+        {
+            var loopEnd = (long)Math.Round(loopEndProgress * frameCount);
+            if (loopEnd > currentSample)
+            {
+                transitionLimit = Math.Min(transitionLimit, loopEnd);
+            }
+        }
+
+        var destinationSyncMode = _playlistDestinationSyncMode;
+        var anacrusisFrames =
+            destinationSyncMode == PlaylistDestinationSyncMode.EntryCue
+                ? GetLeadingAnacrusisFrameCount(preview, target)
+                : 0L;
+        var exitSourceMode = _playlistExitSourceMode;
+        var boundaries = GetPlaylistExitBoundaries(
+            preview,
+            exitSourceMode,
+            currentSample,
+            currentPartStart,
+            currentPartEnd,
+            transitionLimit,
+            hasActiveLoop);
+        WritePlaybackDiagnostic(
+            "playlist.transition-candidates",
+            new
+            {
+                target = target.Number,
+                exitSourceMode = exitSourceMode.ToString(),
+                destinationSyncMode = destinationSyncMode.ToString(),
+                currentSample,
+                currentPartStart,
+                currentPartEnd,
+                transitionLimit,
+                anacrusisFrames,
+                boundaries,
+            });
+
+        if (exitSourceMode == PlaylistExitSourceMode.Immediate)
+        {
+            if (TrySchedulePlaylistTransition(
+                    target,
+                    currentPartStart,
+                    currentPartEnd,
+                    anacrusisFrames,
+                    sourceExitSample: null,
+                    allowShortPreRoll: true,
+                    exitSourceMode,
+                    destinationSyncMode,
+                    out var terminalFailure))
+            {
+                return;
+            }
+
+            if (terminalFailure)
+            {
+                _requestedPlaylistPartNumber = null;
+                ApplyPlaylistSelectorColors();
+                return;
+            }
+        }
+        else
+        {
+            var allowShortPreRoll =
+                exitSourceMode is PlaylistExitSourceMode.NextCue
+                    or PlaylistExitSourceMode.ExitCue;
+            foreach (var boundary in boundaries)
+            {
+                if (TrySchedulePlaylistTransition(
+                        target,
+                        currentPartStart,
+                        currentPartEnd,
+                        anacrusisFrames,
+                        boundary,
+                        allowShortPreRoll,
+                        exitSourceMode,
+                        destinationSyncMode,
+                        out var candidateTerminalFailure))
+                {
+                    return;
+                }
+
+                if (candidateTerminalFailure)
+                {
+                    _requestedPlaylistPartNumber = null;
+                    ApplyPlaylistSelectorColors();
+                    return;
+                }
+            }
+
+            // Exit Cue を既に音声バッファへ渡していた場合、過去へ戻さず即時退出する。
+            var fallbackTerminalFailure = false;
+            if (exitSourceMode == PlaylistExitSourceMode.ExitCue
+                && boundaries.Count > 0
+                && boundaries[0] <= _audioPlayer.CurrentMainSample
+                && TrySchedulePlaylistTransition(
+                    target,
+                    currentPartStart,
+                    currentPartEnd,
+                    anacrusisFrames,
+                    sourceExitSample: null,
+                    allowShortPreRoll: true,
+                    exitSourceMode,
+                    destinationSyncMode,
+                    out fallbackTerminalFailure))
+            {
+                return;
+            }
+            else if (fallbackTerminalFailure)
+            {
+                _requestedPlaylistPartNumber = null;
+                ApplyPlaylistSelectorColors();
+                return;
+            }
+        }
+
+        AppendReport(
+            $"Playlist 遷移を予約できませんでした: {target.FileName}"
+            + Environment.NewLine);
+        WritePlaybackDiagnostic(
+            "playlist.transition-schedule-failed",
+            new { target = target.Number, currentSample, currentPartEnd });
+        _requestedPlaylistPartNumber = null;
+        ApplyPlaylistSelectorColors();
+    }
+
+    private bool TrySchedulePlaylistTransition(
+        WaveformOutputPart target,
+        long currentPartStart,
+        long currentPartEnd,
+        long anacrusisFrames,
+        long? sourceExitSample,
+        bool allowShortPreRoll,
+        PlaylistExitSourceMode exitSourceMode,
+        PlaylistDestinationSyncMode destinationSyncMode,
+        out bool terminalFailure)
+    {
+        terminalFailure = false;
+        if (!_audioPlayer.TrySchedulePlaylistTransition(
+                target.StartSampleOffset,
+                target.EndSampleOffset,
+                sourceExitSample,
+                currentPartStart,
+                destinationSyncMode,
+                anacrusisFrames,
+                allowShortPreRoll,
+                currentPartEnd,
+                _playlistFadeInSeconds,
+                _playlistFadeSeconds,
+                out var schedule))
+        {
+            if (schedule.RejectionReason == "same-time-out-of-range")
+            {
+                terminalFailure = true;
+                var targetDuration =
+                    target.EndSampleOffset - target.StartSampleOffset;
+                AppendReport(
+                    $"Same Time の遷移位置が遷移先の範囲外です: {target.FileName}"
+                    + $" (相対={schedule.SourceRelativeSample}, 長さ={targetDuration})"
+                    + Environment.NewLine);
+                WritePlaybackDiagnostic(
+                    "playlist.transition-rejected-same-time-range",
+                    new
+                    {
+                        target = target.Number,
+                        target.FileName,
+                        exitSourceMode = exitSourceMode.ToString(),
+                        destinationSyncMode = destinationSyncMode.ToString(),
+                        currentPartStart,
+                        currentPartEnd,
+                        schedule.SyncBoundarySample,
+                        schedule.SourceRelativeSample,
+                        schedule.TargetSwitchSample,
+                        target.StartSampleOffset,
+                        target.EndSampleOffset,
+                        targetDuration,
+                    });
+            }
+
+            return false;
+        }
+
+        SetPendingPlaylistUiTransition(
+            schedule.Generation,
+            schedule.TriggerSample,
+            schedule.SyncBoundarySample,
+            target.StartSampleOffset,
+            schedule.TargetSwitchSample);
+        WritePlaybackDiagnostic(
+            "playlist.transition-scheduled",
+            new
+            {
+                target = target.Number,
+                exitSourceMode = exitSourceMode.ToString(),
+                destinationSyncMode = destinationSyncMode.ToString(),
+                schedule.Generation,
+                schedule.TriggerSample,
+                schedule.SyncBoundarySample,
+                schedule.TargetSwitchSample,
+                schedule.SourceRelativeSample,
+                schedule.StartedImmediately,
+                requestedSourceExitSample = sourceExitSample,
+                anacrusisFrames,
+                allowShortPreRoll,
+                fadeInSeconds = _playlistFadeInSeconds,
+                fadeSeconds = _playlistFadeSeconds,
+                currentPartEnd,
+            });
+
+        if (schedule.StartedImmediately
+            && schedule.TriggerSample == schedule.SyncBoundarySample)
+        {
+            CommitPendingPlaylistUiTransition(
+                schedule.SyncBoundarySample,
+                schedule.TargetSwitchSample,
+                "immediate");
+        }
+
+        return true;
+    }
+
+    private static IReadOnlyList<long> GetPlaylistExitBoundaries(
+        WaveformPreviewData preview,
+        PlaylistExitSourceMode mode,
+        long currentSample,
+        long currentPartStart,
+        long currentPartEnd,
+        long transitionLimit,
+        bool hasActiveLoop)
+    {
+        IEnumerable<long> candidates = mode switch
+        {
+            PlaylistExitSourceMode.Immediate => [],
+            PlaylistExitSourceMode.NextBar => preview.Bars
+                .Where(mark => !mark.IsTempoChangeOnly)
+                .Select(mark => mark.SampleOffset)
+                .Append(transitionLimit),
+            PlaylistExitSourceMode.NextBeat => EnumerateBeatBoundaries(
+                    preview.Bars,
+                    transitionLimit)
+                .Append(transitionLimit),
+            PlaylistExitSourceMode.NextCue => preview.Markers
+                .Where(marker =>
+                    marker.SampleOffset >= currentPartStart
+                    && marker.SampleOffset < currentPartEnd)
+                .Select(marker => marker.SampleOffset),
+            PlaylistExitSourceMode.ExitCue =>
+            [
+                GetPlaylistExitCueSample(
+                    preview,
+                    currentPartStart,
+                    currentPartEnd,
+                    transitionLimit,
+                    hasActiveLoop),
+            ],
+            _ => [],
+        };
+
+        return candidates
+            .Where(sample =>
+                (mode == PlaylistExitSourceMode.ExitCue || sample > currentSample)
+                && sample <= (mode == PlaylistExitSourceMode.ExitCue
+                    ? currentPartEnd
+                    : transitionLimit))
+            .Distinct()
+            .Order()
+            .ToArray();
+    }
+
+    private static IEnumerable<long> EnumerateBeatBoundaries(
+        IReadOnlyList<WaveformBarMark> bars,
+        long limit)
+    {
+        var barLines = bars
+            .Where(mark => !mark.IsTempoChangeOnly)
+            .OrderBy(mark => mark.SampleOffset)
+            .ToArray();
+        for (var i = 0; i + 1 < barLines.Length; i++)
+        {
+            var bar = barLines[i];
+            var next = barLines[i + 1];
+            if (bar.SampleOffset >= limit)
+            {
+                yield break;
+            }
+
+            var end = Math.Min(next.SampleOffset, limit);
+            var span = next.SampleOffset - bar.SampleOffset;
+            var beatCount = Math.Max(1, bar.Numerator);
+            if (span <= 0)
+            {
+                continue;
+            }
+
+            for (var beat = 0; beat < beatCount; beat++)
+            {
+                var sample = bar.SampleOffset
+                    + (long)Math.Round(
+                        span * beat / (double)beatCount,
+                        MidpointRounding.AwayFromZero);
+                if (sample < end)
+                {
+                    yield return sample;
+                }
+            }
+        }
+    }
+
+    private static long GetPlaylistExitCueSample(
+        WaveformPreviewData preview,
+        long currentPartStart,
+        long currentPartEnd,
+        long transitionLimit,
+        bool hasActiveLoop)
+    {
+        var lastRegion = preview.Regions
+            .Where(region =>
+                !region.IsExcluded
+                && region.StartSampleOffset < currentPartEnd
+                && region.EndSampleOffset > currentPartStart)
+            .OrderBy(region => region.StartSampleOffset)
+            .Select(region => (WaveformRegionMark?)region)
+            .LastOrDefault();
+        var exitCue = lastRegion is { } last
+            && last.NameSuffix.Equals(
+                WaveformRegionBuilder.LoopEndSuffix,
+                StringComparison.OrdinalIgnoreCase)
+            ? Math.Max(currentPartStart, last.StartSampleOffset)
+            : currentPartEnd;
+        return hasActiveLoop
+            ? Math.Min(exitCue, transitionLimit)
+            : exitCue;
+    }
+
+    private static long GetLeadingAnacrusisFrameCount(
+        WaveformPreviewData preview,
+        WaveformOutputPart target)
+    {
+        var expectedStart = target.StartSampleOffset;
+        foreach (var region in preview.Regions.OrderBy(region => region.StartSampleOffset))
+        {
+            if (region.EndSampleOffset <= expectedStart)
+            {
+                continue;
+            }
+
+            if (region.StartSampleOffset != expectedStart
+                || region.IsExcluded
+                || !region.NameSuffix.Equals(
+                    WaveformRegionBuilder.AnacrusisSuffix,
+                    StringComparison.OrdinalIgnoreCase)
+                || region.EndSampleOffset > target.EndSampleOffset)
+            {
+                break;
+            }
+
+            expectedStart = region.EndSampleOffset;
+        }
+
+        return Math.Max(0L, expectedStart - target.StartSampleOffset);
+    }
+
+    private void SetPendingPlaylistUiTransition(
+        long generation,
+        long triggerSample,
+        long syncBoundarySample,
+        long targetSample,
+        long targetEntrySample)
+    {
+        _pendingPlaylistTransitionGeneration = generation;
+        _pendingPlaylistBoundarySample = triggerSample;
+        _pendingPlaylistSyncBoundarySample = syncBoundarySample;
+        _pendingPlaylistTargetSample = targetSample;
+        _pendingPlaylistTargetEntrySample = targetEntrySample;
+        _pendingPlaylistAudioStarted = false;
+        waveformView.SetAnacrusisPlayhead(null);
+        _pendingPlaylistBlinkLevel = GetPlaylistBeatBlinkLevel();
+        ApplyPlaylistSelectorColors();
+        _playlistBlinkTimer.Start();
+        WritePlaybackDiagnostic(
+            "playlist.pending-set",
+            new { generation, triggerSample, syncBoundarySample, targetSample, targetEntrySample });
+    }
+
+    private double CommitPendingPlaylistUiTransition(
+        long oldTimelineSample,
+        long targetTimelineSample,
+        string reason)
+    {
+        if (_loadedPreview is not { } preview
+            || preview.WavInfo.FrameCount <= 0
+            || _pendingPlaylistTransitionGeneration == 0)
+        {
+            return _smoothProgress;
+        }
+
+        var frameCount = preview.WavInfo.FrameCount;
+        var progress = Math.Clamp(
+            targetTimelineSample / (double)frameCount,
+            0d,
+            1d);
+        AnchorPlayhead(progress);
+        waveformView.ClearPlayheadTrail();
+        waveformView.SetPlayhead(
+            progress,
+            recordTrail: false,
+            ensureVisible: true);
+        _activeAutomaticPlaylistPartNumber =
+            _requestedPlaylistPartNumber
+            ?? preview.OutputParts
+                .Where(part =>
+                    _pendingPlaylistTargetSample >= part.StartSampleOffset
+                    && _pendingPlaylistTargetSample < part.EndSampleOffset)
+                .Select(part => (int?)part.Number)
+                .FirstOrDefault();
+        _automaticPlaylistPlayback = true;
+        _manualPlaylistPartNumber = null;
+        ApplyPlaylistSelectorColors();
+        WritePlaybackDiagnostic(
+            "playlist.transition-ui-committed",
+            new
+            {
+                requestedGeneration = _pendingPlaylistTransitionGeneration,
+                trigger = _pendingPlaylistBoundarySample,
+                sync = _pendingPlaylistSyncBoundarySample,
+                target = _pendingPlaylistTargetSample,
+                targetEntry = _pendingPlaylistTargetEntrySample,
+                oldTimelineSample,
+                targetTimelineSample,
+                progress,
+                reason,
+            });
+        StartPlaylistTransitionGlow();
+        ClearPendingPlaylistUiTransition();
+        return progress;
+    }
+
+    private void ClearPendingPlaylistUiTransition()
+    {
+        var wasPending = _pendingPlaylistTransitionGeneration != 0;
+        if (wasPending)
+        {
+            WritePlaybackDiagnostic(
+                "playlist.pending-cleared",
+                new
+                {
+                    generation = _pendingPlaylistTransitionGeneration,
+                    trigger = _pendingPlaylistBoundarySample,
+                    sync = _pendingPlaylistSyncBoundarySample,
+                    target = _pendingPlaylistTargetSample,
+                    targetEntry = _pendingPlaylistTargetEntrySample,
+                    audioStarted = _pendingPlaylistAudioStarted,
+                });
+        }
+
+        _pendingPlaylistTransitionGeneration = 0;
+        _pendingPlaylistBoundarySample = 0;
+        _pendingPlaylistSyncBoundarySample = 0;
+        _pendingPlaylistTargetSample = 0;
+        _pendingPlaylistTargetEntrySample = 0;
+        _pendingPlaylistAudioStarted = false;
+        _requestedPlaylistPartNumber = null;
+        _pendingPlaylistBlinkLevel = 0d;
+        _playlistBlinkTimer.Stop();
+        waveformView.SetAnacrusisPlayhead(null);
+        if (wasPending)
+        {
+            ApplyPlaylistSelectorColors();
+        }
+    }
+
+    private void UpdatePendingPlaylistBlink()
+    {
+        if (_pendingPlaylistTransitionGeneration == 0)
+        {
+            return;
+        }
+
+        var level = GetPlaylistBeatBlinkLevel();
+        if (Math.Abs(level - _pendingPlaylistBlinkLevel) < 0.005d)
+        {
+            return;
+        }
+
+        _pendingPlaylistBlinkLevel = level;
+        ApplyPlaylistSelectorColors();
+    }
+
+    private double GetPlaylistBeatBlinkLevel()
+    {
+        if (!TryGetPlaylistBeatTiming(out var beatPhase, out _))
+        {
+            return 0.5d;
+        }
+
+        // 拍頭=100%、裏拍=50%。両方向をコサインで滑らかにつなぐ。
+        return 0.75d + 0.25d * Math.Cos(beatPhase * Math.PI * 2d);
+    }
+
+    private bool TryGetPlaylistBeatTiming(
+        out double beatPhase,
+        out double beatDurationMs)
+    {
+        beatPhase = 0d;
+        beatDurationMs = 0d;
+        if (_loadedPreview is not { } preview
+            || preview.WavInfo.FrameCount <= 0
+            || preview.WavInfo.SampleRate == 0)
+        {
+            return false;
+        }
+
+        var frameCount = preview.WavInfo.FrameCount;
+        var sample = (long)Math.Clamp(
+            Math.Floor(Math.Clamp(_smoothProgress, 0d, 1d) * frameCount),
+            0d,
+            Math.Max(0L, frameCount - 1));
+        var bar = preview.Bars
+            .Where(mark => !mark.IsTempoChangeOnly && mark.SampleOffset <= sample)
+            .OrderBy(mark => mark.SampleOffset)
+            .LastOrDefault();
+        var tempo = preview.Bars
+            .Where(mark => mark.SampleOffset <= sample)
+            .OrderBy(mark => mark.SampleOffset)
+            .LastOrDefault();
+
+        var bpm = tempo.Bpm > 0d ? tempo.Bpm : bar.Bpm;
+        var denominator = tempo.Denominator > 0 ? tempo.Denominator : bar.Denominator;
+        if (bpm <= 0d || denominator <= 0)
+        {
+            return false;
+        }
+
+        var beatSamples = preview.WavInfo.SampleRate
+            * 60d
+            / bpm
+            * 4d
+            / denominator;
+        if (beatSamples <= 1d)
+        {
+            return false;
+        }
+
+        var relativeBeats = Math.Max(0d, sample - bar.SampleOffset) / beatSamples;
+        beatPhase = relativeBeats - Math.Floor(relativeBeats);
+        beatDurationMs = beatSamples / preview.WavInfo.SampleRate * 1000d;
+        return true;
+    }
+
+    private void StartPlaylistTransitionGlow()
+    {
+        if (_activeAutomaticPlaylistPartNumber is not int partNumber)
+        {
+            return;
+        }
+
+        _playlistTransitionGlowPartNumber = partNumber;
+        _playlistTransitionGlowStartTickMs = Environment.TickCount64;
+        if (TryGetPlaylistBeatTiming(out var beatPhase, out var beatDurationMs))
+        {
+            var remainingBeat = beatPhase <= 1e-3 ? 1d : 1d - beatPhase;
+            _playlistTransitionGlowDurationMs = Math.Clamp(
+                beatDurationMs * remainingBeat,
+                50d,
+                5000d);
+        }
+        else
+        {
+            _playlistTransitionGlowDurationMs = 500d;
+        }
+
+        _playlistTransitionGlowLevel = 1d;
+        _playlistTransitionGlowTimer.Start();
+        ApplyPlaylistSelectorColors();
+    }
+
+    private void UpdatePlaylistTransitionGlow()
+    {
+        var elapsed = Math.Max(
+            0L,
+            Environment.TickCount64 - _playlistTransitionGlowStartTickMs);
+        var t = Math.Clamp(
+            elapsed / Math.Max(1d, _playlistTransitionGlowDurationMs),
+            0d,
+            1d);
+        if (t >= 1d)
+        {
+            ClearPlaylistTransitionGlow();
+            return;
+        }
+
+        // 小節頭の全点灯から次の拍頭の消灯まで、片方向のコサインで滑らかに落とす。
+        _playlistTransitionGlowLevel = (1d + Math.Cos(t * Math.PI)) * 0.5d;
+        ApplyPlaylistSelectorColors();
+    }
+
+    private void ClearPlaylistTransitionGlow()
+    {
+        _playlistTransitionGlowTimer.Stop();
+        _playlistTransitionGlowPartNumber = null;
+        _playlistTransitionGlowStartTickMs = 0;
+        _playlistTransitionGlowDurationMs = 0d;
+        _playlistTransitionGlowLevel = 0d;
+        ApplyPlaylistSelectorColors();
     }
 
     private void LayoutActionBarControls()
@@ -500,6 +1736,9 @@ public partial class Form1 : Form
         topMostCheckBox.Location = new Point(
             clearButton.Left - gap - topMostCheckBox.PreferredSize.Width,
             checkY);
+        detailedLogCheckBox.Location = new Point(
+            topMostCheckBox.Left - gap - detailedLogCheckBox.PreferredSize.Width,
+            checkY);
     }
 
     private void UpdateExportButtonState()
@@ -515,17 +1754,81 @@ public partial class Form1 : Form
         DeveloperSettings.SaveTopMost(topMostCheckBox.Checked);
     }
 
+    private void DetailedLogCheckBox_CheckedChanged(object? sender, EventArgs e)
+    {
+        DeveloperSettings.SaveDetailedPlaybackLog(detailedLogCheckBox.Checked);
+        if (detailedLogCheckBox.Checked)
+        {
+            WritePlaybackDiagnostic("diagnostic.enabled");
+        }
+    }
+
+    private void LogClearButton_Click(object? sender, EventArgs e)
+    {
+        WritePlaybackDiagnostic("log.cleared");
+        editorTextBox.Clear();
+    }
+
+    private void LogCopyButton_Click(object? sender, EventArgs e)
+    {
+        if (editorTextBox.TextLength == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            Clipboard.SetText(editorTextBox.Text);
+            WritePlaybackDiagnostic("log.copied", new { characters = editorTextBox.TextLength });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "ログのコピーに失敗", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void LogDownloadButton_Click(object? sender, EventArgs e)
+    {
+        using var dialog = new SaveFileDialog
+        {
+            AddExtension = true,
+            DefaultExt = "log",
+            FileName = $"MgaWwiseIMImporter-{DateTime.Now:yyyyMMdd-HHmmss}.log",
+            Filter = "Log file (*.log)|*.log|Text file (*.txt)|*.txt|All files (*.*)|*.*",
+            OverwritePrompt = true,
+            Title = "ログを保存",
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        try
+        {
+            File.WriteAllText(dialog.FileName, editorTextBox.Text, new UTF8Encoding(false));
+            WritePlaybackDiagnostic(
+                "log.downloaded",
+                new { path = dialog.FileName, characters = editorTextBox.TextLength });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "ログの保存に失敗", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
     private void ClearButton_Click(object? sender, EventArgs e)
     {
         _exportGeneration++;
         _exportBusy = false;
         _loadedPreview = null;
         _resumePlaybackAfterBackwardSeek = false;
+        ClearPendingPlaylistUiTransition();
         _playheadTimer.Stop();
         _audioPlayer.Stop();
         _audioPlayer.Clear();
         waveformView.ClearPreview();
         editorTextBox.Clear();
+        ClearPlaylistChoices("Playlist はありません");
         UpdateExportButtonState();
     }
 
@@ -647,6 +1950,8 @@ public partial class Form1 : Form
         var exportGeneration = ++_exportGeneration;
         _loadedPreview = null;
         _exportBusy = false;
+        ClearPendingPlaylistUiTransition();
+        ClearPlaylistChoices("読み込み中…");
         UpdateExportButtonState();
         waveformView.ClearExportHighlight();
         _playheadTimer.Stop();
@@ -675,6 +1980,7 @@ public partial class Form1 : Form
             _audioPlayer.Clear();
             waveformView.ClearPreview();
             _loadedPreview = null;
+            ClearPlaylistChoices("Playlist を取得できませんでした");
             UpdateExportButtonState();
             return;
         }
@@ -702,6 +2008,24 @@ public partial class Form1 : Form
         }
 
         _loadedPreview = preview;
+        PopulatePlaylistChoices(preview.OutputParts);
+        WritePlaybackDiagnostic(
+            "source.loaded",
+            new
+            {
+                preview.SourcePath,
+                preview.WavInfo.FrameCount,
+                preview.WavInfo.SampleRate,
+                bars = preview.Bars.Count,
+                regions = preview.Regions.Count,
+                playlists = preview.OutputParts.Select(part => new
+                {
+                    part.Number,
+                    part.FileName,
+                    part.StartSampleOffset,
+                    part.EndSampleOffset,
+                }),
+            });
         UpdateExportButtonState();
 
         if (preview.OutputParts.Count == 0)
@@ -1076,11 +2400,25 @@ public partial class Form1 : Form
             return;
         }
 
+        var hadPendingPlaylistTransition = _pendingPlaylistTransitionGeneration != 0;
+        WritePlaybackDiagnostic(
+            "transport.toggle-requested",
+            new { wasPlaying = _audioPlayer.IsPlaying, hadPendingPlaylistTransition });
+        if (!_automaticPlaylistPlayback)
+        {
+            SetManualPlaylistHighlight(_smoothProgress);
+        }
+
+        if (_audioPlayer.IsPlaying && hadPendingPlaylistTransition)
+        {
+            UpdatePlayhead();
+        }
+
         _audioPlayer.Toggle();
         if (_audioPlayer.IsPlaying)
         {
             // 再生開始時だけ位置を取り込み、以降は壁時計で表示（エンジンには触れない）
-            AnchorPlayhead(_audioPlayer.Progress);
+            AnchorPlayhead(hadPendingPlaylistTransition ? _smoothProgress : _audioPlayer.Progress);
             // 開始位置が -L 内ならその区間だけループ。外ならループなし
             _audioPlayer.ArmLoopAtProgress(_smoothProgress);
             _playheadTimer.Start();
@@ -1089,10 +2427,14 @@ public partial class Form1 : Form
         {
             _playheadTimer.Stop();
             // 停止時のみエンジン位置に合わせる
-            AnchorPlayhead(_audioPlayer.Progress);
+            AnchorPlayhead(hadPendingPlaylistTransition ? _smoothProgress : _audioPlayer.Progress);
         }
 
         UpdatePlayhead();
+        ApplyPlaylistSelectorColors();
+        WritePlaybackDiagnostic(
+            "transport.toggle-completed",
+            new { isPlaying = _audioPlayer.IsPlaying });
     }
 
     private void SeekPlayback(double progress)
@@ -1102,7 +2444,13 @@ public partial class Form1 : Form
             return;
         }
 
+        WritePlaybackDiagnostic(
+            "transport.seek-requested",
+            new { requestedProgress = progress });
+        _audioPlayer.CancelPlaylistTransition();
+        ClearPendingPlaylistUiTransition();
         var clamped = Math.Clamp(progress, 0d, 1d);
+        SetManualPlaylistHighlight(clamped);
         _audioPlayer.Seek(clamped);
         // ジャンプ先が -L 内ならその区間に付け替え、外ならループ解除
         _audioPlayer.ArmLoopAtProgress(clamped);
@@ -1110,6 +2458,10 @@ public partial class Form1 : Form
         AnchorPlayhead(clamped);
         waveformView.SetPlayhead(clamped, recordTrail: false);
         waveformView.SetExitPlayhead(null);
+        waveformView.SetFadeOutPlayhead(null);
+        WritePlaybackDiagnostic(
+            "transport.seek-completed",
+            new { clampedProgress = clamped });
     }
 
     private void UpdatePlayhead()
@@ -1117,6 +2469,7 @@ public partial class Form1 : Form
         if (!_audioPlayer.HasSource)
         {
             waveformView.SetPlayhead(null);
+            UpdateSourceLevelMeter();
             return;
         }
 
@@ -1129,32 +2482,132 @@ public partial class Form1 : Form
                 var elapsedSec = (Environment.TickCount64 - _anchorTickMs) / 1000d;
                 var progress = _anchorProgress + elapsedSec / durationSec;
 
-                // 未アームのまま -L に入ったら、そこで初めてループを有効化
-                if (!_audioPlayer.TryGetActiveLoopProgress(out _, out _)
-                    && _audioPlayer.TryGetLoopProgress(progress, out _, out _))
+                if (_pendingPlaylistTransitionGeneration != 0
+                    && _loadedPreview is { } preview
+                    && preview.WavInfo.FrameCount > 0)
                 {
-                    _audioPlayer.ArmLoopAtProgress(progress);
+                    var frameCount = preview.WavInfo.FrameCount;
+                    var oldTimelineSample = (long)Math.Floor(progress * frameCount);
+                    if (!_pendingPlaylistAudioStarted
+                        && _audioPlayer.TryGetPlaylistTransitionState(out var transition)
+                        && transition.StartedGeneration >= _pendingPlaylistTransitionGeneration)
+                    {
+                        if (oldTimelineSample >= _pendingPlaylistBoundarySample)
+                        {
+                            _pendingPlaylistAudioStarted = true;
+                            WritePlaybackDiagnostic(
+                                "playlist.transition-audio-started",
+                                new
+                                {
+                                    transition.StartedGeneration,
+                                    requestedGeneration = _pendingPlaylistTransitionGeneration,
+                                    trigger = _pendingPlaylistBoundarySample,
+                                    sync = _pendingPlaylistSyncBoundarySample,
+                                    target = _pendingPlaylistTargetSample,
+                                    targetEntry = _pendingPlaylistTargetEntrySample,
+                                    oldTimelineSample,
+                                    progress,
+                                });
+                        }
+                    }
+
+                    if (_pendingPlaylistAudioStarted
+                        && oldTimelineSample < _pendingPlaylistSyncBoundarySample)
+                    {
+                        var preRollElapsed = Math.Max(
+                            0L,
+                            oldTimelineSample - _pendingPlaylistBoundarySample);
+                        var anacrusisSample = Math.Min(
+                            _pendingPlaylistTargetEntrySample,
+                            _pendingPlaylistTargetSample + preRollElapsed);
+                        waveformView.SetAnacrusisPlayhead(
+                            anacrusisSample / (double)frameCount,
+                            recordTrail: true);
+                    }
+
+                    if (_pendingPlaylistAudioStarted
+                        && oldTimelineSample >= _pendingPlaylistSyncBoundarySample)
+                    {
+                        var overshoot = Math.Max(
+                            0L,
+                            oldTimelineSample - _pendingPlaylistSyncBoundarySample);
+                        var targetTimelineSample =
+                            _pendingPlaylistTargetEntrySample + overshoot;
+                        progress = CommitPendingPlaylistUiTransition(
+                            oldTimelineSample,
+                            targetTimelineSample,
+                            "scheduled");
+                    }
                 }
 
-                progress = WrapProgressForLoop(progress);
+                // Provider は先読みで先に遷移し得るため、UIが境界へ到達するまでは
+                // 遷移先のループ状態を旧タイムライン表示へ適用しない。
+                if (_pendingPlaylistTransitionGeneration == 0)
+                {
+                    // 未アームのまま -L に入ったら、そこで初めてループを有効化
+                    if (!_audioPlayer.TryGetActiveLoopProgress(out _, out _)
+                        && _audioPlayer.TryGetLoopProgress(progress, out _, out _))
+                    {
+                        _audioPlayer.ArmLoopAtProgress(progress);
+                    }
+
+                    progress = WrapProgressForLoop(progress);
+                    if (progress + 1e-12 < _smoothProgress)
+                    {
+                        waveformView.ClearPlayheadTrail();
+                    }
+                }
+
                 _smoothProgress = Math.Clamp(progress, 0d, 1d);
             }
 
+            if (!_automaticPlaylistPlayback)
+            {
+                SetManualPlaylistHighlight(_smoothProgress);
+            }
+
             waveformView.SetPlayhead(_smoothProgress, recordTrail: true);
+            double? targetExitProgress = null;
             if (_audioPlayer.TryGetExitPlaybackProgress(out var exitProgress))
             {
-                waveformView.SetExitPlayhead(exitProgress, recordTrail: true);
+                targetExitProgress = exitProgress;
+            }
+
+            if (_audioPlayer.TryGetPlaylistFadePlaybackProgress(
+                    out var fadeProgress,
+                    out var fadeReachedExit))
+            {
+                waveformView.SetFadeOutPlayhead(
+                    fadeProgress,
+                    recordTrail: true,
+                    isExit: fadeReachedExit);
             }
             else
             {
-                waveformView.SetExitPlayhead(null);
+                waveformView.SetFadeOutPlayhead(null);
             }
+
+            waveformView.SetExitPlayhead(
+                targetExitProgress,
+                recordTrail: targetExitProgress is not null);
         }
         else
         {
             waveformView.SetPlayhead(_smoothProgress, recordTrail: false);
             waveformView.SetExitPlayhead(null);
+            waveformView.SetFadeOutPlayhead(null);
         }
+
+        UpdateSourceLevelMeter();
+    }
+
+    private void UpdateSourceLevelMeter()
+    {
+        var peak = _audioPlayer.IsPlaying ? _audioPlayer.OutputPeak : 0f;
+        var targetLevel = peak <= 0.001f
+            ? 0f
+            : (float)Math.Clamp((20d * Math.Log10(peak) + 60d) / 60d, 0d, 1d);
+        waveformView.SetOutputLevel(targetLevel, decay: _audioPlayer.IsPlaying);
     }
 
     /// <summary>
@@ -1201,6 +2654,74 @@ public partial class Form1 : Form
         _anchorProgress = Math.Clamp(progress, 0d, 1d);
         _anchorTickMs = Environment.TickCount64;
         _smoothProgress = _anchorProgress;
+    }
+
+    private void WritePlaybackDiagnostic(string eventName, object? data = null)
+    {
+        if (!detailedLogCheckBox.Checked || IsDisposed)
+        {
+            return;
+        }
+
+        var activePartNumber = _automaticPlaylistPlayback
+            ? _activeAutomaticPlaylistPartNumber
+            : _manualPlaylistPartNumber;
+        var activePart = _loadedPreview?.OutputParts
+            .Where(part => part.Number == activePartNumber)
+            .Select(part => (WaveformOutputPart?)part)
+            .FirstOrDefault();
+        var frameCount = _loadedPreview?.WavInfo.FrameCount ?? 0L;
+        var smoothSample = frameCount > 0
+            ? (long)Math.Clamp(
+                Math.Floor(Math.Clamp(_smoothProgress, 0d, 1d) * frameCount),
+                0d,
+                Math.Max(0L, frameCount - 1))
+            : 0L;
+        var hasLoop = _audioPlayer.TryGetActiveLoopProgress(out var loopStart, out var loopEnd);
+        var envelope = new
+        {
+            schema = "mga.playback-debug.v1",
+            sequence = Interlocked.Increment(ref _diagnosticSequence),
+            utc = DateTimeOffset.UtcNow.ToString("O"),
+            tickMs = Environment.TickCount64,
+            @event = eventName,
+            state = new
+            {
+                source = _loadedPreview?.SourcePath,
+                audioPlaying = _audioPlayer.IsPlaying,
+                audioHasSource = _audioPlayer.HasSource,
+                smoothProgress = Math.Round(_smoothProgress, 9),
+                smoothSample,
+                frameCount,
+                activePart = activePart?.Number,
+                activeFile = activePart?.FileName,
+                requestedPart = _requestedPlaylistPartNumber,
+                automaticPlaylist = _automaticPlaylistPlayback,
+                transitionFadeInSeconds = _playlistFadeInSeconds,
+                transitionFadeSeconds = _playlistFadeSeconds,
+                exitSourceMode = _playlistExitSourceMode.ToString(),
+                destinationSyncMode = _playlistDestinationSyncMode.ToString(),
+                manualPart = _manualPlaylistPartNumber,
+                pendingGeneration = _pendingPlaylistTransitionGeneration,
+                pendingTriggerSample = _pendingPlaylistBoundarySample,
+                pendingSyncBoundarySample = _pendingPlaylistSyncBoundarySample,
+                pendingTargetSample = _pendingPlaylistTargetSample,
+                pendingTargetEntrySample = _pendingPlaylistTargetEntrySample,
+                pendingAudioStarted = _pendingPlaylistAudioStarted,
+                activeLoop = hasLoop
+                    ? new
+                    {
+                        startProgress = Math.Round(loopStart, 9),
+                        endProgress = Math.Round(loopEnd, 9),
+                    }
+                    : null,
+            },
+            data,
+        };
+        AppendReport(
+            "[PlaybackDebug] "
+            + JsonSerializer.Serialize(envelope)
+            + Environment.NewLine);
     }
 
     private void AppendReport(string text)

@@ -2,6 +2,12 @@ using NAudio.Wave;
 
 namespace MgaWwiseIMImporter.Wave;
 
+internal enum PlaylistDestinationSyncMode
+{
+    EntryCue,
+    SameTime,
+}
+
 /// <summary>
 /// Wave ファイルの再生。位置は Position で取得する。
 /// 変換は自前で行い ACM ドライバに依存しない（マルチチャンネル／Extensible 対応）。
@@ -14,15 +20,20 @@ internal sealed class WaveAudioPlayer : IDisposable
 {
     private WaveFileReader? _reader;
     private WaveFileReader? _exitReader;
+    private WaveFileReader? _playlistFadeReader;
+    private WaveFileReader? _playlistExitFadeReader;
+    private WaveFileReader? _playlistPreRollReader;
     private WaveOutEvent? _output;
     private StereoFloatWaveProvider? _provider;
     private string? _path;
     private bool _isPlaying;
     private bool _disposed;
+    private bool _suppressPlaybackEnded;
     private LoopPlaybackPlan[] _loopPlans = [];
     private LoopPlaybackPlan? _activePlan;
 
     public event EventHandler? PlaybackEnded;
+    public event EventHandler<string>? Diagnostic;
 
     public bool IsPlaying => _isPlaying;
 
@@ -31,6 +42,9 @@ internal sealed class WaveAudioPlayer : IDisposable
     public TimeSpan Position => _reader?.CurrentTime ?? TimeSpan.Zero;
 
     public TimeSpan Duration => _reader?.TotalTime ?? TimeSpan.Zero;
+
+    /// <summary>直近に生成した出力バッファのピーク値（0〜1）。</summary>
+    public float OutputPeak => _provider?.OutputPeak ?? 0f;
 
     /// <summary>0〜1。長さ不明時は 0。</summary>
     public double Progress
@@ -172,19 +186,24 @@ internal sealed class WaveAudioPlayer : IDisposable
     {
         start = 0;
         end = 0;
-        if (_reader is null || _activePlan is not { } plan)
+        // Provider が存在する場合、その null は「現在の Playlist に有効なループなし」を意味する。
+        // ?? で _activePlan へ戻すと、Playlist 遷移前の古いループを UI が再利用してしまう。
+        var plan = _provider is not null
+            ? _provider.GetActivePlan()
+            : _activePlan;
+        if (_reader is null || plan is not { } activePlan)
         {
             return false;
         }
 
         var frameCount = FrameCount;
-        if (frameCount <= 0 || plan.LoopEndSample <= plan.LoopStartSample)
+        if (frameCount <= 0 || activePlan.LoopEndSample <= activePlan.LoopStartSample)
         {
             return false;
         }
 
-        start = plan.LoopStartSample / (double)frameCount;
-        end = plan.LoopEndSample / (double)frameCount;
+        start = activePlan.LoopStartSample / (double)frameCount;
+        end = activePlan.LoopEndSample / (double)frameCount;
         return end > start;
     }
 
@@ -227,10 +246,30 @@ internal sealed class WaveAudioPlayer : IDisposable
         return _provider.TryGetExitPlaybackProgress(frameCount, sampleRate, out progress);
     }
 
+    public bool TryGetPlaylistFadePlaybackProgress(
+        out double progress,
+        out bool isExit)
+    {
+        progress = 0d;
+        isExit = false;
+        if (_provider is null || _reader is null)
+        {
+            return false;
+        }
+
+        return _provider.TryGetPlaylistFadePlaybackProgress(
+            FrameCount,
+            _reader.WaveFormat.SampleRate,
+            out progress,
+            out isExit);
+    }
+
     private long FrameCount =>
         _reader is null
             ? 0
             : _reader.Length / Math.Max(1, _reader.WaveFormat.BlockAlign);
+
+    public long CurrentMainSample => _provider?.CurrentMainSample ?? 0L;
 
     private LoopPlaybackPlan? FindPlanAtProgress(double progress)
     {
@@ -246,6 +285,19 @@ internal sealed class WaveAudioPlayer : IDisposable
         }
 
         var sample = (long)Math.Clamp(Math.Floor(Math.Clamp(progress, 0d, 1d) * frameCount), 0, frameCount - 1);
+        foreach (var plan in _loopPlans)
+        {
+            if (sample >= plan.LoopStartSample && sample < plan.LoopEndSample)
+            {
+                return plan;
+            }
+        }
+
+        return null;
+    }
+
+    private LoopPlaybackPlan? FindPlanAtSample(long sample)
+    {
         foreach (var plan in _loopPlans)
         {
             if (sample >= plan.LoopStartSample && sample < plan.LoopEndSample)
@@ -275,6 +327,127 @@ internal sealed class WaveAudioPlayer : IDisposable
         }
     }
 
+    /// <summary>
+    /// 停止／一時停止中に Playlist 範囲の先頭へ移動して再生を開始する。
+    /// 範囲は開始を含み、終了を含まないソース WAV のサンプル位置。
+    /// </summary>
+    public bool StartPlaylistRange(long startSample, long endSample)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_isPlaying
+            || _provider is null
+            || _output is null
+            || !IsValidPlaylistRange(startSample, endSample))
+        {
+            Trace($"playlist.start rejected playing={_isPlaying} provider={_provider is not null} output={_output is not null} start={startSample} end={endSample} frames={FrameCount}");
+            return false;
+        }
+
+        // Pause はデバイス側の先読みバッファを保持するため、停止中選択では一度破棄し、
+        // 対象 Playlist の先頭が最初に鳴ることを保証する。
+        _provider.ClearPlaylistPlayback();
+        _suppressPlaybackEnded = true;
+        try
+        {
+            _output.Stop();
+        }
+        finally
+        {
+            _suppressPlaybackEnded = false;
+        }
+        var plan = FindPlanAtSample(startSample);
+        _provider.StartPlaylistRange(startSample, endSample, plan);
+        _activePlan = plan;
+        _output.Play();
+        _isPlaying = true;
+        Trace($"playlist.start accepted start={startSample} end={endSample} loopPlan={plan?.ToString() ?? "none"}");
+        return true;
+    }
+
+    /// <summary>
+    /// 退出境界の手前へアウフタクトを重ね、境界でメインを切り替えて
+    /// 旧 Playlist のフェードを始める。退出境界が null なら即時遷移。
+    /// </summary>
+    public bool TrySchedulePlaylistTransition(
+        long startSample,
+        long endSample,
+        long? sourceExitSample,
+        long sourcePartStartSample,
+        PlaylistDestinationSyncMode destinationSyncMode,
+        long preRollFrameCount,
+        bool allowShortPreRoll,
+        long fadeSourceEndSample,
+        double fadeInSeconds,
+        double fadeSeconds,
+        out PlaylistTransitionSchedule schedule)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        schedule = default;
+        if (!_isPlaying
+            || _provider is null
+            || sourceExitSample is < 0
+            || sourceExitSample > FrameCount
+            || sourcePartStartSample < 0
+            || sourcePartStartSample > FrameCount
+            || preRollFrameCount < 0
+            || fadeSourceEndSample > FrameCount
+            || !double.IsFinite(fadeInSeconds)
+            || fadeInSeconds < 0d
+            || !double.IsFinite(fadeSeconds)
+            || fadeSeconds <= 0d
+            || !IsValidPlaylistRange(startSample, endSample))
+        {
+            Trace($"playlist.schedule rejected playing={_isPlaying} start={startSample} end={endSample} sourceExit={sourceExitSample?.ToString() ?? "immediate"} sourcePartStart={sourcePartStartSample} destinationSync={destinationSyncMode} preRoll={preRollFrameCount} allowShortPreRoll={allowShortPreRoll} fadeEnd={fadeSourceEndSample} fadeInSeconds={fadeInSeconds:R} fadeOutSeconds={fadeSeconds:R} frames={FrameCount}");
+            return false;
+        }
+
+        var fadeInFrameCount = fadeInSeconds <= 0d
+            ? 0
+            : Math.Max(
+                1,
+                (int)Math.Min(
+                    int.MaxValue,
+                    Math.Round(_provider.WaveFormat.SampleRate * fadeInSeconds)));
+        var fadeFrameCount = Math.Max(
+            1,
+            (int)Math.Min(
+                int.MaxValue,
+                Math.Round(_provider.WaveFormat.SampleRate * fadeSeconds)));
+        var accepted = _provider.TrySchedulePlaylistTransition(
+            startSample,
+            endSample,
+            sourceExitSample,
+            sourcePartStartSample,
+            destinationSyncMode,
+            preRollFrameCount,
+            allowShortPreRoll,
+            fadeSourceEndSample,
+            fadeInFrameCount,
+            fadeFrameCount,
+            FindPlanAtSample,
+            out schedule);
+        Trace($"playlist.schedule accepted={accepted} generation={schedule.Generation} start={startSample} end={endSample} destinationSync={destinationSyncMode} sourceRelative={schedule.SourceRelativeSample} trigger={schedule.TriggerSample} sync={schedule.SyncBoundarySample} targetSwitch={schedule.TargetSwitchSample} rejection={schedule.RejectionReason ?? "none"} startedImmediately={schedule.StartedImmediately} fadeEnd={fadeSourceEndSample} fadeInSeconds={fadeInSeconds:R} fadeInFrames={fadeInFrameCount} fadeOutSeconds={fadeSeconds:R} fadeOutFrames={fadeFrameCount}");
+        return accepted;
+    }
+
+    /// <summary>未開始の予約と進行中の旧 Playlist フェードを解除する。</summary>
+    public void CancelPlaylistTransition()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _provider?.CancelPlaylistTransition();
+        Trace("playlist.cancel-transition");
+    }
+
+    /// <summary>Form1 のポーリング用 Playlist 遷移状態。</summary>
+    public bool TryGetPlaylistTransitionState(out PlaylistTransitionState state)
+    {
+        state = default;
+        return _provider?.TryGetPlaylistTransitionState(out state) == true;
+    }
+
+    private bool IsValidPlaylistRange(long startSample, long endSample) =>
+        startSample >= 0 && endSample > startSample && endSample <= FrameCount;
+
     public void Load(string path)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -286,7 +459,17 @@ internal sealed class WaveAudioPlayer : IDisposable
         var info = WavFileInfo.Read(path);
         _reader = new WaveFileReader(path);
         _exitReader = new WaveFileReader(path);
-        _provider = new StereoFloatWaveProvider(_reader, _exitReader, info);
+        _playlistFadeReader = new WaveFileReader(path);
+        _playlistExitFadeReader = new WaveFileReader(path);
+        _playlistPreRollReader = new WaveFileReader(path);
+        _provider = new StereoFloatWaveProvider(
+            _reader,
+            _exitReader,
+            _playlistFadeReader,
+            _playlistExitFadeReader,
+            _playlistPreRollReader,
+            info,
+            message => Trace(message));
         PushActivePlanToProvider();
         _output = new WaveOutEvent();
         _output.Init(_provider);
@@ -319,6 +502,7 @@ internal sealed class WaveAudioPlayer : IDisposable
 
         _output.Play();
         _isPlaying = true;
+        Trace($"transport.play sample={_provider?.CurrentMainSample ?? 0}");
     }
 
     public void Pause()
@@ -332,6 +516,8 @@ internal sealed class WaveAudioPlayer : IDisposable
 
         _output.Pause();
         _isPlaying = false;
+        _provider?.ResetOutputPeak();
+        Trace($"transport.pause sample={_provider?.CurrentMainSample ?? 0}");
     }
 
     public void Stop()
@@ -344,10 +530,13 @@ internal sealed class WaveAudioPlayer : IDisposable
             return;
         }
 
+        _provider?.ClearPlaylistPlayback();
         _output.Stop();
         _reader.Position = 0;
         _provider?.StopExitLayer();
         _isPlaying = false;
+        _provider?.ResetOutputPeak();
+        Trace("transport.stop");
     }
 
     /// <summary>再生中なら一時停止、停止中なら再生。</summary>
@@ -373,7 +562,8 @@ internal sealed class WaveAudioPlayer : IDisposable
             return;
         }
 
-        // ジャンプ時は Exit 二重再生を直ちに止める（Arm 前でも確実に）
+        // ジャンプ時は Exit／Playlist 遷移を直ちに止める（Arm 前でも確実に）
+        _provider?.ClearPlaylistPlayback();
         _provider?.StopExitLayer();
 
         var duration = _reader.TotalTime;
@@ -391,6 +581,7 @@ internal sealed class WaveAudioPlayer : IDisposable
         }
 
         _reader.CurrentTime = TimeSpan.FromTicks(ticks);
+        Trace($"transport.seek progress={clamped:R} sample={_provider?.CurrentMainSample ?? 0}");
     }
 
     public void Dispose()
@@ -406,18 +597,27 @@ internal sealed class WaveAudioPlayer : IDisposable
 
     private void OnPlaybackStopped(object? sender, StoppedEventArgs e)
     {
-        if (_reader is null)
+        if (_suppressPlaybackEnded || _reader is null)
         {
             return;
         }
 
         // 末尾到達時のみ終了扱い（Stop 呼び出しでも発火するため位置で判定）
         // ループ中はプロバイダが折り返すので、ここに来るのは真の EOF／Stop
-        if (_reader.Position >= _reader.Length || _reader.CurrentTime >= _reader.TotalTime)
+        var playlistEnded = _provider?.TryResetPlaylistAfterEnd() == true;
+        if (playlistEnded
+            || _reader.Position >= _reader.Length
+            || _reader.CurrentTime >= _reader.TotalTime)
         {
-            _reader.Position = 0;
+            if (!playlistEnded)
+            {
+                _reader.Position = 0;
+            }
+
             _provider?.StopExitLayer();
             _isPlaying = false;
+            _provider?.ResetOutputPeak();
+            Trace($"playback.ended playlistEnded={playlistEnded} sample={_provider?.CurrentMainSample ?? 0}");
             PlaybackEnded?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -425,7 +625,9 @@ internal sealed class WaveAudioPlayer : IDisposable
     private void StopAndRelease()
     {
         _isPlaying = false;
+        _provider?.ClearPlaylistPlayback();
         _provider?.StopExitLayer();
+        _provider?.ResetOutputPeak();
         _provider = null;
 
         if (_output is not null)
@@ -447,7 +649,27 @@ internal sealed class WaveAudioPlayer : IDisposable
             _exitReader.Dispose();
             _exitReader = null;
         }
+
+        if (_playlistFadeReader is not null)
+        {
+            _playlistFadeReader.Dispose();
+            _playlistFadeReader = null;
+        }
+
+        if (_playlistExitFadeReader is not null)
+        {
+            _playlistExitFadeReader.Dispose();
+            _playlistExitFadeReader = null;
+        }
+
+        if (_playlistPreRollReader is not null)
+        {
+            _playlistPreRollReader.Dispose();
+            _playlistPreRollReader = null;
+        }
     }
+
+    private void Trace(string message) => Diagnostic?.Invoke(this, message);
 
     /// <summary>
     /// PCM / IEEE float の WAV を ACM を使わずステレオ float に変換する再生用プロバイダ。
@@ -456,9 +678,12 @@ internal sealed class WaveAudioPlayer : IDisposable
     private sealed class StereoFloatWaveProvider : IWaveProvider
     {
         private const float FoldGain = 0.7071f;
-
         private readonly WaveFileReader _source;
         private readonly WaveFileReader _exitSource;
+        private readonly WaveFileReader _playlistFadeSource;
+        private readonly WaveFileReader _playlistExitFadeSource;
+        private readonly WaveFileReader _playlistPreRollSource;
+        private readonly Action<string> _diagnostic;
         private readonly Func<byte[], int, float> _sampleReader;
         private readonly int _sourceBlockAlign;
         private readonly int _channels;
@@ -467,14 +692,51 @@ internal sealed class WaveAudioPlayer : IDisposable
         private byte[] _pcmScratch = [];
         private byte[] _mainFloat = [];
         private byte[] _exitFloat = [];
+        private byte[] _playlistFadeFloat = [];
+        private byte[] _playlistExitFadeFloat = [];
+        private byte[] _playlistPreRollFloat = [];
         private readonly object _gate = new();
+        private readonly object _readGate = new();
         private LoopPlaybackPlan? _activePlan;
         private bool _exitPlaying;
         private long _exitStartSample;
         private long _exitEndSample;
         private long _exitStartTickMs;
+        private PlaylistTransitionRequest? _pendingPlaylistTransition;
+        private long? _playlistStartSample;
+        private long? _playlistEndSample;
+        private bool _playlistFadePlaying;
+        private long _playlistFadeStartSample;
+        private long _playlistFadeEndSample;
+        private long _playlistFadeStartTickMs;
+        private long _playlistFadeExitStartSample;
+        private long _playlistFadeExitEndSample;
+        private bool _playlistExitFadePlaying;
+        private long _playlistExitFadeEndSample;
+        private bool _playlistPreRollPlaying;
+        private bool _playlistMainFadeInPlaying;
+        private long _playlistMainFadeInFramesRead;
+        private int _playlistMainFadeInFrameCount;
+        private bool _playlistPreRollFadeInPlaying;
+        private long _playlistPreRollFadeInFramesRead;
+        private int _playlistPreRollFadeInFrameCount;
+        private long _playlistFadeIncomingFramesRead;
+        private int _playlistFadeIncomingFrameCount;
+        private long _playlistFadeFramesRead;
+        private int _playlistFadeFrameCount;
+        private long _playlistRequestGeneration;
+        private long _playlistStartedGeneration;
+        private long _playlistStartedTargetSample;
+        private float _outputPeak;
 
-        public StereoFloatWaveProvider(WaveFileReader source, WaveFileReader exitSource, WavFileInfo info)
+        public StereoFloatWaveProvider(
+            WaveFileReader source,
+            WaveFileReader exitSource,
+            WaveFileReader playlistFadeSource,
+            WaveFileReader playlistExitFadeSource,
+            WaveFileReader playlistPreRollSource,
+            WavFileInfo info,
+            Action<string> diagnostic)
         {
             if (info.Channels == 0 || info.BlockAlign == 0 || info.SampleRate == 0)
             {
@@ -483,6 +745,10 @@ internal sealed class WaveAudioPlayer : IDisposable
 
             _source = source;
             _exitSource = exitSource;
+            _playlistFadeSource = playlistFadeSource;
+            _playlistExitFadeSource = playlistExitFadeSource;
+            _playlistPreRollSource = playlistPreRollSource;
+            _diagnostic = diagnostic;
             _sampleReader = WavPeakReader.CreateSampleReader(info.AudioFormat, info.BitsPerSample);
             _channels = info.Channels;
             _sourceBlockAlign = info.BlockAlign;
@@ -490,9 +756,25 @@ internal sealed class WaveAudioPlayer : IDisposable
             var extraChannels = Math.Max(0, _channels - 2);
             _normalize = 1f / (1f + extraChannels * FoldGain);
             WaveFormat = WaveFormat.CreateIeeeFloatWaveFormat((int)info.SampleRate, 2);
+            _playlistFadeFrameCount = Math.Max(1, (int)Math.Round(info.SampleRate * 0.5d));
         }
 
         public WaveFormat WaveFormat { get; }
+
+        public float OutputPeak => Volatile.Read(ref _outputPeak);
+
+        public void ResetOutputPeak() => Volatile.Write(ref _outputPeak, 0f);
+
+        public long CurrentMainSample
+        {
+            get
+            {
+                lock (_readGate)
+                {
+                    return CurrentSample(_source);
+                }
+            }
+        }
 
         public void SetActivePlan(LoopPlaybackPlan? plan)
         {
@@ -501,6 +783,273 @@ internal sealed class WaveAudioPlayer : IDisposable
                 _activePlan = plan;
                 // アーム／解除だけでは Exit を始めない（ループ折り返しで開始）
                 _exitPlaying = false;
+            }
+        }
+
+        public LoopPlaybackPlan? GetActivePlan()
+        {
+            lock (_gate)
+            {
+                return _activePlan;
+            }
+        }
+
+        public void StartPlaylistRange(long startSample, long endSample, LoopPlaybackPlan? plan)
+        {
+            lock (_readGate)
+            {
+                var generation = NextPlaylistGeneration();
+                SeekToSample(_source, startSample);
+                lock (_gate)
+                {
+                    _pendingPlaylistTransition = null;
+                    _playlistFadePlaying = false;
+                    _playlistExitFadePlaying = false;
+                    _playlistPreRollPlaying = false;
+                    ResetMainFadeInNoLock();
+                    ResetPreRollFadeInNoLock();
+                    _playlistStartSample = startSample;
+                    _playlistEndSample = endSample;
+                    _activePlan = plan;
+                    _exitPlaying = false;
+                    _playlistStartedGeneration = generation;
+                    _playlistStartedTargetSample = startSample;
+                }
+                _diagnostic($"provider.playlist-range-start generation={generation} start={startSample} end={endSample} loopPlan={plan?.ToString() ?? "none"}");
+            }
+        }
+
+        public bool TrySchedulePlaylistTransition(
+            long startSample,
+            long endSample,
+            long? sourceExitSample,
+            long sourcePartStartSample,
+            PlaylistDestinationSyncMode destinationSyncMode,
+            long preRollFrameCount,
+            bool allowShortPreRoll,
+            long fadeSourceEndSample,
+            int fadeInFrameCount,
+            int fadeFrameCount,
+            Func<long, LoopPlaybackPlan?> findPlan,
+            out PlaylistTransitionSchedule schedule)
+        {
+            lock (_readGate)
+            {
+                var currentSample = CurrentSample(_source);
+                var syncBoundarySample = sourceExitSample ?? currentSample;
+                var sourceRelativeSample = Math.Max(
+                    0L,
+                    syncBoundarySample - sourcePartStartSample);
+                if (syncBoundarySample < currentSample
+                    || fadeSourceEndSample < syncBoundarySample)
+                {
+                    schedule = default;
+                    _diagnostic($"provider.playlist-schedule-rejected current={currentSample} sourceExit={sourceExitSample?.ToString() ?? "immediate"} sync={syncBoundarySample} fadeEnd={fadeSourceEndSample}");
+                    return false;
+                }
+
+                var effectivePreRollFrameCount =
+                    destinationSyncMode == PlaylistDestinationSyncMode.EntryCue
+                        ? preRollFrameCount
+                        : 0L;
+                var desiredTriggerSample =
+                    syncBoundarySample - effectivePreRollFrameCount;
+                var startsImmediately = desiredTriggerSample <= currentSample;
+                if (startsImmediately
+                    && sourceExitSample.HasValue
+                    && !allowShortPreRoll)
+                {
+                    schedule = default;
+                    _diagnostic($"provider.playlist-schedule-rejected-short-preroll current={currentSample} desiredTrigger={desiredTriggerSample} sync={syncBoundarySample} preRoll={preRollFrameCount}");
+                    return false;
+                }
+
+                var triggerSample = startsImmediately
+                    ? currentSample
+                    : desiredTriggerSample;
+                var targetEntrySample = destinationSyncMode switch
+                {
+                    PlaylistDestinationSyncMode.SameTime =>
+                        startSample + sourceRelativeSample,
+                    _ => startSample + (syncBoundarySample - triggerSample),
+                };
+                if (destinationSyncMode == PlaylistDestinationSyncMode.SameTime
+                    && targetEntrySample >= endSample)
+                {
+                    schedule = new PlaylistTransitionSchedule(
+                        0,
+                        triggerSample,
+                        syncBoundarySample,
+                        targetEntrySample,
+                        startsImmediately,
+                        sourceRelativeSample,
+                        "same-time-out-of-range");
+                    _diagnostic($"provider.playlist-schedule-rejected-same-time current={currentSample} sourcePartStart={sourcePartStartSample} sourceRelative={sourceRelativeSample} sync={syncBoundarySample} targetStart={startSample} targetSwitch={targetEntrySample} targetEnd={endSample}");
+                    return false;
+                }
+
+                if (triggerSample < 0
+                    || targetEntrySample < startSample
+                    || targetEntrySample > endSample)
+                {
+                    schedule = default;
+                    _diagnostic($"provider.playlist-schedule-rejected-range current={currentSample} trigger={triggerSample} sync={syncBoundarySample} targetStart={startSample} targetEntry={targetEntrySample} targetEnd={endSample}");
+                    return false;
+                }
+
+                var generation = NextPlaylistGeneration();
+                PlaylistTransitionRequest transition;
+                lock (_gate)
+                {
+                    _pendingPlaylistTransition = null;
+                    _playlistPreRollPlaying = false;
+                    ResetPreRollFadeInNoLock();
+                    transition = new PlaylistTransitionRequest(
+                        startSample,
+                        targetEntrySample,
+                        endSample,
+                        triggerSample,
+                        syncBoundarySample,
+                        Math.Max(syncBoundarySample, fadeSourceEndSample),
+                        Math.Max(0, fadeInFrameCount),
+                        Math.Max(1, fadeFrameCount),
+                        findPlan(targetEntrySample),
+                        generation);
+                    _pendingPlaylistTransition = transition;
+                }
+
+                if (startsImmediately)
+                {
+                    if (triggerSample < syncBoundarySample)
+                    {
+                        BeginPlaylistPreRoll(transition);
+                    }
+                    else
+                    {
+                        BeginPlaylistTransition(transition);
+                    }
+                }
+
+                schedule = new PlaylistTransitionSchedule(
+                    generation,
+                    triggerSample,
+                    syncBoundarySample,
+                    targetEntrySample,
+                    startsImmediately,
+                    sourceRelativeSample,
+                    null);
+                _diagnostic($"provider.playlist-schedule generation={generation} current={currentSample} destinationSync={destinationSyncMode} sourcePartStart={sourcePartStartSample} sourceRelative={sourceRelativeSample} trigger={triggerSample} sync={syncBoundarySample} targetStart={startSample} targetEntry={targetEntrySample} targetEnd={endSample} fadeEnd={fadeSourceEndSample} fadeInFrames={fadeInFrameCount} fadeOutFrames={fadeFrameCount} startedImmediately={startsImmediately}");
+                return true;
+            }
+        }
+
+        public void CancelPlaylistTransition()
+        {
+            lock (_readGate)
+            {
+                var currentSample = CurrentSample(_source);
+                var hadPending = false;
+                var hadFade = false;
+                lock (_gate)
+                {
+                    hadPending = _pendingPlaylistTransition is not null;
+                    hadFade = _playlistFadePlaying
+                        || _playlistExitFadePlaying
+                        || _playlistPreRollPlaying;
+                    _pendingPlaylistTransition = null;
+                    _playlistFadePlaying = false;
+                    _playlistExitFadePlaying = false;
+                    _playlistPreRollPlaying = false;
+                    ResetPreRollFadeInNoLock();
+                }
+                _diagnostic($"provider.playlist-cancel current={currentSample} hadPending={hadPending} hadFade={hadFade}");
+            }
+        }
+
+        public void ClearPlaylistPlayback()
+        {
+            lock (_readGate)
+            {
+                lock (_gate)
+                {
+                    _pendingPlaylistTransition = null;
+                    _playlistFadePlaying = false;
+                    _playlistExitFadePlaying = false;
+                    _playlistPreRollPlaying = false;
+                    ResetMainFadeInNoLock();
+                    ResetPreRollFadeInNoLock();
+                    _playlistStartSample = null;
+                    _playlistEndSample = null;
+                    _playlistRequestGeneration = 0;
+                    _playlistStartedGeneration = 0;
+                    _playlistStartedTargetSample = 0;
+                }
+            }
+        }
+
+        public bool TryResetPlaylistAfterEnd()
+        {
+            lock (_readGate)
+            {
+                long? start;
+                long? end;
+                lock (_gate)
+                {
+                    start = _playlistStartSample;
+                    end = _playlistEndSample;
+                }
+
+                if (start is not long rangeStart
+                    || end is not long rangeEnd
+                    || CurrentSample(_source) < rangeEnd)
+                {
+                    return false;
+                }
+
+                SeekToSample(_source, rangeStart);
+                lock (_gate)
+                {
+                    _pendingPlaylistTransition = null;
+                    _playlistFadePlaying = false;
+                    _playlistExitFadePlaying = false;
+                    _playlistPreRollPlaying = false;
+                    ResetMainFadeInNoLock();
+                    ResetPreRollFadeInNoLock();
+                    _exitPlaying = false;
+                }
+
+                _diagnostic($"provider.playlist-ended resetTo={rangeStart} end={rangeEnd}");
+                return true;
+            }
+        }
+
+        public bool TryGetPlaylistTransitionState(out PlaylistTransitionState state)
+        {
+            lock (_gate)
+            {
+                var pending = _pendingPlaylistTransition;
+                if (pending is null && _playlistStartedGeneration == 0)
+                {
+                    state = default;
+                    return false;
+                }
+
+                state = new PlaylistTransitionState(
+                    pending?.TargetStartSample ?? _playlistStartedTargetSample,
+                    pending?.TargetEndSample ?? _playlistEndSample ?? 0,
+                    pending?.TriggerSample,
+                    pending?.Generation ?? _playlistRequestGeneration,
+                    _playlistStartedGeneration,
+                    _playlistFadePlaying);
+                return true;
+            }
+        }
+
+        private long NextPlaylistGeneration()
+        {
+            lock (_gate)
+            {
+                return ++_playlistRequestGeneration;
             }
         }
 
@@ -530,12 +1079,14 @@ internal sealed class WaveAudioPlayer : IDisposable
                 _exitStartTickMs = Environment.TickCount64;
                 SeekExitToSample(_exitStartSample);
             }
+            _diagnostic($"provider.exit-start start={loop.LoopEndSample} end={loop.ExitEndSample}");
         }
 
         private void WrapMainToLoopStart(LoopPlaybackPlan loop)
         {
             SeekToSample(_source, loop.LoopStartSample);
             BeginExitOnLoopWrap(loop);
+            _diagnostic($"provider.loop-wrap start={loop.LoopStartSample} end={loop.LoopEndSample}");
         }
 
         /// <summary>
@@ -581,32 +1132,137 @@ internal sealed class WaveAudioPlayer : IDisposable
             return true;
         }
 
+        public bool TryGetPlaylistFadePlaybackProgress(
+            long frameCount,
+            int sampleRate,
+            out double progress,
+            out bool isExit)
+        {
+            progress = 0d;
+            isExit = false;
+            if (frameCount <= 0 || sampleRate <= 0)
+            {
+                return false;
+            }
+
+            long start;
+            long end;
+            long startTick;
+            long exitStart;
+            long exitEnd;
+            lock (_gate)
+            {
+                if (!_playlistFadePlaying)
+                {
+                    return false;
+                }
+
+                start = _playlistFadeStartSample;
+                end = Math.Min(
+                    _playlistFadeEndSample,
+                    start + _playlistFadeFrameCount);
+                startTick = _playlistFadeStartTickMs;
+                exitStart = _playlistFadeExitStartSample;
+                exitEnd = _playlistFadeExitEndSample;
+            }
+
+            var elapsedSeconds = Math.Max(
+                0d,
+                (Environment.TickCount64 - startTick) / 1000d);
+            var sample = start + (long)Math.Floor(elapsedSeconds * sampleRate);
+            if (sample >= end)
+            {
+                return false;
+            }
+
+            progress = Math.Clamp(sample / (double)frameCount, 0d, 1d);
+            isExit = exitEnd > exitStart
+                && sample >= exitStart
+                && sample < exitEnd;
+            return true;
+        }
+
         public int Read(byte[] buffer, int offset, int count)
+        {
+            lock (_readGate)
+            {
+                return ReadCore(buffer, offset, count);
+            }
+        }
+
+        private int ReadCore(byte[] buffer, int offset, int count)
         {
             var framesNeeded = count / 8;
             if (framesNeeded <= 0)
             {
+                Volatile.Write(ref _outputPeak, 0f);
                 return 0;
             }
 
             var outIndex = offset;
             var totalFrames = 0;
+            var outputPeak = 0f;
             while (totalFrames < framesNeeded)
             {
                 LoopPlaybackPlan? plan;
                 var exitPlaying = false;
                 long exitStart = 0;
                 long exitEnd = 0;
+                PlaylistTransitionRequest? transition;
+                long? playlistEnd;
+                var playlistFadePlaying = false;
+                var playlistPreRollPlaying = false;
                 lock (_gate)
                 {
                     plan = _activePlan;
                     exitPlaying = _exitPlaying;
                     exitStart = _exitStartSample;
                     exitEnd = _exitEndSample;
+                    transition = _pendingPlaylistTransition;
+                    playlistEnd = _playlistEndSample;
+                    playlistFadePlaying = _playlistFadePlaying;
+                    playlistPreRollPlaying = _playlistPreRollPlaying;
                 }
 
                 var samplePos = CurrentSample(_source);
                 var framesThis = framesNeeded - totalFrames;
+
+                // Playlist 遷移はループ折り返しより優先する。境界まででチャンクを厳密に分割する。
+                if (transition is { } pending)
+                {
+                    if (!playlistPreRollPlaying)
+                    {
+                        if (samplePos >= pending.TriggerSample)
+                        {
+                            if (pending.TriggerSample < pending.SyncBoundarySample)
+                            {
+                                BeginPlaylistPreRoll(pending);
+                            }
+                            else
+                            {
+                                BeginPlaylistTransition(pending);
+                            }
+
+                            continue;
+                        }
+
+                        framesThis = (int)Math.Min(
+                            framesThis,
+                            pending.TriggerSample - samplePos);
+                    }
+                    else
+                    {
+                        if (samplePos >= pending.SyncBoundarySample)
+                        {
+                            BeginPlaylistTransition(pending);
+                            continue;
+                        }
+
+                        framesThis = (int)Math.Min(
+                            framesThis,
+                            pending.SyncBoundarySample - samplePos);
+                    }
+                }
 
                 if (plan is { } loop)
                 {
@@ -626,6 +1282,16 @@ internal sealed class WaveAudioPlayer : IDisposable
                     framesThis = (int)Math.Min(framesThis, untilEnd);
                 }
 
+                if (playlistEnd is long rangeEnd)
+                {
+                    if (samplePos >= rangeEnd)
+                    {
+                        break;
+                    }
+
+                    framesThis = (int)Math.Min(framesThis, rangeEnd - samplePos);
+                }
+
                 // メインを float バッファへ
                 EnsureBuffer(ref _mainFloat, framesThis * 8);
                 var gotFrames = ReadDecodedFrames(_source, _mainFloat, 0, framesThis);
@@ -643,6 +1309,39 @@ internal sealed class WaveAudioPlayer : IDisposable
                     MixExitLayer(_exitFloat, 0, gotFrames, exitStart, exitEnd);
                 }
 
+                EnsureBuffer(ref _playlistFadeFloat, gotFrames * 8);
+                Array.Clear(_playlistFadeFloat, 0, gotFrames * 8);
+                if (playlistFadePlaying)
+                {
+                    MixPlaylistFade(_playlistFadeFloat, 0, gotFrames);
+                }
+
+                EnsureBuffer(ref _playlistPreRollFloat, gotFrames * 8);
+                Array.Clear(_playlistPreRollFloat, 0, gotFrames * 8);
+                if (playlistPreRollPlaying)
+                {
+                    _ = ReadDecodedFrames(
+                        _playlistPreRollSource,
+                        _playlistPreRollFloat,
+                        0,
+                        gotFrames);
+                }
+
+                ApplyFadeIn(
+                    _mainFloat,
+                    gotFrames,
+                    ref _playlistMainFadeInPlaying,
+                    ref _playlistMainFadeInFramesRead,
+                    _playlistMainFadeInFrameCount,
+                    "main");
+                ApplyFadeIn(
+                    _playlistPreRollFloat,
+                    gotFrames,
+                    ref _playlistPreRollFadeInPlaying,
+                    ref _playlistPreRollFadeInFramesRead,
+                    _playlistPreRollFadeInFrameCount,
+                    "pre-roll");
+
                 // 加算ミックス（簡易クリップ）
                 for (var i = 0; i < gotFrames; i++)
                 {
@@ -650,21 +1349,303 @@ internal sealed class WaveAudioPlayer : IDisposable
                     var mainR = BitConverter.ToSingle(_mainFloat, i * 8 + 4);
                     var exitL = BitConverter.ToSingle(_exitFloat, i * 8);
                     var exitR = BitConverter.ToSingle(_exitFloat, i * 8 + 4);
-                    BitConverter.TryWriteBytes(buffer.AsSpan(outIndex + i * 8, 4), ClampSample(mainL + exitL));
-                    BitConverter.TryWriteBytes(buffer.AsSpan(outIndex + i * 8 + 4, 4), ClampSample(mainR + exitR));
-                }
-
-                if (plan is { } armed
-                    && CurrentSample(_source) >= armed.LoopEndSample)
-                {
-                    WrapMainToLoopStart(armed);
+                    var fadeL = BitConverter.ToSingle(_playlistFadeFloat, i * 8);
+                    var fadeR = BitConverter.ToSingle(_playlistFadeFloat, i * 8 + 4);
+                    var preRollL = BitConverter.ToSingle(_playlistPreRollFloat, i * 8);
+                    var preRollR = BitConverter.ToSingle(_playlistPreRollFloat, i * 8 + 4);
+                    var outputL = ClampSample(mainL + exitL + fadeL + preRollL);
+                    var outputR = ClampSample(mainR + exitR + fadeR + preRollR);
+                    outputPeak = Math.Max(
+                        outputPeak,
+                        Math.Max(Math.Abs(outputL), Math.Abs(outputR)));
+                    BitConverter.TryWriteBytes(
+                        buffer.AsSpan(outIndex + i * 8, 4),
+                        outputL);
+                    BitConverter.TryWriteBytes(
+                        buffer.AsSpan(outIndex + i * 8 + 4, 4),
+                        outputR);
                 }
 
                 outIndex += gotFrames * 8;
                 totalFrames += gotFrames;
             }
 
+            Volatile.Write(ref _outputPeak, outputPeak);
             return totalFrames * 8;
+        }
+
+        private void BeginPlaylistPreRoll(PlaylistTransitionRequest transition)
+        {
+            SeekToSample(_playlistPreRollSource, transition.TargetStartSample);
+            lock (_gate)
+            {
+                _playlistPreRollPlaying = true;
+                _playlistPreRollFadeInFrameCount = transition.FadeInFrameCount;
+                _playlistPreRollFadeInFramesRead = 0;
+                _playlistPreRollFadeInPlaying =
+                    transition.FadeInFrameCount > 0;
+                _playlistStartedGeneration = transition.Generation;
+                _playlistStartedTargetSample = transition.TargetStartSample;
+            }
+
+            _diagnostic(
+                $"provider.playlist-preroll-start generation={transition.Generation}"
+                + $" trigger={transition.TriggerSample}"
+                + $" sync={transition.SyncBoundarySample}"
+                + $" targetStart={transition.TargetStartSample}"
+                + $" targetEntry={transition.TargetEntrySample}"
+                + $" fadeInFrames={transition.FadeInFrameCount}");
+        }
+
+        private void BeginPlaylistTransition(PlaylistTransitionRequest transition)
+        {
+            // 同期境界までは旧 Playlist をメインで維持し、ここから専用リーダーでフェードする。
+            SeekToSample(_playlistFadeSource, transition.SyncBoundarySample);
+            long exitFadeStart = 0;
+            long exitFadeEnd = 0;
+            lock (_gate)
+            {
+                if (_exitPlaying)
+                {
+                    exitFadeStart = CurrentSample(_exitSource);
+                    exitFadeEnd = _exitEndSample;
+                }
+            }
+
+            var carryExitFade = exitFadeEnd > exitFadeStart;
+            if (carryExitFade)
+            {
+                SeekToSample(_playlistExitFadeSource, exitFadeStart);
+            }
+
+            SeekToSample(_source, transition.TargetEntrySample);
+            var continuedFromPreRoll = false;
+            var sourceExitWillBeMaintained = false;
+            lock (_gate)
+            {
+                var oldPlan = _activePlan;
+                continuedFromPreRoll = _playlistPreRollPlaying;
+                sourceExitWillBeMaintained = carryExitFade
+                    || oldPlan is { HasExit: true } sourcePlan
+                    && transition.FadeFrameCount
+                        > Math.Max(
+                            0L,
+                            sourcePlan.LoopEndSample
+                            - transition.SyncBoundarySample);
+                // 同時に保持できる旧フェードはこの1本だけ。再遷移時は上書きして先頭から開始。
+                _playlistFadePlaying = true;
+                _playlistFadeStartSample = transition.SyncBoundarySample;
+                _playlistFadeEndSample = transition.FadeSourceEndSample;
+                _playlistFadeStartTickMs = Environment.TickCount64;
+                _playlistFadeExitStartSample = oldPlan is { HasExit: true }
+                    ? oldPlan.Value.LoopEndSample
+                    : 0;
+                _playlistFadeExitEndSample = oldPlan is { HasExit: true }
+                    ? oldPlan.Value.ExitEndSample!.Value
+                    : 0;
+                _playlistFadeIncomingFramesRead =
+                    _playlistMainFadeInPlaying
+                        ? _playlistMainFadeInFramesRead
+                        : 0;
+                _playlistFadeIncomingFrameCount =
+                    _playlistMainFadeInPlaying
+                        ? _playlistMainFadeInFrameCount
+                        : 0;
+                _playlistExitFadePlaying = carryExitFade;
+                _playlistExitFadeEndSample = exitFadeEnd;
+                _playlistFadeFramesRead = 0;
+                _playlistFadeFrameCount = transition.FadeFrameCount;
+                _playlistPreRollPlaying = false;
+                if (continuedFromPreRoll)
+                {
+                    _playlistMainFadeInPlaying =
+                        _playlistPreRollFadeInPlaying;
+                    _playlistMainFadeInFramesRead =
+                        _playlistPreRollFadeInFramesRead;
+                    _playlistMainFadeInFrameCount =
+                        _playlistPreRollFadeInFrameCount;
+                }
+                else
+                {
+                    _playlistMainFadeInFrameCount =
+                        transition.FadeInFrameCount;
+                    _playlistMainFadeInFramesRead = 0;
+                    _playlistMainFadeInPlaying =
+                        transition.FadeInFrameCount > 0;
+                }
+                ResetPreRollFadeInNoLock();
+                _playlistStartSample = transition.TargetStartSample;
+                _playlistEndSample = transition.TargetEndSample;
+                _activePlan = transition.TargetPlan;
+                _exitPlaying = false;
+                _pendingPlaylistTransition = null;
+                _playlistStartedGeneration = transition.Generation;
+                _playlistStartedTargetSample = transition.TargetStartSample;
+            }
+            _diagnostic(
+                $"provider.playlist-transition-start generation={transition.Generation}"
+                + $" trigger={transition.TriggerSample}"
+                + $" sync={transition.SyncBoundarySample}"
+                + $" targetStart={transition.TargetStartSample}"
+                + $" targetEntry={transition.TargetEntrySample}"
+                + $" targetEnd={transition.TargetEndSample}"
+                + $" fadeInFrames={transition.FadeInFrameCount}"
+                + $" fadeInContinuedFromPreRoll={continuedFromPreRoll}"
+                + $" sourceExitWillBeMaintained={sourceExitWillBeMaintained}"
+                + $" oldExitCarried={carryExitFade}"
+                + $" oldExitStart={exitFadeStart}"
+                + $" oldExitEnd={exitFadeEnd}");
+        }
+
+        private void MixPlaylistFade(byte[] dest, int destOffset, int frames)
+        {
+            var framesRemaining = _playlistFadeFrameCount - _playlistFadeFramesRead;
+            if (framesRemaining <= 0)
+            {
+                StopPlaylistFade();
+                return;
+            }
+
+            var chunk = (int)Math.Min(frames, framesRemaining);
+            var sourceRemaining = Math.Max(
+                0L,
+                _playlistFadeEndSample - CurrentSample(_playlistFadeSource));
+            var mainFrames = (int)Math.Min(chunk, sourceRemaining);
+            var mainGot = mainFrames > 0
+                ? ReadDecodedFrames(_playlistFadeSource, dest, destOffset, mainFrames)
+                : 0;
+
+            var exitGot = 0;
+            if (_playlistExitFadePlaying)
+            {
+                var exitRemaining = Math.Max(
+                    0L,
+                    _playlistExitFadeEndSample - CurrentSample(_playlistExitFadeSource));
+                var exitFrames = (int)Math.Min(chunk, exitRemaining);
+                if (exitFrames > 0)
+                {
+                    EnsureBuffer(ref _playlistExitFadeFloat, exitFrames * 8);
+                    exitGot = ReadDecodedFrames(
+                        _playlistExitFadeSource,
+                        _playlistExitFadeFloat,
+                        0,
+                        exitFrames);
+                    for (var i = 0; i < exitGot; i++)
+                    {
+                        var at = destOffset + i * 8;
+                        BitConverter.TryWriteBytes(
+                            dest.AsSpan(at, 4),
+                            ClampSample(
+                                BitConverter.ToSingle(dest, at)
+                                + BitConverter.ToSingle(_playlistExitFadeFloat, i * 8)));
+                        BitConverter.TryWriteBytes(
+                            dest.AsSpan(at + 4, 4),
+                            ClampSample(
+                                BitConverter.ToSingle(dest, at + 4)
+                                + BitConverter.ToSingle(_playlistExitFadeFloat, i * 8 + 4)));
+                    }
+                }
+            }
+
+            var got = Math.Max(mainGot, exitGot);
+            for (var i = 0; i < got; i++)
+            {
+                var fadeIndex = _playlistFadeFramesRead + i;
+                var fadeOutGain = _playlistFadeFrameCount <= 1
+                    ? 0f
+                    : 1f - fadeIndex / (float)(_playlistFadeFrameCount - 1);
+                var fadeInGain = _playlistFadeIncomingFrameCount <= 0
+                    ? 1f
+                    : _playlistFadeIncomingFrameCount <= 1
+                        ? 1f
+                        : Math.Min(
+                            1f,
+                            (_playlistFadeIncomingFramesRead + fadeIndex)
+                            / (float)(_playlistFadeIncomingFrameCount - 1));
+                var gain = fadeOutGain * fadeInGain;
+                var at = destOffset + i * 8;
+                BitConverter.TryWriteBytes(
+                    dest.AsSpan(at, 4),
+                    BitConverter.ToSingle(dest, at) * gain);
+                BitConverter.TryWriteBytes(
+                    dest.AsSpan(at + 4, 4),
+                    BitConverter.ToSingle(dest, at + 4) * gain);
+            }
+
+            _playlistFadeFramesRead += got;
+            if (got <= 0 || _playlistFadeFramesRead >= _playlistFadeFrameCount)
+            {
+                StopPlaylistFade();
+            }
+        }
+
+        private void StopPlaylistFade()
+        {
+            lock (_gate)
+            {
+                _playlistFadePlaying = false;
+                _playlistFadeStartSample = 0;
+                _playlistFadeStartTickMs = 0;
+                _playlistFadeExitStartSample = 0;
+                _playlistFadeExitEndSample = 0;
+                _playlistFadeIncomingFramesRead = 0;
+                _playlistFadeIncomingFrameCount = 0;
+                _playlistExitFadePlaying = false;
+            }
+        }
+
+        private void ApplyFadeIn(
+            byte[] buffer,
+            int frames,
+            ref bool playing,
+            ref long framesRead,
+            int frameCount,
+            string layer)
+        {
+            if (!playing || frameCount <= 0 || frames <= 0)
+            {
+                return;
+            }
+
+            for (var i = 0; i < frames; i++)
+            {
+                var fadeIndex = framesRead + i;
+                var gain = frameCount <= 1
+                    ? 1f
+                    : Math.Min(
+                        1f,
+                        fadeIndex / (float)(frameCount - 1));
+                var at = i * 8;
+                BitConverter.TryWriteBytes(
+                    buffer.AsSpan(at, 4),
+                    BitConverter.ToSingle(buffer, at) * gain);
+                BitConverter.TryWriteBytes(
+                    buffer.AsSpan(at + 4, 4),
+                    BitConverter.ToSingle(buffer, at + 4) * gain);
+            }
+
+            framesRead += frames;
+            if (framesRead >= frameCount)
+            {
+                playing = false;
+                _diagnostic(
+                    $"provider.playlist-fade-in-complete layer={layer}"
+                    + $" frames={frameCount}");
+            }
+        }
+
+        private void ResetMainFadeInNoLock()
+        {
+            _playlistMainFadeInPlaying = false;
+            _playlistMainFadeInFramesRead = 0;
+            _playlistMainFadeInFrameCount = 0;
+        }
+
+        private void ResetPreRollFadeInNoLock()
+        {
+            _playlistPreRollFadeInPlaying = false;
+            _playlistPreRollFadeInFramesRead = 0;
+            _playlistPreRollFadeInFrameCount = 0;
         }
 
         private void MixExitLayer(byte[] dest, int destOffset, int frames, long exitStart, long exitEnd)
@@ -790,6 +1771,18 @@ internal sealed class WaveAudioPlayer : IDisposable
         }
 
         private void SeekExitToSample(long sample) => SeekToSample(_exitSource, sample);
+
+        private sealed record PlaylistTransitionRequest(
+            long TargetStartSample,
+            long TargetEntrySample,
+            long TargetEndSample,
+            long TriggerSample,
+            long SyncBoundarySample,
+            long FadeSourceEndSample,
+            int FadeInFrameCount,
+            int FadeFrameCount,
+            LoopPlaybackPlan? TargetPlan,
+            long Generation);
     }
 }
 
@@ -804,3 +1797,22 @@ internal readonly record struct LoopPlaybackPlan(
 
 /// <summary>ループ区間（終端サンプルは排他）。</summary>
 internal readonly record struct LoopSampleRange(long StartSample, long EndSample);
+
+/// <summary>音声スレッドが確定した Playlist 遷移タイミング。</summary>
+internal readonly record struct PlaylistTransitionSchedule(
+    long Generation,
+    long TriggerSample,
+    long SyncBoundarySample,
+    long TargetSwitchSample,
+    bool StartedImmediately,
+    long SourceRelativeSample,
+    string? RejectionReason);
+
+/// <summary>Playlist 遷移のポーリング用スナップショット。</summary>
+internal readonly record struct PlaylistTransitionState(
+    long TargetStartSample,
+    long TargetEndSample,
+    long? PendingBoundarySample,
+    long RequestGeneration,
+    long StartedGeneration,
+    bool IsOldPlaylistFading);

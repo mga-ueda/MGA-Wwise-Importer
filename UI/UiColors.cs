@@ -21,6 +21,19 @@ internal static class UiColors
     public static Color StatusBarBack { get; set; } = Color.FromArgb(22, 22, 24);
     public static Color StatusBarBorder { get; set; } = Color.FromArgb(55, 55, 58);
 
+    // --- Playlist 選択 ---
+    public static Color PlaylistBack { get; set; } = Color.FromArgb(30, 30, 30);
+    public static Color PlaylistDefaultFore { get; set; } = Color.FromArgb(150, 150, 150);
+    public static Color PlaylistHoverFore { get; set; } = Color.White;
+    public static Color PlaylistActiveFore { get; set; } = Color.White;
+    public static Color PlaylistButtonBorder { get; set; } = Color.FromArgb(58, 58, 58);
+    public static Color PlaylistAutoBack { get; set; } = Color.FromArgb(0, 92, 98);
+    public static Color PlaylistManualBack { get; set; } = Color.FromArgb(89, 89, 0);
+    public static Color PlaylistHoverBorder { get; set; } = Color.White;
+    public static Color PlaylistTransitionBorder { get; set; } = Color.FromArgb(0, 245, 255);
+    public static Color WaveformSourceMeterMinimum { get; set; } = Color.FromArgb(47, 23, 0);
+    public static Color WaveformSourceMeterMaximum { get; set; } = Color.FromArgb(255, 128, 0);
+
     // --- 波形ビュー共通 ---
     public static Color WaveformBack { get; set; } = Color.FromArgb(38, 38, 38);
     public static Color WaveFill { get; set; } = Color.FromArgb(182, 182, 182);
@@ -29,8 +42,13 @@ internal static class UiColors
     public static Color SeekCyan { get; set; } = Color.FromArgb(0, 245, 255);
     /// <summary>-E 二重再生用のシークバー／軌跡。</summary>
     public static Color SeekExit { get; set; } = Color.FromArgb(255, 220, 45, 45);
+    /// <summary>-A 先行再生用のシークバー／軌跡。</summary>
+    public static Color SeekAnacrusis { get; set; } = Color.FromArgb(80, 220, 110);
+    /// <summary>Playlist 遷移元フェードアウト用のシークバー／軌跡。</summary>
+    public static Color SeekFadeOut { get; set; } = Color.White;
     public static Color MouseGuide { get; set; } = Color.FromArgb(220, 255, 255, 255);
-    public static Color BarLine { get; set; } = Color.FromArgb(90, 170, 170, 170);
+    public static Color BarLine { get; set; } = Color.FromArgb(90, 204, 204, 204);
+    public static Color BeatLine { get; set; } = Color.FromArgb(45, 170, 170, 170);
     public static Color TempoChangeLine { get; set; } = Color.FromArgb(180, 180, 255, 180);
 
     // --- ラベル行（背景／文字） ---
@@ -78,14 +96,28 @@ internal static class UiColors
         new("LogMuted", "ログ文字（弱）", () => LogMuted, c => LogMuted = c),
         new("StatusBarBack", "ステータスバー背景", () => StatusBarBack, c => StatusBarBack = c),
         new("StatusBarBorder", "ステータスバー上線", () => StatusBarBorder, c => StatusBarBorder = c),
+        new("PlaylistBack", "Playlist・背景", () => PlaylistBack, c => PlaylistBack = c),
+        new("PlaylistDefaultFore", "Playlist・通常文字", () => PlaylistDefaultFore, c => PlaylistDefaultFore = c),
+        new("PlaylistHoverFore", "Playlist・波形ホバー文字", () => PlaylistHoverFore, c => PlaylistHoverFore = c),
+        new("PlaylistActiveFore", "Playlist・再生中文字", () => PlaylistActiveFore, c => PlaylistActiveFore = c),
+        new("PlaylistButtonBorder", "Playlist・ボタン枠", () => PlaylistButtonBorder, c => PlaylistButtonBorder = c),
+        new("PlaylistAutoBack", "Playlist・自動再生背景", () => PlaylistAutoBack, c => PlaylistAutoBack = c),
+        new("PlaylistManualBack", "Playlist・手動再生背景", () => PlaylistManualBack, c => PlaylistManualBack = c),
+        new("PlaylistHoverBorder", "Playlist・波形ホバー枠", () => PlaylistHoverBorder, c => PlaylistHoverBorder = c),
+        new("PlaylistTransitionBorder", "Playlist・遷移完了枠", () => PlaylistTransitionBorder, c => PlaylistTransitionBorder = c),
+        new("WaveformSourceMeterMinimum", "波形ファイル名・メーター最小", () => WaveformSourceMeterMinimum, c => WaveformSourceMeterMinimum = c),
+        new("WaveformSourceMeterMaximum", "波形ファイル名・メーター最大", () => WaveformSourceMeterMaximum, c => WaveformSourceMeterMaximum = c),
         new("WaveformBack", "波形エリア背景", () => WaveformBack, c => WaveformBack = c),
         new("WaveFill", "波形", () => WaveFill, c => WaveFill = c),
         new("WaveCenter", "波形センター線", () => WaveCenter, c => WaveCenter = c),
         new("EmptyHint", "空状態ヒント", () => EmptyHint, c => EmptyHint = c),
         new("SeekCyan", "再生ヘッド", () => SeekCyan, c => SeekCyan = c),
         new("SeekExit", "Exit 二重再生ヘッド", () => SeekExit, c => SeekExit = c),
+        new("SeekAnacrusis", "アウフタクト先行再生ヘッド", () => SeekAnacrusis, c => SeekAnacrusis = c),
+        new("SeekFadeOut", "遷移元フェードアウトヘッド", () => SeekFadeOut, c => SeekFadeOut = c),
         new("MouseGuide", "マウスガイド", () => MouseGuide, c => MouseGuide = c),
         new("BarLine", "小節線", () => BarLine, c => BarLine = c),
+        new("BeatLine", "拍線", () => BeatLine, c => BeatLine = c),
         new("TempoChangeLine", "テンポ変更線", () => TempoChangeLine, c => TempoChangeLine = c),
         new("BarNumberBg", "小節番号・背景", () => BarNumberBg, c => BarNumberBg = c),
         new("TempoBg", "テンポ・背景", () => TempoBg, c => TempoBg = c),
@@ -126,6 +158,7 @@ internal static class UiColors
         var values = IniFile.ReadSection(IniSection);
         if (values.Count == 0)
         {
+            SaveToIni();
             return;
         }
 
@@ -137,6 +170,12 @@ internal static class UiColors
                 var alpha = Defaults.TryGetValue(entry.Key, out var def) ? def.A : (byte)255;
                 entry.Set(Color.FromArgb(alpha, color.R, color.G, color.B));
             }
+        }
+
+        // 新しい色定義を追加したバージョンでも、既存 INI へ不足キーを自動追記する。
+        if (Entries.Any(entry => !values.ContainsKey(entry.Key)))
+        {
+            SaveToIni();
         }
     }
 
@@ -155,6 +194,8 @@ internal static class UiColors
             "TempoFg",
             "SignatureFg",
             "MarkerFg",
+            "PlaylistMeterMinimum",
+            "PlaylistMeterMaximum",
         ];
 
         var changed = false;
