@@ -32,7 +32,13 @@ internal sealed class BarJumpDialogForm : Form
     {
         _pad = ShadowBlur + Math.Max(Math.Abs(ShadowOffsetX), Math.Abs(ShadowOffsetY));
         _contentBounds = new Rectangle(_pad, _pad, ContentWidth, ContentHeight);
-        _inputBounds = new Rectangle(_contentBounds.X + 24, _contentBounds.Y + 36, 170, 34);
+        const int inputWidth = 170;
+        const int inputHeight = 34;
+        _inputBounds = new Rectangle(
+            _contentBounds.X + (ContentWidth - inputWidth) / 2,
+            _contentBounds.Y + 36,
+            inputWidth,
+            inputHeight);
 
         Text = "小節へジャンプ";
         FormBorderStyle = FormBorderStyle.None;
@@ -41,6 +47,8 @@ internal sealed class BarJumpDialogForm : Form
         MinimizeBox = false;
         ShowInTaskbar = false;
         KeyPreview = true;
+        AutoScaleMode = AutoScaleMode.None;
+        RightToLeft = RightToLeft.No;
         BackColor = UiColors.ForControlBack(UiColors.DialogShadow);
         ClientSize = new Size(ContentWidth + _pad * 2, ContentHeight + _pad * 2);
 
@@ -52,7 +60,9 @@ internal sealed class BarJumpDialogForm : Form
             ForeColor = UiColors.DialogFore,
             BorderStyle = BorderStyle.None,
             TextAlign = HorizontalAlignment.Center,
+            RightToLeft = RightToLeft.No,
             Margin = Padding.Empty,
+            AutoSize = false,
         };
         if (initialBarNumber is int initial && initial > 0)
         {
@@ -60,6 +70,7 @@ internal sealed class BarJumpDialogForm : Form
         }
 
         _barNumberBox.KeyDown += OnInputKeyDown;
+        _barNumberBox.HandleCreated += (_, _) => ApplyInputTextMargins();
 
         // UpdateLayeredWindow では子コントロールが見えないため、入力だけ前面の所有ウィンドウに載せる
         _inputHost = new Form
@@ -67,6 +78,8 @@ internal sealed class BarJumpDialogForm : Form
             FormBorderStyle = FormBorderStyle.None,
             ShowInTaskbar = false,
             StartPosition = FormStartPosition.Manual,
+            AutoScaleMode = AutoScaleMode.None,
+            RightToLeft = RightToLeft.No,
             BackColor = UiColors.ForControlBack(UiColors.DialogInputBack),
             Size = new Size(_inputBounds.Width - 4, _inputBounds.Height - 4),
             Padding = Padding.Empty,
@@ -96,6 +109,7 @@ internal sealed class BarJumpDialogForm : Form
 
         ApplyFrameBitmap();
         ShowInputHost();
+        ApplyInputTextMargins();
         _barNumberBox.Focus();
         _barNumberBox.SelectAll();
     }
@@ -169,6 +183,27 @@ internal sealed class BarJumpDialogForm : Form
         BarNumber = bar;
         DialogResult = DialogResult.OK;
         Close();
+    }
+
+    private void ApplyInputTextMargins()
+    {
+        if (!_barNumberBox.IsHandleCreated)
+        {
+            return;
+        }
+
+        // BorderStyle.None の EDIT は左右余白が非対称になりやすいので均等化する。
+        const int emSetMargins = 0x00D3;
+        const int ecLeftMargin = 0x0001;
+        const int ecRightMargin = 0x0002;
+        const int margin = 0;
+        var value = (IntPtr)((margin & 0xFFFF) | ((margin & 0xFFFF) << 16));
+        _ = SendMessage(
+            _barNumberBox.Handle,
+            emSetMargins,
+            (IntPtr)(ecLeftMargin | ecRightMargin),
+            value);
+        _barNumberBox.TextAlign = HorizontalAlignment.Center;
     }
 
     private void ShowInputHost()
@@ -350,6 +385,9 @@ internal sealed class BarJumpDialogForm : Form
         public byte SourceConstantAlpha;
         public byte AlphaFormat;
     }
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool UpdateLayeredWindow(

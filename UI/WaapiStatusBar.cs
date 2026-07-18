@@ -6,8 +6,15 @@ namespace MgaWwiseIMImporter.UI;
 internal sealed class WaapiStatusBar : Panel
 {
     private readonly Label _titleLabel;
-    private readonly Label _badgeLabel;
     private readonly Label _detailLabel;
+    private readonly Font _badgeFont = new("Yu Gothic UI", 9F, FontStyle.Bold);
+
+    private string _badgeText = "—";
+    private Color _badgeBack = Color.Transparent;
+    private Color _badgeFore = Color.Gray;
+    private bool _badgeFilled;
+    private Rectangle _badgeFillBounds;
+    private Rectangle _badgeTextBounds;
 
     public WaapiStatusBar()
     {
@@ -15,6 +22,7 @@ internal sealed class WaapiStatusBar : Panel
         Dock = DockStyle.Bottom;
         Padding = new Padding(10, 0, 10, 0);
         TabStop = false;
+        DoubleBuffered = true;
 
         _titleLabel = new Label
         {
@@ -22,15 +30,6 @@ internal sealed class WaapiStatusBar : Panel
             Text = "WAAPI",
             Font = new Font("Yu Gothic UI", 9F, FontStyle.Bold),
             Location = new Point(10, 7),
-            TabStop = false,
-        };
-
-        _badgeLabel = new Label
-        {
-            AutoSize = true,
-            Text = "—",
-            Font = new Font("Yu Gothic UI", 9F, FontStyle.Bold),
-            Location = new Point(58, 7),
             TabStop = false,
         };
 
@@ -44,12 +43,21 @@ internal sealed class WaapiStatusBar : Panel
         };
 
         Controls.Add(_detailLabel);
-        Controls.Add(_badgeLabel);
         Controls.Add(_titleLabel);
         Resize += (_, _) => LayoutLabels();
-        Paint += OnPaintSeparator;
+        Paint += OnPaint;
         ApplyColors();
         SetPending();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _badgeFont.Dispose();
+        }
+
+        base.Dispose(disposing);
     }
 
     public void ApplyColors()
@@ -57,30 +65,54 @@ internal sealed class WaapiStatusBar : Panel
         BackColor = UiColors.ForControlBack(UiColors.StatusBarBack);
         _titleLabel.ForeColor = UiColors.StatusBarTitleFore;
         _titleLabel.BackColor = BackColor;
-        _badgeLabel.BackColor = BackColor;
         _detailLabel.BackColor = BackColor;
 
-        if (_badgeLabel.Text == "OK")
+        if (_badgeText == "CONNECT")
         {
-            _badgeLabel.ForeColor = UiColors.StatusBarSuccessFore;
+            SetBadgeConnected();
             _detailLabel.ForeColor = UiColors.StatusBarDetailFore;
         }
-        else if (_badgeLabel.Text is "NG")
+        else if (_badgeText == "DISCONNECT")
         {
-            _badgeLabel.ForeColor = UiColors.StatusBarErrorFore;
+            SetBadgeDisconnected();
             _detailLabel.ForeColor = UiColors.StatusBarErrorFore;
         }
         else
         {
-            _badgeLabel.ForeColor = UiColors.StatusBarTitleFore;
+            SetBadgeNeutral();
             _detailLabel.ForeColor = UiColors.StatusBarTitleFore;
         }
+
+        Invalidate();
+    }
+
+    private void SetBadgeConnected()
+    {
+        _badgeText = "CONNECT";
+        _badgeBack = UiColors.StatusBarSuccessFore;
+        _badgeFore = Color.White;
+        _badgeFilled = true;
+    }
+
+    private void SetBadgeDisconnected()
+    {
+        _badgeText = "DISCONNECT";
+        _badgeBack = UiColors.StatusBarErrorFore;
+        _badgeFore = Color.White;
+        _badgeFilled = true;
+    }
+
+    private void SetBadgeNeutral()
+    {
+        _badgeBack = BackColor;
+        _badgeFore = UiColors.StatusBarTitleFore;
+        _badgeFilled = false;
     }
 
     public void SetPending()
     {
-        _badgeLabel.Text = "…";
-        _badgeLabel.ForeColor = UiColors.StatusBarTitleFore;
+        _badgeText = "…";
+        SetBadgeNeutral();
         _detailLabel.Text = "確認中…";
         _detailLabel.ForeColor = UiColors.StatusBarTitleFore;
         LayoutLabels();
@@ -88,8 +120,8 @@ internal sealed class WaapiStatusBar : Panel
 
     public void SetSkipped()
     {
-        _badgeLabel.Text = "—";
-        _badgeLabel.ForeColor = UiColors.StatusBarTitleFore;
+        _badgeText = "—";
+        SetBadgeNeutral();
         _detailLabel.Text = "起動時チェックオフ";
         _detailLabel.ForeColor = UiColors.StatusBarTitleFore;
         LayoutLabels();
@@ -99,14 +131,12 @@ internal sealed class WaapiStatusBar : Panel
     {
         if (result.Ok)
         {
-            _badgeLabel.Text = "OK";
-            _badgeLabel.ForeColor = UiColors.StatusBarSuccessFore;
+            SetBadgeConnected();
             _detailLabel.ForeColor = UiColors.StatusBarDetailFore;
         }
         else
         {
-            _badgeLabel.Text = "NG";
-            _badgeLabel.ForeColor = UiColors.StatusBarErrorFore;
+            SetBadgeDisconnected();
             _detailLabel.ForeColor = UiColors.StatusBarErrorFore;
         }
 
@@ -117,8 +147,7 @@ internal sealed class WaapiStatusBar : Panel
     /// <summary>接続維持中に選択パスだけ差し替える。</summary>
     public void UpdateSelection(string wwiseVersion, string projectName, string selectedPath)
     {
-        _badgeLabel.Text = "OK";
-        _badgeLabel.ForeColor = UiColors.StatusBarSuccessFore;
+        SetBadgeConnected();
         _detailLabel.ForeColor = UiColors.StatusBarDetailFore;
 
         var parts = new List<string>();
@@ -139,18 +168,57 @@ internal sealed class WaapiStatusBar : Panel
 
     private void LayoutLabels()
     {
-        var midY = Math.Max(0, (ClientSize.Height - _titleLabel.PreferredHeight) / 2);
-        _titleLabel.Location = new Point(Padding.Left, midY);
-        _badgeLabel.Location = new Point(_titleLabel.Right + 8, midY);
-        var detailX = _badgeLabel.Right + 12;
-        _detailLabel.Location = new Point(detailX, midY);
+        var titleMidY = Math.Max(0, (ClientSize.Height - _titleLabel.PreferredHeight) / 2);
+        _titleLabel.Location = new Point(Padding.Left, titleMidY);
+
+        const int padX = 8;
+        const int padY = 3;
+        // Yu Gothic UI はメトリクス上の中央より文字が下に見えるため、塗りだけ少し下げる。
+        const int fillNudgeY = 2;
+        var textSize = TextRenderer.MeasureText(
+            _badgeText,
+            _badgeFont,
+            Size.Empty,
+            TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+        var textTop = titleMidY
+            + Math.Max(0, (_titleLabel.PreferredHeight - textSize.Height) / 2);
+        var badgeWidth = textSize.Width + padX * 2;
+        var badgeLeft = _titleLabel.Right + 8;
+        _badgeTextBounds = new Rectangle(badgeLeft, textTop, badgeWidth, textSize.Height);
+        _badgeFillBounds = new Rectangle(
+            badgeLeft,
+            textTop - padY + fillNudgeY,
+            badgeWidth,
+            textSize.Height + padY * 2);
+
+        var detailX = _badgeFillBounds.Right + 12;
+        _detailLabel.Location = new Point(detailX, titleMidY);
         _detailLabel.Width = Math.Max(0, ClientSize.Width - detailX - Padding.Right);
         _detailLabel.Height = _detailLabel.PreferredHeight;
+        Invalidate();
     }
 
-    private void OnPaintSeparator(object? sender, PaintEventArgs e)
+    private void OnPaint(object? sender, PaintEventArgs e)
     {
         using var pen = new Pen(UiColors.StatusBarBorder);
         e.Graphics.DrawLine(pen, 0, 0, Width, 0);
+
+        if (_badgeFilled)
+        {
+            using var brush = new SolidBrush(_badgeBack);
+            e.Graphics.FillRectangle(brush, _badgeFillBounds);
+        }
+
+        TextRenderer.DrawText(
+            e.Graphics,
+            _badgeText,
+            _badgeFont,
+            _badgeTextBounds,
+            _badgeFore,
+            TextFormatFlags.HorizontalCenter
+            | TextFormatFlags.VerticalCenter
+            | TextFormatFlags.NoPrefix
+            | TextFormatFlags.NoPadding
+            | TextFormatFlags.SingleLine);
     }
 }

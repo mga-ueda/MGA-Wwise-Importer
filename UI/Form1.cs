@@ -27,12 +27,17 @@ public partial class Form1 : Form
     private WaapiSettings _waapiSettings = new();
     private WaapiProbeResult? _waapiLastResult;
     private string _waapiLoggedSelectionPath = string.Empty;
+    private int _waapiPollFailCount;
+    private bool _waapiPollBusy;
+    private const int WaapiPollFailThreshold = 3;
+    private const int WaapiConnectedPollMs = 1500;
+    private const int WaapiDisconnectedPollMs = 3000;
     private readonly WaveAudioPlayer _audioPlayer = new();
     private readonly System.Windows.Forms.Timer _playheadTimer = new() { Interval = 16 };
     private readonly System.Windows.Forms.Timer _playlistBlinkTimer = new() { Interval = 16 };
     private readonly System.Windows.Forms.Timer _playlistTransitionGlowTimer = new() { Interval = 16 };
     private readonly System.Windows.Forms.Timer _waveformScrollTimer = new() { Interval = 16 };
-    private readonly System.Windows.Forms.Timer _waapiSelectionTimer = new() { Interval = 1500 };
+    private readonly System.Windows.Forms.Timer _waapiSelectionTimer = new() { Interval = WaapiConnectedPollMs };
     private double _smoothProgress;
     private double _anchorProgress;
     private long _anchorTickMs;
@@ -70,6 +75,8 @@ public partial class Form1 : Form
     /// 戻る方向ジャンプ中に再生を一時停止したとき true。キーアップで再開する。
     /// </summary>
     private bool _resumePlaybackAfterBackwardSeek;
+    private TransportCommand? _activeTransportShortcutCommand;
+    private Keys _activeTransportShortcutKeyCode = Keys.None;
     private long _diagnosticSequence;
 
     public Form1()
@@ -101,7 +108,7 @@ public partial class Form1 : Form
         logAreaPanel.Resize += (_, _) => UpdatePlaylistSelectorWidth();
         logEditorPanel.Resize += (_, _) => PositionLogButtons();
         PositionLogButtons();
-        _waapiSelectionTimer.Tick += async (_, _) => await RefreshWaapiSelectionAsync();
+        _waapiSelectionTimer.Tick += async (_, _) => await PollWaapiAsync();
         _audioPlayer.PlaybackEnded += (_, _) =>
         {
             if (IsDisposed)
@@ -155,7 +162,7 @@ public partial class Form1 : Form
             _hoveredPlaylistPartNumber = partNumber;
             ApplyPlaylistSelectorColors();
         };
-        editorTextBox.ShortcutHandler = TryProcessWaveformShortcut;
+        editorTextBox.ShortcutHandler = keyData => TryProcessWaveformShortcut(keyData);
         editorTextBox.HandleCreated += (_, _) => ApplyDarkEditorChrome();
         playlistScrollPanel.HandleCreated += (_, _) => ApplyDarkScrollChrome(playlistScrollPanel);
         transportBar.HandleCreated += (_, _) => ApplyDarkScrollChrome(transportBar);
@@ -246,31 +253,57 @@ public partial class Form1 : Form
 
         if (result.Ok)
         {
-            if (!_waapiSelectionTimer.Enabled)
-            {
-                _waapiSelectionTimer.Start();
-            }
+            _waapiPollFailCount = 0;
         }
-        else
+
+        // 切断後もポーリング継続（再接続待ち）。間隔だけ広げる。
+        _waapiSelectionTimer.Interval = result.Ok ? WaapiConnectedPollMs : WaapiDisconnectedPollMs;
+        if (!_waapiSelectionTimer.Enabled)
         {
-            _waapiSelectionTimer.Stop();
+            _waapiSelectionTimer.Start();
         }
     }
 
-    private async Task RefreshWaapiSelectionAsync()
+    /// <summary>
+    /// 接続中は選択更新。連続失敗で切断表示。切断中は再接続を試行。
+    /// </summary>
+    private async Task PollWaapiAsync()
     {
-        if (IsDisposed || _waapiLastResult is not { Ok: true })
+        if (IsDisposed || _waapiPollBusy || _waapiLastResult is null)
         {
             return;
         }
 
+        _waapiPollBusy = true;
         try
         {
-            var (path, name, type) = await WaapiStartupProbe.RefreshSelectionAsync(_waapiSettings);
+            if (_waapiLastResult.Ok)
+            {
+                await PollWaapiWhileConnectedAsync().ConfigureAwait(true);
+            }
+            else
+            {
+                await PollWaapiWhileDisconnectedAsync().ConfigureAwait(true);
+            }
+        }
+        finally
+        {
+            _waapiPollBusy = false;
+        }
+    }
+
+    private async Task PollWaapiWhileConnectedAsync()
+    {
+        try
+        {
+            var (path, name, type) = await WaapiStartupProbe.RefreshSelectionAsync(_waapiSettings)
+                .ConfigureAwait(true);
             if (IsDisposed || _waapiLastResult is not { Ok: true })
             {
                 return;
             }
+
+            _waapiPollFailCount = 0;
 
             if (string.Equals(path, _waapiLastResult.SelectedPath, StringComparison.Ordinal)
                 && string.Equals(type, _waapiLastResult.SelectedType, StringComparison.Ordinal))
@@ -307,7 +340,42 @@ public partial class Form1 : Form
         }
         catch
         {
-            // 選択ポーリング失敗はステータスを崩さない（Wwise フォーカス切替など）。再接続は起動時のみ。
+            // 一時失敗は許容し、連続 N 回で切断扱いにする。
+            _waapiPollFailCount++;
+            if (_waapiPollFailCount < WaapiPollFailThreshold || IsDisposed)
+            {
+                return;
+            }
+
+            ApplyWaapiProbeResult(
+                new WaapiProbeResult
+                {
+                    Ok = false,
+                    Url = _waapiSettings.Url,
+                    Message = "接続できません。Wwise 起動と WAAPI 有効化を確認してください。",
+                },
+                logReport: true);
+        }
+    }
+
+    private async Task PollWaapiWhileDisconnectedAsync()
+    {
+        try
+        {
+            var result = await WaapiStartupProbe.RunAsync(_waapiSettings).ConfigureAwait(true);
+            if (IsDisposed || _waapiLastResult is not { Ok: false })
+            {
+                return;
+            }
+
+            if (result.Ok)
+            {
+                ApplyWaapiProbeResult(result, logReport: true);
+            }
+        }
+        catch
+        {
+            // 切断中の再接続失敗はログを出さず、次ティックで再試行。
         }
     }
 
@@ -331,10 +399,9 @@ public partial class Form1 : Form
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
         // Playlist一覧でも Space は全体の再生／一時停止を優先する。
-        // 矢印キーだけはボタン間のフォーカス移動へ渡す。
-        if ((playlistSelectorPanel.ContainsFocus
-                || transitionTimePanel.ContainsFocus
-                || transportBar.ContainsFocus)
+        // 遷移設定・Transport 上では矢印キーをフォーカス移動へ渡す。
+        // Playlist 項目自体はフォーカスを取らない（FlatPlaylistButton.Selectable=false）。
+        if ((transitionTimePanel.ContainsFocus || transportBar.ContainsFocus)
             && keyData is Keys.Up or Keys.Down or Keys.Left or Keys.Right)
         {
             return base.ProcessCmdKey(ref msg, keyData);
@@ -373,6 +440,12 @@ public partial class Form1 : Form
 
     protected override void OnKeyUp(KeyEventArgs e)
     {
+        if (_activeTransportShortcutCommand is not null
+            && e.KeyCode == _activeTransportShortcutKeyCode)
+        {
+            EndActiveTransportShortcutFeedback();
+        }
+
         if (_resumePlaybackAfterBackwardSeek && IsBackwardSeekKey(e.KeyCode))
         {
             ResumePlaybackAfterBackwardSeek();
@@ -382,16 +455,38 @@ public partial class Form1 : Form
         base.OnKeyUp(e);
     }
 
+    protected override void OnDeactivate(EventArgs e)
+    {
+        EndActiveTransportShortcutFeedback();
+        base.OnDeactivate(e);
+    }
+
     private static bool IsBackwardSeekKey(Keys keyCode) =>
         keyCode is Keys.Home or Keys.Left or Keys.PageUp;
 
     /// <summary>
     /// 波形ビュー操作用ショートカット。ログ欄フォーカス時も <see cref="ShortcutForwardingRichTextBox"/> 経由で呼ばれる。
     /// </summary>
-    private bool TryProcessWaveformShortcut(Keys keyData)
+    private bool TryProcessWaveformShortcut(Keys keyData, bool showUiFeedback = true)
     {
+        if (showUiFeedback
+            && TryGetTransportCommandForShortcut(keyData, out var feedbackCommand))
+        {
+            if (_activeTransportShortcutCommand is { } activeCommand
+                && activeCommand != feedbackCommand)
+            {
+                transportBar.EndShortcutFeedback(activeCommand);
+            }
+
+            _activeTransportShortcutCommand = feedbackCommand;
+            _activeTransportShortcutKeyCode = keyData & Keys.KeyCode;
+            transportBar.BeginShortcutFeedback(feedbackCommand);
+        }
+
         if (keyData == Keys.G)
         {
+            // モーダル表示中にもフェードが進むよう、ダイアログ表示前に解放する。
+            EndActiveTransportShortcutFeedback();
             ShowBarJumpDialog();
             return true;
         }
@@ -516,6 +611,48 @@ public partial class Form1 : Form
         return false;
     }
 
+    private static bool TryGetTransportCommandForShortcut(
+        Keys keyData,
+        out TransportCommand command)
+    {
+        var mapped = keyData switch
+        {
+            Keys.Space => TransportCommand.TogglePlayback,
+            Keys.G => TransportCommand.JumpToBar,
+            Keys.Control | Keys.Home => TransportCommand.GoToStart,
+            Keys.Control | Keys.Left => TransportCommand.PreviousRegion,
+            Keys.Home => TransportCommand.PreviousBar,
+            Keys.PageUp => TransportCommand.PreviousPage,
+            Keys.PageDown => TransportCommand.NextPage,
+            Keys.End => TransportCommand.NextBar,
+            Keys.Control | Keys.Right => TransportCommand.NextRegion,
+            Keys.Control | Keys.End => TransportCommand.GoToEnd,
+            Keys.Up => TransportCommand.TimeZoomIn,
+            Keys.Down => TransportCommand.TimeZoomOut,
+            Keys.Control | Keys.Up => TransportCommand.TimeZoomMax,
+            Keys.Control | Keys.Down => TransportCommand.TimeZoomReset,
+            Keys.Shift | Keys.Up => TransportCommand.AmpZoomIn,
+            Keys.Shift | Keys.Down => TransportCommand.AmpZoomOut,
+            Keys.Control | Keys.Shift | Keys.Up => TransportCommand.AmpZoomMax,
+            Keys.Control | Keys.Shift | Keys.Down => TransportCommand.AmpZoomReset,
+            _ => (TransportCommand?)null,
+        };
+
+        command = mapped.GetValueOrDefault();
+        return mapped.HasValue;
+    }
+
+    private void EndActiveTransportShortcutFeedback()
+    {
+        if (_activeTransportShortcutCommand is { } command)
+        {
+            transportBar.EndShortcutFeedback(command);
+        }
+
+        _activeTransportShortcutCommand = null;
+        _activeTransportShortcutKeyCode = Keys.None;
+    }
+
     private void TransportBar_CommandInvoked(object? sender, TransportCommand command)
     {
         var keyData = command switch
@@ -546,7 +683,7 @@ public partial class Form1 : Form
             return;
         }
 
-        TryProcessWaveformShortcut(keyData);
+        TryProcessWaveformShortcut(keyData, showUiFeedback: false);
 
         // キーボードではキーを離すまで一時停止する「戻る」操作も、
         // ボタンではクリック完了時点をキーアップ相当として直ちに再開する。
@@ -694,10 +831,10 @@ public partial class Form1 : Form
     {
         var innerBack = UiColors.ForControlBack(UiColors.ActionButtonInnerBack);
 
-        exportButton.BackColor = innerBack;
+        exportButton.BackColor = UiColors.ForControlBack(UiColors.ExportButtonFill);
         exportButton.ForeColor = UiColors.ExportButtonFore;
-        exportButton.HoverBackColor = innerBack;
-        exportButton.PressedBackColor = innerBack;
+        exportButton.HoverBackColor = UiColors.ForControlBack(UiColors.ExportButtonHoverFill);
+        exportButton.PressedBackColor = UiColors.ForControlBack(UiColors.ExportButtonHoverFill);
         exportButton.DisabledBackColor = innerBack;
         exportButton.DisabledForeColor = UiColors.ActionButtonDisabledFore;
         exportButton.BorderColor = UiColors.ForControlBack(UiColors.ExportButtonBack);
@@ -706,10 +843,10 @@ public partial class Form1 : Form
         exportButton.DisabledBorderColor = UiColors.ForControlBack(UiColors.ActionButtonDisabledBorder);
         exportButton.BorderSize = 2;
 
-        clearButton.BackColor = innerBack;
+        clearButton.BackColor = UiColors.ForControlBack(UiColors.ClearButtonFill);
         clearButton.ForeColor = UiColors.ClearButtonFore;
-        clearButton.HoverBackColor = innerBack;
-        clearButton.PressedBackColor = innerBack;
+        clearButton.HoverBackColor = UiColors.ForControlBack(UiColors.ClearButtonHoverFill);
+        clearButton.PressedBackColor = UiColors.ForControlBack(UiColors.ClearButtonHoverFill);
         clearButton.DisabledBackColor = innerBack;
         clearButton.DisabledForeColor = UiColors.ActionButtonDisabledFore;
         clearButton.BorderColor = UiColors.ForControlBack(UiColors.ClearButtonBack);
@@ -817,15 +954,15 @@ public partial class Form1 : Form
         {
             control.BackColor = back;
             control.ForeColor = UiColors.PlaylistDefaultFore;
-            if (control is not Button { Tag: WaveformOutputPart part } button)
+            if (control is not FlatPlaylistButton { Tag: WaveformOutputPart part } button)
             {
                 continue;
             }
 
             button.Enabled = true;
-            button.FlatAppearance.BorderSize = 1;
-            button.FlatAppearance.BorderColor =
-                UiColors.ForControlBack(UiColors.PlaylistButtonBorder);
+            button.FlatAppearance.BorderSize = 0;
+            button.IndicatorColor = null;
+            button.IndicatorGlowLevel = 0d;
             var isAutomatic = _automaticPlaylistPlayback
                 && _activeAutomaticPlaylistPartNumber == part.Number;
             var isManual = !_automaticPlaylistPlayback
@@ -835,8 +972,7 @@ public partial class Form1 : Form
 
             if (_audioPlayer.IsPlaying && isPending)
             {
-                button.FlatAppearance.BorderSize = 2;
-                button.FlatAppearance.BorderColor = BlendColor(
+                button.IndicatorColor = BlendColor(
                     UiColors.ForControlBack(UiColors.PlaylistButtonBorder),
                     UiColors.ForControlBack(UiColors.PlaylistTransitionBorder),
                     _pendingPlaylistBlinkLevel);
@@ -844,8 +980,7 @@ public partial class Form1 : Form
             }
             else if (_audioPlayer.IsPlaying && (isAutomatic || isManual))
             {
-                button.FlatAppearance.BorderSize = 2;
-                button.FlatAppearance.BorderColor = UiColors.ForControlBack(
+                button.IndicatorColor = UiColors.ForControlBack(
                     isManual
                         ? UiColors.PlaylistManualBorder
                         : UiColors.PlaylistTransitionBorder);
@@ -860,12 +995,11 @@ public partial class Form1 : Form
             if (_playlistTransitionGlowPartNumber == part.Number
                 && _playlistTransitionGlowLevel > 0d)
             {
-                button.BackColor = BlendColor(
-                    button.BackColor,
-                    UiColors.ForControlBack(isManual
-                        ? UiColors.PlaylistManualBack
-                        : UiColors.PlaylistAutoBack),
-                    _playlistTransitionGlowLevel);
+                button.IndicatorColor ??= UiColors.ForControlBack(
+                    isManual
+                        ? UiColors.PlaylistManualBorder
+                        : UiColors.PlaylistTransitionBorder);
+                button.IndicatorGlowLevel = _playlistTransitionGlowLevel;
             }
         }
 
@@ -1092,16 +1226,14 @@ public partial class Form1 : Form
                     Height = 30,
                     Margin = new Padding(3, 1, 3, 1),
                     Padding = new Padding(2, 0, 2, 0),
-                    TabStop = true,
+                    TabStop = false,
                     Tag = part,
                     Text = name,
                     TextAlign = ContentAlignment.MiddleLeft,
                     UseMnemonic = false,
                     UseVisualStyleBackColor = false,
                 };
-                button.FlatAppearance.BorderSize = 1;
-                button.FlatAppearance.BorderColor =
-                    UiColors.ForControlBack(UiColors.PlaylistButtonBorder);
+                button.FlatAppearance.BorderSize = 0;
                 button.Click += PlaylistButton_Click;
                 button.MouseEnter += PlaylistButton_MouseEnter;
                 button.MouseLeave += PlaylistButton_MouseLeave;

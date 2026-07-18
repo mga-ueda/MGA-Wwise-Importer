@@ -39,6 +39,7 @@ internal sealed class TransportBar : UserControl
     private readonly FlowLayoutPanel _groups = new();
     private readonly ToolTip _toolTip = new();
     private readonly TransportPositionDisplay _positionDisplay = new();
+    private readonly Dictionary<TransportCommand, TransportIconButton> _commandButtons = [];
     private readonly TransportIconButton _playButton;
 
     public TransportBar()
@@ -111,6 +112,24 @@ internal sealed class TransportBar : UserControl
     public void SetPosition(TransportPositionInfo? position)
     {
         _positionDisplay.Position = position;
+    }
+
+    /// <summary>キーボード操作中のボタンをマウスオーバーと同じ表示にする。</summary>
+    public void BeginShortcutFeedback(TransportCommand command)
+    {
+        if (_commandButtons.TryGetValue(command, out var button))
+        {
+            button.BeginShortcutFeedback();
+        }
+    }
+
+    /// <summary>キーボード操作表示をホバー色からフェードアウトする。</summary>
+    public void EndShortcutFeedback(TransportCommand command)
+    {
+        if (_commandButtons.TryGetValue(command, out var button))
+        {
+            button.EndShortcutFeedback();
+        }
     }
 
     public void ApplyColors()
@@ -207,6 +226,7 @@ internal sealed class TransportBar : UserControl
             button.Click += (_, _) => CommandInvoked?.Invoke(this, definition.Command);
             _toolTip.SetToolTip(button, definition.ToolTip);
             buttons.Controls.Add(button);
+            _commandButtons[definition.Command] = button;
             first ??= button;
         }
 
@@ -351,9 +371,13 @@ internal enum TransportIcon
 
 internal sealed class TransportIconButton : Button
 {
+    private const double ShortcutFadeDurationMs = 180d;
+    private readonly System.Windows.Forms.Timer _shortcutFadeTimer = new() { Interval = 16 };
     private bool _hovered;
     private bool _pressed;
     private bool _isPlaying;
+    private double _shortcutFeedbackLevel;
+    private long _shortcutFadeStartTickMs;
 
     public TransportIconButton(TransportIcon icon)
     {
@@ -369,6 +393,7 @@ internal sealed class TransportIconButton : Button
             | ControlStyles.OptimizedDoubleBuffer
             | ControlStyles.UserPaint,
             true);
+        _shortcutFadeTimer.Tick += (_, _) => UpdateShortcutFeedbackFade();
     }
 
     public TransportIcon Icon { get; }
@@ -401,6 +426,34 @@ internal sealed class TransportIconButton : Button
         AccentColor = Color.Empty;
         ActiveForeColor = UiColors.ForControlBack(UiColors.SeekCyan);
         Invalidate();
+    }
+
+    public void BeginShortcutFeedback()
+    {
+        _shortcutFadeTimer.Stop();
+        _shortcutFeedbackLevel = 1d;
+        Invalidate();
+    }
+
+    public void EndShortcutFeedback()
+    {
+        if (_shortcutFeedbackLevel <= 0d)
+        {
+            return;
+        }
+
+        _shortcutFadeStartTickMs = Environment.TickCount64;
+        _shortcutFadeTimer.Start();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _shortcutFadeTimer.Dispose();
+        }
+
+        base.Dispose(disposing);
     }
 
     protected override void OnMouseEnter(EventArgs e)
@@ -438,12 +491,11 @@ internal sealed class TransportIconButton : Button
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(BackColor);
 
+        var hoverLevel = _hovered ? 1d : _shortcutFeedbackLevel;
         var back = _pressed
             ? PressedBackColor
-            : _hovered
-                ? HoverBackColor
-                : BackColor;
-        if (_pressed || _hovered)
+            : BlendColor(BackColor, HoverBackColor, hoverLevel);
+        if (_pressed || hoverLevel > 0d)
         {
             var hoverBounds = new Rectangle(3, 3, Width - 6, Height - 6);
             using var hoverBrush = new SolidBrush(back);
@@ -474,6 +526,30 @@ internal sealed class TransportIconButton : Button
         g.ScaleTransform(Width / 34f, Height / 36f);
         DrawIcon(g, pen, brush);
         g.Restore(iconState);
+    }
+
+    private void UpdateShortcutFeedbackFade()
+    {
+        var elapsed = Math.Max(0L, Environment.TickCount64 - _shortcutFadeStartTickMs);
+        var progress = Math.Clamp(elapsed / ShortcutFadeDurationMs, 0d, 1d);
+        _shortcutFeedbackLevel = 1d - progress;
+        if (progress >= 1d)
+        {
+            _shortcutFadeTimer.Stop();
+            _shortcutFeedbackLevel = 0d;
+        }
+
+        Invalidate();
+    }
+
+    private static Color BlendColor(Color from, Color to, double amount)
+    {
+        amount = Math.Clamp(amount, 0d, 1d);
+        return Color.FromArgb(
+            (int)Math.Round(from.A + (to.A - from.A) * amount),
+            (int)Math.Round(from.R + (to.R - from.R) * amount),
+            (int)Math.Round(from.G + (to.G - from.G) * amount),
+            (int)Math.Round(from.B + (to.B - from.B) * amount));
     }
 
     private void DrawIcon(Graphics g, Pen pen, Brush brush)

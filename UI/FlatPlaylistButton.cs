@@ -6,38 +6,96 @@ namespace MgaWwiseIMImporter.UI;
 /// </summary>
 internal sealed class FlatPlaylistButton : Button
 {
+    private Color? _indicatorColor;
+    private double _indicatorGlowLevel;
+
+    /// <summary>
+    /// 左端の状態インジケーター色。null のときは表示しない。
+    /// </summary>
+    public Color? IndicatorColor
+    {
+        get => _indicatorColor;
+        set
+        {
+            if (_indicatorColor == value)
+            {
+                return;
+            }
+
+            _indicatorColor = value;
+            Invalidate();
+        }
+    }
+
+    /// <summary>遷移時にインジケーターの周囲へ加えるフェード強度。</summary>
+    public double IndicatorGlowLevel
+    {
+        get => _indicatorGlowLevel;
+        set
+        {
+            var level = Math.Clamp(value, 0d, 1d);
+            if (Math.Abs(_indicatorGlowLevel - level) < 0.001d)
+            {
+                return;
+            }
+
+            _indicatorGlowLevel = level;
+            Invalidate();
+        }
+    }
+
     public FlatPlaylistButton()
     {
         FlatStyle = FlatStyle.Flat;
+        FlatAppearance.BorderSize = 0;
+        TabStop = false;
         UseVisualStyleBackColor = false;
         SetStyle(
             ControlStyles.UserPaint
             | ControlStyles.AllPaintingInWmPaint
             | ControlStyles.OptimizedDoubleBuffer,
             true);
+        // クリックでフォーカスを奪わず、上下キーの波形拡縮を阻害しない。
+        SetStyle(ControlStyles.Selectable, false);
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
         e.Graphics.Clear(BackColor);
 
-        var borderSize = FlatAppearance.BorderSize;
-        if (borderSize > 0)
+        const int indicatorWidth = 6;
+        const int indicatorHeight = 16;
+        const int indicatorLeft = 2;
+        if (_indicatorColor is Color indicatorColor)
         {
-            using var pen = new Pen(FlatAppearance.BorderColor, borderSize);
-            var inset = borderSize / 2f;
-            e.Graphics.DrawRectangle(
-                pen,
-                inset,
-                inset,
-                Math.Max(0f, ClientSize.Width - borderSize),
-                Math.Max(0f, ClientSize.Height - borderSize));
+            var indicatorTop = Math.Max(0, (ClientSize.Height - indicatorHeight) / 2);
+            if (_indicatorGlowLevel > 0d)
+            {
+                var glowAlpha = (int)Math.Round(110d * _indicatorGlowLevel);
+                using var glowBrush = new SolidBrush(Color.FromArgb(glowAlpha, indicatorColor));
+                e.Graphics.FillRectangle(
+                    glowBrush,
+                    indicatorLeft - 1,
+                    Math.Max(0, indicatorTop - 2),
+                    indicatorWidth + 2,
+                    Math.Min(indicatorHeight + 4, ClientSize.Height));
+            }
+
+            using var brush = new SolidBrush(indicatorColor);
+            e.Graphics.FillRectangle(
+                brush,
+                indicatorLeft,
+                indicatorTop,
+                indicatorWidth,
+                Math.Min(indicatorHeight, ClientSize.Height));
         }
 
         var textBounds = Rectangle.FromLTRB(
-            Padding.Left,
+            Padding.Left + indicatorLeft + indicatorWidth + 5,
             Padding.Top,
-            Math.Max(Padding.Left, ClientSize.Width - Padding.Right),
+            Math.Max(
+                Padding.Left + indicatorLeft + indicatorWidth + 5,
+                ClientSize.Width - Padding.Right),
             Math.Max(Padding.Top, ClientSize.Height - Padding.Bottom));
         TextRenderer.DrawText(
             e.Graphics,

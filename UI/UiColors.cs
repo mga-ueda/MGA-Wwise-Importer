@@ -101,10 +101,14 @@ internal static class UiColors
     public static Color ActionLinkFore { get; set; } = Color.FromArgb(110, 180, 255);
     public static Color ActionLinkHoverFore { get; set; } = Color.FromArgb(0, 245, 255);
     public static Color ActionButtonInnerBack { get; set; } = Color.FromArgb(26, 27, 38);
+    public static Color ClearButtonFill { get; set; } = Color.FromArgb(43, 19, 22);
+    public static Color ClearButtonHoverFill { get; set; } = Color.FromArgb(68, 26, 31);
     public static Color ClearButtonBack { get; set; } = Color.FromArgb(190, 50, 50);
     public static Color ClearButtonFore { get; set; } = Color.FromArgb(235, 235, 235);
     public static Color ClearButtonHoverBack { get; set; } = Color.FromArgb(210, 70, 70);
     public static Color ClearButtonPressedBack { get; set; } = Color.FromArgb(160, 35, 35);
+    public static Color ExportButtonFill { get; set; } = Color.FromArgb(15, 27, 45);
+    public static Color ExportButtonHoverFill { get; set; } = Color.FromArgb(18, 40, 67);
     public static Color ExportButtonBack { get; set; } = Color.FromArgb(30, 110, 210);
     public static Color ExportButtonFore { get; set; } = Color.FromArgb(235, 235, 235);
     public static Color ExportButtonHoverBack { get; set; } = Color.FromArgb(45, 130, 230);
@@ -116,14 +120,14 @@ internal static class UiColors
     public static Color StatusBarBack { get; set; } = Color.FromArgb(22, 22, 24);
     public static Color StatusBarBorder { get; set; } = Color.FromArgb(55, 55, 58);
     public static Color StatusBarTitleFore { get; set; } = Color.FromArgb(150, 150, 150);
-    public static Color StatusBarDetailFore { get; set; } = Color.FromArgb(220, 220, 220);
-    public static Color StatusBarSuccessFore { get; set; } = Color.FromArgb(0, 245, 255);
-    public static Color StatusBarErrorFore { get; set; } = Color.FromArgb(255, 110, 110);
+    public static Color StatusBarDetailFore { get; set; } = Color.FromArgb(235, 235, 235);
+    public static Color StatusBarSuccessFore { get; set; } = Color.FromArgb(0, 107, 215);
+    public static Color StatusBarErrorFore { get; set; } = Color.FromArgb(190, 50, 50);
 
     // --- ダイアログ／色設定パネル ---
     public static Color DialogBodyBack { get; set; } = Color.FromArgb(40, 40, 42);
     public static Color DialogInputBack { get; set; } = Color.FromArgb(28, 28, 30);
-    public static Color DialogFore { get; set; } = Color.FromArgb(230, 230, 230);
+    public static Color DialogFore { get; set; } = Color.FromArgb(235, 235, 235);
     public static Color DialogShadow { get; set; } = Color.Black;
     public static Color ColorPanelBack { get; set; } = Color.FromArgb(40, 40, 42);
     public static Color ColorPanelListBack { get; set; } = Color.FromArgb(32, 32, 34);
@@ -218,10 +222,14 @@ internal static class UiColors
         new("ActionLinkFore", "Action Bar・リンク文字", () => ActionLinkFore, c => ActionLinkFore = c),
         new("ActionLinkHoverFore", "Action Bar・リンク選択文字", () => ActionLinkHoverFore, c => ActionLinkHoverFore = c),
         new("ActionButtonInnerBack", "Action Button・内側背景", () => ActionButtonInnerBack, c => ActionButtonInnerBack = c),
+        new("ClearButtonFill", "CLEAR・塗り", () => ClearButtonFill, c => ClearButtonFill = c),
+        new("ClearButtonHoverFill", "CLEAR・ホバー塗り", () => ClearButtonHoverFill, c => ClearButtonHoverFill = c),
         new("ClearButtonBack", "CLEAR・枠", () => ClearButtonBack, c => ClearButtonBack = c),
         new("ClearButtonFore", "CLEAR・文字", () => ClearButtonFore, c => ClearButtonFore = c),
         new("ClearButtonHoverBack", "CLEAR・ホバー枠", () => ClearButtonHoverBack, c => ClearButtonHoverBack = c),
         new("ClearButtonPressedBack", "CLEAR・押下枠", () => ClearButtonPressedBack, c => ClearButtonPressedBack = c),
+        new("ExportButtonFill", "EXPORT・塗り", () => ExportButtonFill, c => ExportButtonFill = c),
+        new("ExportButtonHoverFill", "EXPORT・ホバー塗り", () => ExportButtonHoverFill, c => ExportButtonHoverFill = c),
         new("ExportButtonBack", "EXPORT・枠", () => ExportButtonBack, c => ExportButtonBack = c),
         new("ExportButtonFore", "EXPORT・文字", () => ExportButtonFore, c => ExportButtonFore = c),
         new("ExportButtonHoverBack", "EXPORT・ホバー枠", () => ExportButtonHoverBack, c => ExportButtonHoverBack = c),

@@ -123,10 +123,7 @@ internal sealed class ColorDevPanelForm : Form
         resetButton.Click += (_, _) =>
         {
             UiColors.ResetToDefaults();
-            UiColors.SaveToIni();
-            ApplyPanelColors();
-            RefreshRows();
-            ColorsChanged?.Invoke(this, EventArgs.Empty);
+            ApplyColorChange();
         };
 
         _buttons.Controls.Add(closeButton);
@@ -150,30 +147,7 @@ internal sealed class ColorDevPanelForm : Form
         return base.ProcessCmdKey(ref msg, keyData);
     }
 
-    public void RefreshRows()
-    {
-        _suppressHexEvents = true;
-        try
-        {
-            foreach (var entry in UiColors.Entries)
-            {
-                var color = entry.Get();
-                if (_swatches.TryGetValue(entry.Key, out var swatch))
-                {
-                    swatch.BackColor = Color.FromArgb(255, color.R, color.G, color.B);
-                }
-
-                if (_hexInputs.TryGetValue(entry.Key, out var hex))
-                {
-                    hex.Text = UiColors.FormatColor(color);
-                }
-            }
-        }
-        finally
-        {
-            _suppressHexEvents = false;
-        }
-    }
+    public void RefreshRows() => WithPreservedScroll(RefreshRowsCore);
 
     private void Hex_KeyDown(object? sender, KeyEventArgs e)
     {
@@ -233,10 +207,7 @@ internal sealed class ColorDevPanelForm : Form
         var alpha = UiColors.GetDefaultAlpha(key);
         var next = Color.FromArgb(alpha, parsed.R, parsed.G, parsed.B);
         entry.Set(next);
-        ApplyPanelColors();
-        RefreshRows();
-        UiColors.SaveToIni();
-        ColorsChanged?.Invoke(this, EventArgs.Empty);
+        ApplyColorChange();
     }
 
     private void PickColor(string key)
@@ -265,14 +236,61 @@ internal sealed class ColorDevPanelForm : Form
         var alpha = UiColors.GetDefaultAlpha(key);
         var next = Color.FromArgb(alpha, dialog.Color.R, dialog.Color.G, dialog.Color.B);
         entry.Set(next);
+        ApplyColorChange();
+    }
+
+    private void ApplyColorChange()
+    {
+        var pos = _scroll.AutoScrollPosition;
         ApplyPanelColors();
-        RefreshRows();
+        RefreshRowsCore();
         UiColors.SaveToIni();
         ColorsChanged?.Invoke(this, EventArgs.Empty);
+        // メイン側の色適用やレイアウト後も位置を維持する。
+        RestoreScrollPosition(pos);
+        BeginInvoke(() => RestoreScrollPosition(pos));
     }
 
     private static UiColorEntry? FindEntry(string key) =>
         UiColors.Entries.FirstOrDefault(e => string.Equals(e.Key, key, StringComparison.OrdinalIgnoreCase));
+
+    private void RefreshRowsCore()
+    {
+        _suppressHexEvents = true;
+        try
+        {
+            foreach (var entry in UiColors.Entries)
+            {
+                var color = entry.Get();
+                if (_swatches.TryGetValue(entry.Key, out var swatch))
+                {
+                    swatch.BackColor = Color.FromArgb(255, color.R, color.G, color.B);
+                }
+
+                if (_hexInputs.TryGetValue(entry.Key, out var hex))
+                {
+                    hex.Text = UiColors.FormatColor(color);
+                }
+            }
+        }
+        finally
+        {
+            _suppressHexEvents = false;
+        }
+    }
+
+    private void WithPreservedScroll(Action action)
+    {
+        var pos = _scroll.AutoScrollPosition;
+        action();
+        RestoreScrollPosition(pos);
+    }
+
+    private void RestoreScrollPosition(Point autoScrollPosition)
+    {
+        // AutoScrollPosition の getter は負値、setter は正値を渡す必要がある。
+        _scroll.AutoScrollPosition = new Point(-autoScrollPosition.X, -autoScrollPosition.Y);
+    }
 
     private void ApplyPanelColors()
     {
