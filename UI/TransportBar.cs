@@ -409,13 +409,15 @@ internal sealed class TransportIconButton : Button
         FlatStyle = FlatStyle.Flat;
         FlatAppearance.BorderSize = 0;
         Size = new Size(30, 30);
-        TabStop = true;
+        TabStop = false;
         UseVisualStyleBackColor = false;
         SetStyle(
             ControlStyles.AllPaintingInWmPaint
             | ControlStyles.OptimizedDoubleBuffer
             | ControlStyles.UserPaint,
             true);
+        // クリックでフォーカスを奪わず、上下キーの波形拡縮を阻害しない。
+        SetStyle(ControlStyles.Selectable, false);
         _shortcutFadeTimer.Tick += (_, _) => UpdateShortcutFeedbackFade();
     }
 

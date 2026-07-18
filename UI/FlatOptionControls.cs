@@ -15,12 +15,15 @@ internal sealed class FlatOptionRadioButton : RadioButton
         Height = RowHeight;
         Margin = new Padding(3, 1, 3, 1);
         FlatStyle = FlatStyle.Flat;
+        TabStop = false;
         SetStyle(
             ControlStyles.UserPaint
             | ControlStyles.AllPaintingInWmPaint
             | ControlStyles.OptimizedDoubleBuffer
             | ControlStyles.ResizeRedraw,
             true);
+        // クリックでフォーカスを奪わず、↑↓ 等の波形ショートカットを阻害しない。
+        SetStyle(ControlStyles.Selectable, false);
     }
 
     protected override bool ShowFocusCues => false;
@@ -148,12 +151,15 @@ internal sealed class FlatOptionCheckBox : CheckBox
     {
         AutoSize = true;
         FlatStyle = FlatStyle.Flat;
+        TabStop = false;
         SetStyle(
             ControlStyles.UserPaint
             | ControlStyles.AllPaintingInWmPaint
             | ControlStyles.OptimizedDoubleBuffer
             | ControlStyles.ResizeRedraw,
             true);
+        // クリックでフォーカスを奪わず、↑↓ 等の波形ショートカットを阻害しない。
+        SetStyle(ControlStyles.Selectable, false);
     }
 
     protected override bool ShowFocusCues => false;

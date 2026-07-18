@@ -187,7 +187,11 @@ public partial class Form1 : Form
         AdjustTransitionSectionHeights();
         ApplyMarkerOptionsPanelFixedHeight();
         markerOptionsPanel.Bind(_markerSettings);
-        markerOptionsPanel.SettingsChanged += (_, _) => ApplyMarkerSettings();
+        markerOptionsPanel.SettingsChanged += (_, _) =>
+        {
+            ApplyMarkerSettings();
+            ReleaseFocusToWaveform();
+        };
         waveformView.MarkerGridOverride = _markerSettings.GridOverride;
         ApplyPlaylistSelectorColors();
         waapiStatusBar.ApplyColors();
@@ -517,14 +521,7 @@ public partial class Form1 : Form
         }
 
         // Playlist一覧でも Space は全体の再生／一時停止を優先する。
-        // 遷移設定・Transport 上では矢印キーをフォーカス移動へ渡す。
-        // Playlist 項目自体はフォーカスを取らない（FlatPlaylistButton.Selectable=false）。
-        if ((transitionTimePanel.ContainsFocus || transportBar.ContainsFocus)
-            && keyData is Keys.Up or Keys.Down or Keys.Left or Keys.Right)
-        {
-            return base.ProcessCmdKey(ref msg, keyData);
-        }
-
+        // 操作系ボタン／ラジオ／チェックはフォーカスを取らない。
         if (keyData == Keys.Escape)
         {
             ConfirmAndExit();
@@ -820,6 +817,7 @@ public partial class Form1 : Form
         }
 
         TryProcessWaveformShortcut(keyData, showUiFeedback: false);
+        ReleaseFocusToWaveform();
 
         // キーボードではキーを離すまで一時停止する「戻る」操作も、
         // ボタンではクリック完了時点をキーアップ相当として直ちに再開する。
@@ -829,6 +827,30 @@ public partial class Form1 : Form
         }
 
         UpdateTransportPlaybackState();
+    }
+
+    /// <summary>
+    /// 操作系コントロールへフォーカスが残ると ↑↓ がフォーカス移動になるため、波形へ戻す。
+    /// </summary>
+    private void ReleaseFocusToWaveform()
+    {
+        if (waveformView is not { IsHandleCreated: true, CanFocus: true })
+        {
+            return;
+        }
+
+        if (waveformView.ContainsFocus)
+        {
+            return;
+        }
+
+        // 名前編集中やマーカーコメント入力中はフォーカスを奪わない。
+        if (ActiveControl is TextBox)
+        {
+            return;
+        }
+
+        waveformView.Focus();
     }
 
     /// <summary>
@@ -1410,6 +1432,7 @@ public partial class Form1 : Form
 
         _playlistFadeSeconds = fadeSeconds;
         ApplyPlaylistSelectorColors();
+        ReleaseFocusToWaveform();
         WritePlaybackDiagnostic(
             "playlist.fade-out-preset-changed",
             new
@@ -1429,6 +1452,7 @@ public partial class Form1 : Form
 
         _playlistFadeInSeconds = fadeInSeconds;
         ApplyPlaylistSelectorColors();
+        ReleaseFocusToWaveform();
         WritePlaybackDiagnostic(
             "playlist.fade-in-preset-changed",
             new
@@ -1452,6 +1476,7 @@ public partial class Form1 : Form
 
         _playlistExitSourceMode = mode;
         ApplyPlaylistSelectorColors();
+        ReleaseFocusToWaveform();
         WritePlaybackDiagnostic(
             "playlist.exit-source-mode-changed",
             new
@@ -1844,18 +1869,18 @@ public partial class Form1 : Form
         var shift = (modifiers & Keys.Shift) == Keys.Shift;
         if (ctrl && shift)
         {
-        _suppressNextPlaylistClick = sender is Button;
-        _playlistDisablePaintActive = true;
-        _playlistDisablePaintSetDisabled =
-            !_disabledPlaylistPartNumbers.Contains(part.Number);
-        _playlistDisablePaintLastPartNumber = null;
-        if (sender is Control disableTarget)
-        {
-            disableTarget.Capture = true;
-        }
+            _suppressNextPlaylistClick = sender is Button;
+            _playlistDisablePaintActive = true;
+            _playlistDisablePaintSetDisabled =
+                !_disabledPlaylistPartNumbers.Contains(part.Number);
+            _playlistDisablePaintLastPartNumber = null;
+            if (sender is Control disableTarget)
+            {
+                disableTarget.Capture = true;
+            }
 
-        ApplyPlaylistDisablePaintAtCursor();
-        return;
+            ApplyPlaylistDisablePaintAtCursor();
+            return;
         }
 
         var erase = ctrl;
@@ -1884,19 +1909,14 @@ public partial class Form1 : Form
         {
             _playlistGroupPaintGroupId = null;
         }
-        else if (_playlistPartGroupIds.TryGetValue(part.Number, out var existingGroupId))
-        {
-            // 既存グループ上から始めた場合はその ID を継承し、Shift 中は固定する。
-            _playlistGroupPaintGroupId = existingGroupId;
-            _playlistGroupPaintStickyGroupId = existingGroupId;
-        }
         else if (_playlistGroupPaintStickyGroupId is int stickyGroupId)
         {
-            // Shift 押し続け中なら、隙間を跨いでも同じ ID を使う。
+            // Shift 押し続け中は同じ ID で上書き塗りを続ける。
             _playlistGroupPaintGroupId = stickyGroupId;
         }
         else
         {
+            // 既存グループ上から始めても新規 ID を発行し、解除せずに上書きできるようにする。
             var groupId = _nextPlaylistGroupId++;
             _playlistGroupColorIndexes[groupId] = _nextPlaylistGroupColorIndex++;
             _playlistGroupPaintGroupId = groupId;
@@ -1959,7 +1979,7 @@ public partial class Form1 : Form
 
     private static string BuildPlaylistGroupToolTip(string playlistName) =>
         $"{playlistName}{Environment.NewLine}"
-        + "Shift + クリック／ドラッグ: グループ化"
+        + "Shift + クリック／ドラッグ: グループ化（既存グループも新しい ID で上書き可）"
         + Environment.NewLine
         + "Ctrl + クリック／ドラッグ: グループ解除"
         + Environment.NewLine
@@ -3091,6 +3111,7 @@ public partial class Form1 : Form
     {
         TopMost = topMostCheckBox.Checked;
         DeveloperSettings.SaveTopMost(topMostCheckBox.Checked);
+        ReleaseFocusToWaveform();
     }
 
     private void CompactFileNumbersCheckBox_CheckedChanged(object? sender, EventArgs e)
@@ -3101,6 +3122,7 @@ public partial class Form1 : Form
         }
 
         UpdateExportButtonState();
+        ReleaseFocusToWaveform();
     }
 
     private WaveformOutputPart[] BuildProjectedEnabledParts(
@@ -3265,18 +3287,21 @@ public partial class Form1 : Form
             WritePlaybackDiagnostic("diagnostic.enabled");
         }
 #endif
+        ReleaseFocusToWaveform();
     }
 
     private void LogClearButton_Click(object? sender, EventArgs e)
     {
         WritePlaybackDiagnostic("log.cleared");
         editorTextBox.Clear();
+        ReleaseFocusToWaveform();
     }
 
     private void LogCopyButton_Click(object? sender, EventArgs e)
     {
         if (editorTextBox.TextLength == 0)
         {
+            ReleaseFocusToWaveform();
             return;
         }
 
@@ -3289,6 +3314,8 @@ public partial class Form1 : Form
         {
             MessageBox.Show(this, ex.Message, "ログのコピーに失敗", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+
+        ReleaseFocusToWaveform();
     }
 
     private void LogDownloadButton_Click(object? sender, EventArgs e)
@@ -3318,6 +3345,8 @@ public partial class Form1 : Form
         {
             MessageBox.Show(this, ex.Message, "ログの保存に失敗", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+
+        ReleaseFocusToWaveform();
     }
 
     private void ReloadButton_Click(object? sender, EventArgs e)
@@ -3329,6 +3358,7 @@ public partial class Form1 : Form
 
         editorTextBox.Clear();
         ProcessDroppedFiles(_lastInputFiles, rememberInputFiles: false);
+        ReleaseFocusToWaveform();
     }
 
     private void RestoreWindowBounds()
@@ -3631,6 +3661,7 @@ public partial class Form1 : Form
         _exportBusy = true;
         SetUiInteractionLocked(UiInteractionLock.Export, locked: true);
         UpdateExportButtonState();
+        ReleaseFocusToWaveform();
 
         try
         {

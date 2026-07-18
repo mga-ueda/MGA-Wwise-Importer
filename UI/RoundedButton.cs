@@ -34,6 +34,7 @@ internal sealed class RoundedButton : Button
     {
         FlatStyle = FlatStyle.Flat;
         FlatAppearance.BorderSize = 0;
+        TabStop = false;
         UseVisualStyleBackColor = false;
         SetStyle(
             ControlStyles.UserPaint
@@ -41,6 +42,8 @@ internal sealed class RoundedButton : Button
             | ControlStyles.OptimizedDoubleBuffer
             | ControlStyles.ResizeRedraw,
             true);
+        // クリックでフォーカスを奪わず、↑↓ 等の波形ショートカットを阻害しない。
+        SetStyle(ControlStyles.Selectable, false);
     }
 
     protected override bool ShowFocusCues => false;

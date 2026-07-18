@@ -26,6 +26,7 @@ internal sealed class ThinHorizontalScrollBar : Control
         Height = 15;
         TabStop = false;
         Cursor = Cursors.Default;
+        SetStyle(ControlStyles.Selectable, false);
     }
 
     public event EventHandler<double>? ScrollRequested;
