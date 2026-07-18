@@ -29,10 +29,10 @@ internal sealed class MarkerSettings
     /// <summary>ドラッグ付与時のスナップ単位。</summary>
     public MarkerGridOverrideMode GridOverride { get; set; } = MarkerGridOverrideMode.Default;
 
-    /// <summary>連番の桁数（ゼロ埋め時に有効）。</summary>
+    /// <summary>連番の桁数（幅・上限。0 で連番なし）。</summary>
     public int CommentDigits { get; set; } = 3;
 
-    /// <summary>連番をゼロ埋めするか。</summary>
+    /// <summary>Digits で指定した桁数まで 0 埋めするか（桁数に依らず同じ）。</summary>
     public bool CommentZeroPad { get; set; } = true;
 
     public bool CommentPrefixEnabled { get; set; } = true;

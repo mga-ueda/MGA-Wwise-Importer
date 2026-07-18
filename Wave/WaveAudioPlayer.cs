@@ -31,6 +31,8 @@ internal sealed class WaveAudioPlayer : IDisposable
     private bool _isPlaying;
     private bool _disposed;
     private bool _suppressPlaybackEnded;
+    /// <summary>一時停止中にシークしたか。次の再生前にデバイスの先読みバッファを破棄する。</summary>
+    private bool _seekPendingWhilePaused;
     private LoopPlaybackPlan[] _loopPlans = [];
     private LoopPlaybackPlan? _activePlan;
 
@@ -47,6 +49,16 @@ internal sealed class WaveAudioPlayer : IDisposable
 
     /// <summary>直近に生成した出力バッファのピーク値（0〜1）。</summary>
     public float OutputPeak => _provider?.OutputPeak ?? 0f;
+
+    /// <summary>出力フォーマットのサンプルレート。未ロード時は 0。</summary>
+    public int OutputSampleRate => _provider?.WaveFormat.SampleRate ?? 0;
+
+    /// <summary>
+    /// 直近の出力サンプル（モノラルミックス）を destination の末尾詰めでコピーする。
+    /// スペアナ表示用。戻り値は書き込んだサンプル数。
+    /// </summary>
+    public int ReadRecentOutputSamples(float[] destination) =>
+        _provider?.CopyRecentOutputSamples(destination) ?? 0;
 
     /// <summary>0〜1。長さ不明時は 0。</summary>
     public double Progress
@@ -360,6 +372,7 @@ internal sealed class WaveAudioPlayer : IDisposable
         var plan = FindPlanAtSample(startSample);
         _provider.StartPlaylistRange(startSample, endSample, plan);
         _activePlan = plan;
+        _seekPendingWhilePaused = false;
         _output.Play();
         _isPlaying = true;
         Trace($"playlist.start accepted start={startSample} end={endSample} loopPlan={plan?.ToString() ?? "none"}");
@@ -558,6 +571,23 @@ internal sealed class WaveAudioPlayer : IDisposable
             _reader.Position = 0;
         }
 
+        // 一時停止中にシークしていた場合、デバイスの先読みバッファには旧位置の音が
+        // 残っている。そのまま Play すると新しい位置の前に旧位置の音が一瞬鳴るため、
+        // 一度 Stop してバッファを破棄してから再生する（リーダー位置は保持される）。
+        if (_seekPendingWhilePaused)
+        {
+            _suppressPlaybackEnded = true;
+            try
+            {
+                _output.Stop();
+            }
+            finally
+            {
+                _suppressPlaybackEnded = false;
+            }
+        }
+
+        _seekPendingWhilePaused = false;
         _output.Play();
         _isPlaying = true;
         Trace($"transport.play sample={_provider?.CurrentMainSample ?? 0}");
@@ -593,6 +623,7 @@ internal sealed class WaveAudioPlayer : IDisposable
         _reader.Position = 0;
         _provider?.StopExitLayer();
         _isPlaying = false;
+        _seekPendingWhilePaused = false;
         _provider?.ResetOutputPeak();
         Trace("transport.stop");
     }
@@ -639,6 +670,13 @@ internal sealed class WaveAudioPlayer : IDisposable
         }
 
         _reader.CurrentTime = TimeSpan.FromTicks(ticks);
+        // 再生中は連続読み出しで自然に切り替わるが、一時停止中は先読みバッファに旧位置が
+        // 残るため、次の再生でバッファを破棄する必要があることを記録する。
+        if (!_isPlaying)
+        {
+            _seekPendingWhilePaused = true;
+        }
+
         Trace($"transport.seek progress={clamped:R} sample={_provider?.CurrentMainSample ?? 0}");
     }
 
@@ -683,6 +721,7 @@ internal sealed class WaveAudioPlayer : IDisposable
     private void StopAndRelease()
     {
         _isPlaying = false;
+        _seekPendingWhilePaused = false;
         _provider?.ClearPlaylistPlayback();
         _provider?.StopExitLayer();
         _provider?.ResetOutputPeak();
@@ -789,6 +828,10 @@ internal sealed class WaveAudioPlayer : IDisposable
         private long _playlistStartedGeneration;
         private long _playlistStartedTargetSample;
         private float _outputPeak;
+        /// <summary>スペアナ用の直近出力モノラルサンプル（リングバッファ）。</summary>
+        private readonly float[] _monitorRing = new float[8192];
+        private long _monitorWriteCount;
+        private readonly object _monitorGate = new();
 
         public StereoFloatWaveProvider(
             WaveFileReader source,
@@ -1427,12 +1470,52 @@ internal sealed class WaveAudioPlayer : IDisposable
                         outputR);
                 }
 
+                PushMonitorSamples(buffer, outIndex, gotFrames);
                 outIndex += gotFrames * 8;
                 totalFrames += gotFrames;
             }
 
             Volatile.Write(ref _outputPeak, outputPeak);
             return totalFrames * 8;
+        }
+
+        private void PushMonitorSamples(byte[] buffer, int offset, int frames)
+        {
+            lock (_monitorGate)
+            {
+                for (var i = 0; i < frames; i++)
+                {
+                    var left = BitConverter.ToSingle(buffer, offset + i * 8);
+                    var right = BitConverter.ToSingle(buffer, offset + i * 8 + 4);
+                    _monitorRing[(int)(_monitorWriteCount % _monitorRing.Length)] =
+                        (left + right) * 0.5f;
+                    _monitorWriteCount++;
+                }
+            }
+        }
+
+        /// <summary>直近サンプルを destination の末尾詰めでコピー（不足分は先頭を 0 埋め）。</summary>
+        public int CopyRecentOutputSamples(float[] destination)
+        {
+            lock (_monitorGate)
+            {
+                var available = (int)Math.Min(
+                    _monitorWriteCount,
+                    Math.Min(destination.Length, _monitorRing.Length));
+                var start = _monitorWriteCount - available;
+                for (var i = 0; i < available; i++)
+                {
+                    destination[destination.Length - available + i] =
+                        _monitorRing[(int)((start + i) % _monitorRing.Length)];
+                }
+
+                if (available < destination.Length)
+                {
+                    Array.Clear(destination, 0, destination.Length - available);
+                }
+
+                return available;
+            }
         }
 
         private void BeginPlaylistPreRoll(PlaylistTransitionRequest transition)

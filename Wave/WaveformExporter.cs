@@ -16,6 +16,7 @@ internal static class WaveformExporter
         IReadOnlyList<WaveformRegionMark> regions,
         IReadOnlyList<WaveformBarMark> bars,
         IReadOnlyList<WaveformMarkerMark> markers,
+        string? outputDirectory = null,
         Action<WaveformOutputPart>? onPartBegin = null,
         Action<WaveformOutputPart>? onPartEnd = null,
         Action<string>? onLog = null)
@@ -39,7 +40,14 @@ internal static class WaveformExporter
             return sb.ToString();
         }
 
-        var directory = Path.GetDirectoryName(sourcePath) ?? string.Empty;
+        var directory = string.IsNullOrWhiteSpace(outputDirectory)
+            ? Path.GetDirectoryName(sourcePath) ?? string.Empty
+            : outputDirectory.Trim();
+        if (directory.Length > 0)
+        {
+            Directory.CreateDirectory(directory);
+        }
+
         Log($"OutputDir : {directory}" + Environment.NewLine);
         Log(Environment.NewLine);
 

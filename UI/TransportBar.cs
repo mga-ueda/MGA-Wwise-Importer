@@ -390,6 +390,9 @@ internal enum TransportIcon
     Clear,
     Copy,
     Download,
+    Folder,
+    Save,
+    Delete,
 }
 
 internal sealed class TransportIconButton : Button
@@ -675,6 +678,47 @@ internal sealed class TransportIconButton : Button
                 g.DrawLine(pen, 17, 7, 17, 20);
                 g.DrawLines(pen, [new PointF(12, 16), new PointF(17, 21), new PointF(22, 16)]);
                 g.DrawLine(pen, 9, 26, 25, 26);
+                break;
+            // Folder / Save / Delete は 16×16（x 9..25, y 10..26）の正方形グリフに揃える。
+            case TransportIcon.Folder:
+                g.DrawLines(pen, [
+                    new PointF(9, 12),
+                    new PointF(9, 10),
+                    new PointF(15, 10),
+                    new PointF(17, 12),
+                    new PointF(25, 12),
+                    new PointF(25, 26),
+                    new PointF(9, 26),
+                    new PointF(9, 12),
+                ]);
+                g.DrawLine(pen, 9, 15, 25, 15);
+                break;
+            case TransportIcon.Save:
+                // フロッピーディスク
+                g.DrawLines(pen, [
+                    new PointF(9, 10),
+                    new PointF(22, 10),
+                    new PointF(25, 13),
+                    new PointF(25, 26),
+                    new PointF(9, 26),
+                    new PointF(9, 10),
+                ]);
+                g.DrawRectangle(pen, 13, 10, 8, 5);
+                g.DrawRectangle(pen, 12, 19, 10, 7);
+                break;
+            case TransportIcon.Delete:
+                // ゴミ箱
+                g.DrawLine(pen, 9, 13, 25, 13);
+                g.DrawLine(pen, 14, 10, 20, 10);
+                g.DrawLines(pen, [
+                    new PointF(11, 13),
+                    new PointF(12, 26),
+                    new PointF(22, 26),
+                    new PointF(23, 13),
+                ]);
+                g.DrawLine(pen, 14, 16, 14, 23);
+                g.DrawLine(pen, 17, 16, 17, 23);
+                g.DrawLine(pen, 20, 16, 20, 23);
                 break;
         }
     }

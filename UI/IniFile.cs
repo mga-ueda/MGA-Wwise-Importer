@@ -110,4 +110,56 @@ internal static class IniFile
 
         File.WriteAllLines(path, lines, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
+
+    /// <summary>指定セクションを丸ごと削除する（存在しなければ何もしない）。</summary>
+    public static void RemoveSection(string section)
+    {
+        var path = Path;
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        var lines = File.ReadAllLines(path).ToList();
+        var sectionHeader = $"[{section}]";
+        var start = -1;
+        var end = lines.Count;
+
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var trimmed = lines[i].Trim();
+            if (trimmed.StartsWith('[') && trimmed.EndsWith(']'))
+            {
+                if (start >= 0)
+                {
+                    end = i;
+                    break;
+                }
+
+                if (string.Equals(trimmed, sectionHeader, StringComparison.OrdinalIgnoreCase))
+                {
+                    start = i;
+                }
+            }
+        }
+
+        if (start < 0)
+        {
+            return;
+        }
+
+        lines.RemoveRange(start, end - start);
+        while (start < lines.Count && lines[start].Trim().Length == 0)
+        {
+            lines.RemoveAt(start);
+        }
+
+        if (start > 0 && start <= lines.Count && lines[start - 1].Trim().Length == 0
+            && (start == lines.Count || lines[start].Trim().StartsWith('[')))
+        {
+            // 直前の空行は残してよい
+        }
+
+        File.WriteAllLines(path, lines, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
 }

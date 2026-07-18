@@ -59,6 +59,15 @@ partial class Form1
     private RoundedButton reloadButton;
     private RoundedButton exportButton;
     private WaapiStatusBar waapiStatusBar;
+    private Panel projectBar;
+    private DarkProjectComboBox projectNameComboBox;
+    private Panel projectNameSpacer;
+    private TextBox projectOutputPathTextBox;
+    private FlowLayoutPanel projectActionPanel;
+    private TransportIconButton projectFolderButton;
+    private TransportIconButton projectSaveButton;
+    private TransportIconButton projectDeleteButton;
+    private ProjectSpectrumView projectSpectrumView;
 
     protected override void Dispose(bool disposing)
     {
@@ -135,6 +144,15 @@ partial class Form1
         reloadButton = new RoundedButton();
         exportButton = new RoundedButton();
         waapiStatusBar = new WaapiStatusBar();
+        projectBar = new Panel();
+        projectNameComboBox = new DarkProjectComboBox();
+        projectNameSpacer = new Panel();
+        projectOutputPathTextBox = new TextBox();
+        projectActionPanel = new FlowLayoutPanel();
+        projectFolderButton = new TransportIconButton(TransportIcon.Folder);
+        projectSaveButton = new TransportIconButton(TransportIcon.Save);
+        projectDeleteButton = new TransportIconButton(TransportIcon.Delete);
+        projectSpectrumView = new ProjectSpectrumView();
         SuspendLayout();
         waveformHostPanel.SuspendLayout();
         logAreaPanel.SuspendLayout();
@@ -153,7 +171,101 @@ partial class Form1
         playlistScrollPanel.SuspendLayout();
         actionBar.SuspendLayout();
         actionControlsPanel.SuspendLayout();
+        projectBar.SuspendLayout();
+        projectActionPanel.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)brandLogoPictureBox).BeginInit();
+        //
+        // projectBar
+        //
+        projectBar.Dock = DockStyle.Top;
+        projectBar.Height = 30;
+        projectBar.Name = "projectBar";
+        // Yu Gothic UI / Win32 ComboBox は幾何学中心より文字が上に見えるため 1px 下げる。
+        projectBar.Padding = new Padding(8, 4, 8, 2);
+        projectBar.TabIndex = 0;
+        projectBar.Controls.Add(projectOutputPathTextBox);
+        projectBar.Controls.Add(projectActionPanel);
+        projectBar.Controls.Add(projectNameSpacer);
+        projectBar.Controls.Add(projectNameComboBox);
+        //
+        // projectNameComboBox
+        //
+        projectNameComboBox.Dock = DockStyle.Left;
+        projectNameComboBox.Font = new Font("Yu Gothic UI", 9F);
+        projectNameComboBox.Name = "projectNameComboBox";
+        projectNameComboBox.Size = new Size(168, 24);
+        projectNameComboBox.TabIndex = 0;
+        projectNameComboBox.TabStop = false;
+        //
+        // projectNameSpacer
+        //
+        projectNameSpacer.Dock = DockStyle.Left;
+        projectNameSpacer.Name = "projectNameSpacer";
+        projectNameSpacer.Size = new Size(8, 24);
+        projectNameSpacer.TabStop = false;
+        //
+        // projectActionPanel
+        //
+        projectActionPanel.AutoSize = true;
+        projectActionPanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        projectActionPanel.Dock = DockStyle.Right;
+        projectActionPanel.FlowDirection = FlowDirection.LeftToRight;
+        projectActionPanel.Name = "projectActionPanel";
+        projectActionPanel.Padding = new Padding(8, 0, 0, 0);
+        projectActionPanel.TabIndex = 2;
+        projectActionPanel.WrapContents = false;
+        projectActionPanel.Controls.Add(projectFolderButton);
+        projectActionPanel.Controls.Add(projectSaveButton);
+        projectActionPanel.Controls.Add(projectDeleteButton);
+        projectActionPanel.Controls.Add(projectSpectrumView);
+        //
+        // projectOutputPathTextBox
+        //
+        projectOutputPathTextBox.BorderStyle = BorderStyle.FixedSingle;
+        projectOutputPathTextBox.Cursor = Cursors.Default;
+        projectOutputPathTextBox.Dock = DockStyle.Fill;
+        projectOutputPathTextBox.Font = new Font("Yu Gothic UI", 9F);
+        projectOutputPathTextBox.Name = "projectOutputPathTextBox";
+        projectOutputPathTextBox.ReadOnly = true;
+        projectOutputPathTextBox.ShortcutsEnabled = false;
+        projectOutputPathTextBox.TabStop = false;
+        projectOutputPathTextBox.TabIndex = 1;
+        //
+        // projectFolderButton
+        //
+        projectFolderButton.AccessibleName = "Select export folder";
+        projectFolderButton.Margin = new Padding(0, 0, 4, 0);
+        projectFolderButton.Name = "projectFolderButton";
+        projectFolderButton.Size = new Size(24, 24);
+        projectFolderButton.TabIndex = 0;
+        playlistToolTip.SetToolTip(projectFolderButton, "波形の書き出し先フォルダを選択");
+        //
+        // projectSaveButton
+        //
+        projectSaveButton.AccessibleName = "Save project";
+        projectSaveButton.Margin = new Padding(0, 0, 4, 0);
+        projectSaveButton.Name = "projectSaveButton";
+        projectSaveButton.Size = new Size(24, 24);
+        projectSaveButton.TabIndex = 1;
+        playlistToolTip.SetToolTip(projectSaveButton, "現在の設定をプロジェクトへ保存（SAVE）");
+        //
+        // projectDeleteButton
+        //
+        projectDeleteButton.AccessibleName = "Delete project";
+        projectDeleteButton.Margin = new Padding(0, 0, 8, 0);
+        projectDeleteButton.Name = "projectDeleteButton";
+        projectDeleteButton.Size = new Size(24, 24);
+        projectDeleteButton.TabIndex = 2;
+        playlistToolTip.SetToolTip(projectDeleteButton, "選択中のプロジェクトを削除（DEL）");
+        //
+        // projectSpectrumView
+        //
+        projectSpectrumView.AccessibleName = "Output spectrum";
+        projectSpectrumView.Margin = new Padding(0);
+        projectSpectrumView.Name = "projectSpectrumView";
+        projectSpectrumView.Size = new Size(126, 24);
+        projectSpectrumView.TabIndex = 3;
+        projectSpectrumView.TabStop = false;
         //
         // waveformHostPanel
         //
@@ -807,12 +919,13 @@ partial class Form1
         AutoScaleMode = AutoScaleMode.Font;
         BackColor = UiColors.WindowBack;
         ClientSize = new Size(960, 640);
-        // Dock ?: Fill ? Bottom???????? Top??????????????
+        // Dock: Fill / Bottom / Top。後から Add した Top ほど上端に寄る。
         Controls.Add(logAreaPanel);
         Controls.Add(actionBar);
         Controls.Add(waapiStatusBar);
         Controls.Add(transportBar);
         Controls.Add(waveformHostPanel);
+        Controls.Add(projectBar);
         ForeColor = UiColors.WindowFore;
         MaximizeBox = true;
         MinimizeBox = true;
@@ -821,6 +934,9 @@ partial class Form1
         StartPosition = FormStartPosition.CenterScreen;
         Text = "MGA Wwise IMImporter - Version 1.00 β";
         ((System.ComponentModel.ISupportInitialize)brandLogoPictureBox).EndInit();
+        projectActionPanel.ResumeLayout(false);
+        projectActionPanel.PerformLayout();
+        projectBar.ResumeLayout(false);
         waveformHostPanel.ResumeLayout(false);
         actionControlsPanel.ResumeLayout(false);
         actionControlsPanel.PerformLayout();

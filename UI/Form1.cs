@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -73,8 +74,16 @@ public partial class Form1 : Form
     private const uint PfmLineSpacing = 0x00000100;
     private const byte LineSpacingExact = 4;
 
+    [DllImport("user32.dll")]
+    private static extern bool HideCaret(IntPtr hWnd);
+
     private DeveloperSettings _developerSettings = new();
     private WaapiSettings _waapiSettings = new();
+    private ProjectSettingsStore _projectStore = ProjectSettingsStore.Load();
+    private string _loadedProjectName = ProjectSettingsStore.DefaultName;
+    private bool _creatingNewProject;
+    private bool _suppressProjectUiEvents;
+    private string _projectOutputDirectory = string.Empty;
     private WaapiProbeResult? _waapiLastResult;
     private string _waapiLoggedSelectionPath = string.Empty;
     private int _waapiPollFailCount;
@@ -154,7 +163,7 @@ public partial class Form1 : Form
     private bool _resumePlaybackAfterBackwardSeek;
     private TransportCommand? _activeTransportShortcutCommand;
     private Keys _activeTransportShortcutKeyCode = Keys.None;
-    private readonly MarkerSettings _markerSettings = MarkerSettings.Load();
+    private readonly MarkerSettings _markerSettings = new();
 #if DEBUG
     private long _diagnosticSequence;
 #endif
@@ -181,6 +190,7 @@ public partial class Form1 : Form
         ApplyActionBarTextColors();
         LayoutActionBarCopyright();
         ApplyLogButtonColors();
+        ApplyProjectBarColors();
         transportBar.ApplyColors();
         UpdateTransportPlaybackState();
         ClearPlaylistChoices("Playlist はありません");
@@ -198,8 +208,8 @@ public partial class Form1 : Form
         KeyPreview = true;
         _developerSettings = DeveloperSettings.Load();
         _waapiSettings = WaapiSettings.Load();
-        TopMost = _developerSettings.TopMost;
-        topMostCheckBox.Checked = _developerSettings.TopMost;
+        WireProjectBarEvents();
+        ApplyProjectProfile(_projectStore.GetActive(), selectInCombo: true);
 #if DEBUG
         detailedLogCheckBox.Checked = _developerSettings.DetailedPlaybackLog;
 #else
@@ -313,6 +323,10 @@ public partial class Form1 : Form
         Update();
         Opacity = 1d;
         Activate();
+
+        // 起動時にプロジェクト名コンボが先頭フォーカス／全選択になるのを防ぐ。
+        projectNameComboBox.ClearTextSelection();
+        ReleaseFocusToWaveform();
 
         BeginInvoke(RunStartupSequenceAsync);
     }
@@ -510,6 +524,16 @@ public partial class Form1 : Form
         _playlistTransitionGlowTimer.Dispose();
         _waveformScrollTimer.Dispose();
         WindowSettings.FromForm(this).Save();
+        // 終了時は Active 名だけ記憶する（作業状態のオートセーブはしない）。
+        if (!_creatingNewProject && _projectStore.ContainsName(_loadedProjectName))
+        {
+            _projectStore.SetActive(_loadedProjectName);
+        }
+        else
+        {
+            _projectStore.SaveActiveNameOnly();
+        }
+
         base.OnFormClosing(e);
     }
 
@@ -845,7 +869,9 @@ public partial class Form1 : Form
         }
 
         // 名前編集中やマーカーコメント入力中はフォーカスを奪わない。
-        if (ActiveControl is TextBox)
+        // プロジェクト書き出し先（ReadOnly）は例外で波形へ戻す。
+        if (ActiveControl is TextBox textBox
+            && !ReferenceEquals(textBox, projectOutputPathTextBox))
         {
             return;
         }
@@ -938,6 +964,7 @@ public partial class Form1 : Form
         actionBar.BackColor = UiColors.ForControlBack(UiColors.ActionBarBack);
         ApplyActionBarButtonColors();
         ApplyActionBarTextColors();
+        ApplyProjectBarColors();
         topMostCheckBox.ForeColor = UiColors.ActionOptionFore;
         compactFileNumbersCheckBox.ForeColor = UiColors.ActionOptionFore;
         detailedLogCheckBox.ForeColor = UiColors.ActionOptionFore;
@@ -1077,6 +1104,460 @@ public partial class Form1 : Form
             button.ActiveForeColor = UiColors.LogButtonFore;
             button.Invalidate();
         }
+    }
+
+    private void ApplyProjectBarColors()
+    {
+        var barBack = UiColors.ForControlBack(UiColors.ProjectBarBack);
+        var inputBack = UiColors.ForControlBack(UiColors.ProjectBarInputBack);
+        var inputFore = UiColors.ProjectBarInputFore;
+        projectBar.BackColor = barBack;
+        projectActionPanel.BackColor = barBack;
+        projectNameSpacer.BackColor = barBack;
+        projectNameComboBox.ApplyColors();
+        projectOutputPathTextBox.BackColor = inputBack;
+        projectOutputPathTextBox.ForeColor = inputFore;
+        var iconFore = UiColors.LogButtonFore;
+        ApplyProjectIconButtonColors(projectFolderButton, iconFore, barBack);
+        ApplyProjectIconButtonColors(projectSaveButton, iconFore, barBack);
+        ApplyProjectIconButtonColors(projectDeleteButton, iconFore, barBack);
+        projectSpectrumView.Invalidate();
+        projectBar.Invalidate();
+    }
+
+    private static void ApplyProjectIconButtonColors(
+        TransportIconButton button,
+        Color iconFore,
+        Color barBack)
+    {
+        button.BackColor = barBack;
+        button.ForeColor = iconFore;
+        button.HoverBackColor = UiColors.ForControlBack(UiColors.TransportHoverBack);
+        button.PressedBackColor = UiColors.ForControlBack(UiColors.TransportPressedBack);
+        button.AccentColor = Color.Empty;
+        button.ActiveForeColor = iconFore;
+        button.Invalidate();
+    }
+
+    private void WireProjectBarEvents()
+    {
+        projectSpectrumView.Player = _audioPlayer;
+        projectBar.Paint += ProjectBar_Paint;
+        projectNameComboBox.SelectedIndexChanged += ProjectNameComboBox_SelectedIndexChanged;
+        projectNameComboBox.SelectionChangeCommitted += ProjectNameComboBox_SelectionChangeCommitted;
+        projectNameComboBox.DropDownClosed += ProjectNameComboBox_DropDownClosed;
+        projectFolderButton.Click += ProjectFolderButton_Click;
+        projectSaveButton.Click += ProjectSaveButton_Click;
+        projectDeleteButton.Click += ProjectDeleteButton_Click;
+        projectOutputPathTextBox.GotFocus += ProjectOutputPathTextBox_GotFocus;
+        projectOutputPathTextBox.Enter += (_, _) => HideProjectPathCaret();
+        projectOutputPathTextBox.Click += (_, _) => HideProjectPathCaret();
+    }
+
+    private void ProjectBar_Paint(object? sender, PaintEventArgs e)
+    {
+        using var pen = new Pen(UiColors.ProjectBarBorder);
+        e.Graphics.DrawLine(pen, 0, projectBar.Height - 1, projectBar.Width, projectBar.Height - 1);
+    }
+
+    private void ProjectOutputPathTextBox_GotFocus(object? sender, EventArgs e)
+    {
+        HideProjectPathCaret();
+        BeginInvoke(() =>
+        {
+            if (!IsDisposed)
+            {
+                ReleaseFocusToWaveform();
+            }
+        });
+    }
+
+    private void HideProjectPathCaret()
+    {
+        if (projectOutputPathTextBox.IsHandleCreated)
+        {
+            _ = HideCaret(projectOutputPathTextBox.Handle);
+        }
+
+        projectOutputPathTextBox.SelectionLength = 0;
+    }
+
+    private void RefreshProjectComboItems(string? selectName)
+    {
+        _suppressProjectUiEvents = true;
+        try
+        {
+            projectNameComboBox.BeginUpdate();
+            projectNameComboBox.Items.Clear();
+            foreach (var name in _projectStore.Names)
+            {
+                projectNameComboBox.Items.Add(name);
+            }
+
+            projectNameComboBox.Items.Add(ProjectSettingsStore.NewProjectMenuItem);
+            if (!string.IsNullOrWhiteSpace(selectName))
+            {
+                var index = projectNameComboBox.Items.IndexOf(selectName);
+                projectNameComboBox.SelectedIndex = index >= 0 ? index : 0;
+                projectNameComboBox.Text = selectName;
+            }
+
+            // SelectedIndex 設定で全選択になるため、直後に解除する。
+            projectNameComboBox.ClearTextSelection();
+        }
+        finally
+        {
+            projectNameComboBox.EndUpdate();
+            _suppressProjectUiEvents = false;
+        }
+    }
+
+    private void ApplyProjectProfile(
+        ProjectProfile profile,
+        bool selectInCombo,
+        bool asNewDraft = false)
+    {
+        _suppressProjectUiEvents = true;
+        try
+        {
+            _creatingNewProject = asNewDraft;
+            _loadedProjectName = profile.Name;
+            _projectOutputDirectory = profile.OutputDirectory?.Trim() ?? string.Empty;
+            projectOutputPathTextBox.Text = _projectOutputDirectory;
+
+            profile.CopyMarkerInto(_markerSettings);
+            markerOptionsPanel.Bind(_markerSettings);
+            waveformView.MarkerGridOverride = _markerSettings.GridOverride;
+            if (_previewSession is { } session)
+            {
+                session.SetCommentRule(_markerSettings.ToCommentRule());
+                waveformView.SetMarkers(session.EffectiveMarkers);
+            }
+
+            SelectFadeRadio(fadeInChoicesPanel, profile.FadeInSeconds, FadeInTimeRadio_CheckedChanged);
+            SelectFadeRadio(transitionTimeChoicesPanel, profile.FadeOutSeconds, TransitionTimeRadio_CheckedChanged);
+            SelectExitSourceRadio(profile.ExitSourceAt);
+
+            compactFileNumbersCheckBox.CheckedChanged -= CompactFileNumbersCheckBox_CheckedChanged;
+            compactFileNumbersCheckBox.Checked = profile.CompactFileNumbers;
+            compactFileNumbersCheckBox.CheckedChanged += CompactFileNumbersCheckBox_CheckedChanged;
+            topMostCheckBox.CheckedChanged -= TopMostCheckBox_CheckedChanged;
+            topMostCheckBox.Checked = profile.AlwaysOnTop;
+            topMostCheckBox.CheckedChanged += TopMostCheckBox_CheckedChanged;
+            TopMost = profile.AlwaysOnTop;
+
+            if (selectInCombo)
+            {
+                RefreshProjectComboItems(profile.Name);
+            }
+            else
+            {
+                projectNameComboBox.Text = profile.Name;
+            }
+        }
+        finally
+        {
+            _suppressProjectUiEvents = false;
+        }
+
+        if (_loadedPreview is { } preview)
+        {
+            UpdatePlaylistDisplayNames(preview.OutputParts);
+        }
+
+        UpdateExportButtonState();
+    }
+
+    private void SelectFadeRadio(
+        FlowLayoutPanel panel,
+        double seconds,
+        EventHandler handler)
+    {
+        FlatOptionRadioButton? match = null;
+        foreach (Control control in panel.Controls)
+        {
+            if (control is FlatOptionRadioButton { Tag: double tag }
+                && Math.Abs(tag - seconds) < 0.0001d)
+            {
+                match = control as FlatOptionRadioButton;
+                break;
+            }
+        }
+
+        match ??= panel.Controls.OfType<FlatOptionRadioButton>().FirstOrDefault();
+        if (match is null)
+        {
+            return;
+        }
+
+        match.CheckedChanged -= handler;
+        match.Checked = true;
+        match.CheckedChanged += handler;
+        if (ReferenceEquals(panel, fadeInChoicesPanel))
+        {
+            _playlistFadeInSeconds = seconds;
+        }
+        else
+        {
+            _playlistFadeSeconds = seconds;
+        }
+    }
+
+    private void SelectExitSourceRadio(PlaylistExitSourceMode mode)
+    {
+        FlatOptionRadioButton? match = null;
+        foreach (var radio in new[]
+        {
+            exitSourceImmediateRadio,
+            exitSourceNextBarRadio,
+            exitSourceNextBeatRadio,
+            exitSourceNextCueRadio,
+            exitSourceExitCueRadio,
+        })
+        {
+            if (radio.Tag is PlaylistExitSourceMode tag && tag == mode)
+            {
+                match = radio;
+                break;
+            }
+        }
+
+        match ??= exitSourceNextBarRadio;
+        match.CheckedChanged -= ExitSourceAtRadio_CheckedChanged;
+        match.Checked = true;
+        match.CheckedChanged += ExitSourceAtRadio_CheckedChanged;
+        _playlistExitSourceMode = mode;
+    }
+
+    private ProjectProfile CaptureCurrentProfile(string name)
+    {
+        var profile = ProjectSettingsStore.CreateAppDefaults(name);
+        profile.FadeInSeconds = _playlistFadeInSeconds;
+        profile.FadeOutSeconds = _playlistFadeSeconds;
+        profile.ExitSourceAt = _playlistExitSourceMode;
+        profile.CopyMarkerFrom(_markerSettings);
+        profile.CompactFileNumbers = compactFileNumbersCheckBox.Checked;
+        profile.AlwaysOnTop = topMostCheckBox.Checked;
+        profile.OutputDirectory = _projectOutputDirectory;
+        return profile;
+    }
+
+    private void ProjectNameComboBox_SelectedIndexChanged(object? sender, EventArgs e)
+    {
+        if (_suppressProjectUiEvents)
+        {
+            return;
+        }
+
+        var selected = projectNameComboBox.SelectedItem as string;
+        if (selected is null)
+        {
+            return;
+        }
+
+        if (string.Equals(selected, ProjectSettingsStore.NewProjectMenuItem, StringComparison.Ordinal))
+        {
+            BeginNewProjectDraft();
+            return;
+        }
+
+        if (string.Equals(selected, _loadedProjectName, StringComparison.OrdinalIgnoreCase)
+            && !_creatingNewProject)
+        {
+            ReleaseProjectComboFocus();
+            return;
+        }
+
+        ApplyProjectProfile(_projectStore.GetRequired(selected), selectInCombo: false);
+        _projectStore.SetActive(selected);
+        ReleaseProjectComboFocus();
+    }
+
+    private void ProjectNameComboBox_SelectionChangeCommitted(object? sender, EventArgs e)
+    {
+        if (_suppressProjectUiEvents || _creatingNewProject)
+        {
+            return;
+        }
+
+        ReleaseProjectComboFocus();
+    }
+
+    private void ProjectNameComboBox_DropDownClosed(object? sender, EventArgs e)
+    {
+        if (_suppressProjectUiEvents || _creatingNewProject)
+        {
+            return;
+        }
+
+        // 新規ドラフト作成中以外は、閉じたあとに選択ハイライトとフォーカスを外す。
+        ReleaseProjectComboFocus();
+    }
+
+    /// <summary>
+    /// プロジェクト名コンボの全選択ハイライトを消し、波形へフォーカスを戻す。
+    /// ComboBox が選択直後にフォーカスを取り戻すため BeginInvoke で遅延する。
+    /// </summary>
+    private void ReleaseProjectComboFocus()
+    {
+        BeginInvoke(() =>
+        {
+            if (IsDisposed || _creatingNewProject)
+            {
+                return;
+            }
+
+            projectNameComboBox.ClearTextSelection();
+            ReleaseFocusToWaveform();
+        });
+    }
+
+    private void BeginNewProjectDraft()
+    {
+        var draftName = _projectStore.SuggestNewProjectName();
+        var profile = ProjectSettingsStore.CreateAppDefaults(draftName);
+        ApplyProjectProfile(profile, selectInCombo: false, asNewDraft: true);
+        _suppressProjectUiEvents = true;
+        try
+        {
+            projectNameComboBox.SelectedIndex = -1;
+            projectNameComboBox.Text = draftName;
+            projectNameComboBox.SelectAll();
+            projectNameComboBox.Focus();
+        }
+        finally
+        {
+            _suppressProjectUiEvents = false;
+        }
+    }
+
+    private void ProjectFolderButton_Click(object? sender, EventArgs e)
+    {
+        using var dialog = new FolderBrowserDialog
+        {
+            Description = "波形の書き出し先フォルダを選択",
+            UseDescriptionForTitle = true,
+            SelectedPath = Directory.Exists(_projectOutputDirectory)
+                ? _projectOutputDirectory
+                : string.Empty,
+        };
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            _projectOutputDirectory = dialog.SelectedPath.Trim();
+            projectOutputPathTextBox.Text = _projectOutputDirectory;
+            UpdateExportButtonState();
+        }
+
+        ReleaseFocusToWaveform();
+    }
+
+    private void ProjectSaveButton_Click(object? sender, EventArgs e)
+    {
+        try
+        {
+            var newName = projectNameComboBox.Text;
+            var profile = CaptureCurrentProfile(newName);
+            var savedName = _projectStore.SaveProfile(
+                _loadedProjectName,
+                newName,
+                profile,
+                _creatingNewProject);
+            _creatingNewProject = false;
+            _loadedProjectName = savedName;
+            RefreshProjectComboItems(savedName);
+            AppendReport(
+                $"=== Project ==={Environment.NewLine}"
+                + $"Message : プロジェクト「{savedName}」を保存しました。{Environment.NewLine}{Environment.NewLine}");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                this,
+                ex.Message,
+                "プロジェクトの保存に失敗",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+
+        ReleaseFocusToWaveform();
+    }
+
+    private void ProjectDeleteButton_Click(object? sender, EventArgs e)
+    {
+        if (_creatingNewProject)
+        {
+            ApplyProjectProfile(_projectStore.GetActive(), selectInCombo: true);
+            ReleaseFocusToWaveform();
+            return;
+        }
+
+        var name = _loadedProjectName;
+        var confirm = MessageBox.Show(
+            this,
+            $"プロジェクト「{name}」を削除しますか？",
+            "プロジェクト削除",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button2);
+        if (confirm != DialogResult.Yes)
+        {
+            ReleaseFocusToWaveform();
+            return;
+        }
+
+        try
+        {
+            var next = _projectStore.Delete(name);
+            ApplyProjectProfile(next, selectInCombo: true);
+            AppendReport(
+                $"=== Project ==={Environment.NewLine}"
+                + $"Message : プロジェクト「{name}」を削除しました。{Environment.NewLine}{Environment.NewLine}");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                this,
+                ex.Message,
+                "プロジェクトの削除に失敗",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+
+        ReleaseFocusToWaveform();
+    }
+
+    private bool HasValidExportDirectory()
+    {
+        var directory = _projectOutputDirectory.Trim();
+        return directory.Length > 0 && Directory.Exists(directory);
+    }
+
+    private string? TryGetExportDirectoryOrWarn()
+    {
+        var directory = _projectOutputDirectory.Trim();
+        if (directory.Length == 0)
+        {
+            MessageBox.Show(
+                this,
+                "書き出し先フォルダを選択してください。",
+                "EXPORT",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return null;
+        }
+
+        if (!Directory.Exists(directory))
+        {
+            MessageBox.Show(
+                this,
+                $"書き出し先フォルダが見つかりません:{Environment.NewLine}{directory}",
+                "EXPORT",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return null;
+        }
+
+        return directory;
     }
 
     private void PositionLogButtons()
@@ -1595,11 +2076,10 @@ public partial class Form1 : Form
         }
     }
 
-    /// <summary>マーカーオプションの変更を保存し、波形ビューと現在のセッションへ反映する。</summary>
+    /// <summary>マーカーオプションの変更をメモリへ反映する（永続化はプロジェクト SAVE）。</summary>
     private void ApplyMarkerSettings()
     {
         waveformView.MarkerGridOverride = _markerSettings.GridOverride;
-        _markerSettings.Save();
         if (_previewSession is { } session)
         {
             session.SetCommentRule(_markerSettings.ToCommentRule());
@@ -3060,6 +3540,8 @@ public partial class Form1 : Form
         SetInteractiveControlsEnabled(rightSidePanel, !locked);
         SetInteractiveControlsEnabled(actionControlsPanel, !locked);
         SetInteractiveControlsEnabled(waveformHostPanel, !locked);
+        SetInteractiveControlsEnabled(projectBar, !locked);
+        projectNameComboBox.Enabled = !locked;
         if (!locked)
         {
             reloadButton.Enabled = _lastInputFiles.Count > 0;
@@ -3104,13 +3586,13 @@ public partial class Form1 : Form
                 !_disabledPlaylistPartNumbers.Contains(part.Number));
         exportButton.Enabled = !_exportBusy
             && !_uiInteractionLocks.HasFlag(UiInteractionLock.Export)
-            && hasEnabledParts;
+            && hasEnabledParts
+            && HasValidExportDirectory();
     }
 
     private void TopMostCheckBox_CheckedChanged(object? sender, EventArgs e)
     {
         TopMost = topMostCheckBox.Checked;
-        DeveloperSettings.SaveTopMost(topMostCheckBox.Checked);
         ReleaseFocusToWaveform();
     }
 
@@ -3634,7 +4116,9 @@ public partial class Form1 : Form
             return;
         }
 
-        var directory = Path.GetDirectoryName(preview.SourcePath) ?? string.Empty;
+        var directory = HasValidExportDirectory()
+            ? _projectOutputDirectory.Trim()
+            : "（未選択）";
         AppendReport(
             $"=== Export ==={Environment.NewLine}"
             + $"Message : 出力パート {preview.OutputParts.Count} 件。［EXPORT］で分割 WAV を書き出せます。{Environment.NewLine}"
@@ -3645,6 +4129,13 @@ public partial class Form1 : Form
     {
         if (_exportBusy || _loadedPreview is not { OutputParts.Count: > 0 } preview)
         {
+            return;
+        }
+
+        var outputDirectory = TryGetExportDirectoryOrWarn();
+        if (outputDirectory is null)
+        {
+            ReleaseFocusToWaveform();
             return;
         }
 
@@ -3665,14 +4156,14 @@ public partial class Form1 : Form
 
         try
         {
-            await RunExportAsync(preview, exportSnapshot, exportGeneration);
+            await RunExportAsync(preview, exportSnapshot, exportGeneration, outputDirectory);
 
             if (IsDisposed || exportGeneration != _exportGeneration)
             {
                 return;
             }
 
-            await RunWwiseImportAsync(preview, wwiseSnapshot, exportGeneration);
+            await RunWwiseImportAsync(preview, wwiseSnapshot, exportGeneration, outputDirectory);
         }
         finally
         {
@@ -3692,10 +4183,11 @@ public partial class Form1 : Form
     private async Task RunWwiseImportAsync(
         WaveformPreviewData preview,
         PlaylistExportSnapshot snapshot,
-        int exportGeneration)
+        int exportGeneration,
+        string outputDirectory)
     {
         // 書き出しに失敗したパートがあるときは中断（有効パートの全ファイル存在を確認）
-        var directory = Path.GetDirectoryName(preview.SourcePath) ?? string.Empty;
+        var directory = outputDirectory;
         var missing = snapshot.Parts
             .Select(p => Path.Combine(directory, p.FileName))
             .Where(p => !File.Exists(p))
@@ -3750,7 +4242,8 @@ public partial class Form1 : Form
                 preview.Bars,
                 snapshot.Markers,
                 snapshot.PartGroupIds,
-                snapshot.PlaylistNameOverrides);
+                snapshot.PlaylistNameOverrides,
+                outputDirectory);
         }
         catch (Exception ex)
         {
@@ -3881,7 +4374,8 @@ public partial class Form1 : Form
     private async Task RunExportAsync(
         WaveformPreviewData preview,
         PlaylistExportSnapshot snapshot,
-        int exportGeneration)
+        int exportGeneration,
+        string outputDirectory)
     {
         try
         {
@@ -3892,6 +4386,7 @@ public partial class Form1 : Form
                 preview.Regions,
                 preview.Bars,
                 snapshot.Markers,
+                outputDirectory,
                 onPartBegin: part =>
                 {
                     // 書き出し開始の瞬間に発光を点ける（見えてから I/O へ）

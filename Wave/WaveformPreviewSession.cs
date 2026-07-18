@@ -48,6 +48,14 @@ internal readonly record struct MarkerCommentRule(
 
         return string.Join(Joiner, parts);
     }
+
+    /// <summary>
+    /// 連番ありのときの最大値（Digits=3 → 999）。連番なしは制限しない。
+    /// </summary>
+    public int MaxSerialNumber =>
+        Digits <= 0
+            ? int.MaxValue
+            : (int)Math.Pow(10, Digits) - 1;
 }
 
 /// <summary>
@@ -160,6 +168,8 @@ internal sealed class WaveformPreviewSession
     {
         var existing = _userMarkers.Select(marker => marker.SampleOffset).ToHashSet();
         var changed = false;
+        // Reset Per Part 時はパートごとの追加済み件数を走査中に加算する。
+        var addedInScope = new Dictionary<int, int>();
         foreach (var requestedSampleOffset in sampleOffsets.Distinct())
         {
             if (!TryResolveSharedMarkerSample(requestedSampleOffset, out var sampleOffset))
@@ -173,6 +183,12 @@ internal sealed class WaveformPreviewSession
                 continue;
             }
 
+            if (!CanAllocateSerialNumber(sampleOffset, addedInScope))
+            {
+                existing.Remove(sampleOffset);
+                continue;
+            }
+
             _userMarkers.Add(new UserWaveformMarker(Guid.NewGuid(), sampleOffset));
             changed = true;
         }
@@ -183,6 +199,59 @@ internal sealed class WaveformPreviewSession
         }
 
         return changed;
+    }
+
+    /// <summary>
+    /// Digits 桁に収まる連番がまだ余っているか。
+    /// </summary>
+    private bool CanAllocateSerialNumber(
+        long sampleOffset,
+        Dictionary<int, int> addedInScope)
+    {
+        if (_commentRule.Digits <= 0)
+        {
+            return true;
+        }
+
+        var scopeKey = _commentRule.ResetPerPart
+            ? FindNumberingPartIndex(sampleOffset)
+            : -1;
+        if (!addedInScope.TryGetValue(scopeKey, out var pendingInScope))
+        {
+            pendingInScope = 0;
+        }
+
+        var existingInScope = CountAuthoritativeMarkersInScope(scopeKey);
+        if (existingInScope + pendingInScope >= _commentRule.MaxSerialNumber)
+        {
+            return false;
+        }
+
+        addedInScope[scopeKey] = pendingInScope + 1;
+        return true;
+    }
+
+    private int CountAuthoritativeMarkersInScope(int scopeKey)
+    {
+        var count = 0;
+        foreach (var marker in _userMarkers)
+        {
+            if (!IsAuthoritativeUserMarkerSample(marker.SampleOffset)
+                || IsMarkerOnDisabledPart(marker.SampleOffset))
+            {
+                continue;
+            }
+
+            if (_commentRule.ResetPerPart
+                && FindNumberingPartIndex(marker.SampleOffset) != scopeKey)
+            {
+                continue;
+            }
+
+            count++;
+        }
+
+        return count;
     }
 
     public bool RemoveMarkers(IEnumerable<long> sampleOffsets)

@@ -22,7 +22,8 @@ internal static class WwiseMusicPlanBuilder
         IReadOnlyList<WaveformBarMark> bars,
         IReadOnlyList<WaveformMarkerMark> markers,
         IReadOnlyDictionary<int, int>? partGroupIds = null,
-        IReadOnlyDictionary<int, string>? playlistNameOverrides = null)
+        IReadOnlyDictionary<int, string>? playlistNameOverrides = null,
+        string? outputDirectory = null)
     {
         if (sampleRate == 0)
         {
@@ -40,7 +41,9 @@ internal static class WwiseMusicPlanBuilder
             baseName = "wave";
         }
 
-        var directory = Path.GetDirectoryName(sourcePath) ?? string.Empty;
+        var directory = string.IsNullOrWhiteSpace(outputDirectory)
+            ? Path.GetDirectoryName(sourcePath) ?? string.Empty
+            : outputDirectory.Trim();
         var units = BuildPlaylistUnits(outputParts, partGroupIds);
         var playlists = new List<WwisePlaylistPlan>();
 

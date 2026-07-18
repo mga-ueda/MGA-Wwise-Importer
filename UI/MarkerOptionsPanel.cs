@@ -486,11 +486,15 @@ internal sealed class MarkerOptionsPanel : UserControl
         SetToolTip(_commentHeaderLabel,
             "追加マーカーから生成する Wwise Custom Cue 名の規則を設定します。");
         SetToolTip(_digitsLabel,
-            "連番の桁数を 1～6 で指定します。空欄または 0 の場合は連番自体を付けません。");
+            "連番の桁数を 1～6 で指定します。空欄または 0 の場合は連番自体を付けません。"
+            + " 1 以上のときは、その桁で表せる最大値までしかマーカーを追加できません（例: 3 → 999 件）。");
         SetToolTip(_digitsTextBox,
-            "連番の桁数です。空欄または 0 で連番なし、1～6 で連番ありになります。");
+            "連番の桁数です。空欄または 0 で連番なし、1～6 で連番ありになります。"
+            + " 桁数を超える連番は追加できません。");
         SetToolTip(_zeroPadCheckBox,
-            "オンの場合、指定桁数まで 0 で埋めます（例: 001）。");
+            "オンの場合、Digits の桁数まで常に 0 で埋めます"
+            + "（例: Digits=2 → 01、Digits=3 → 001、Digits=4 → 0001）。"
+            + "オフのときは桁埋めせず 1, 2, 3… と表示します。");
         SetToolTip(_resetPerPartCheckBox,
             "オンの場合、Music Playlist の各パート（書き出しファイル）ごとに連番を 1 へ戻します。");
         SetToolTip(_prefixCheckBox,
