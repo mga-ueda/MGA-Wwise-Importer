@@ -53,14 +53,13 @@ internal sealed class MarkerOptionsPanel : UserControl
 
         // フォントは DPI に追従して大きく描画されるため、
         // 横方向の配置・幅も DPI に合わせて拡縮する（行高だけはプレイリストと同じ 30px 固定）。
-        // Marker Grid は独立した幅とし、Marker Comment の直前だけ余白を詰める。
-        // Marker Comment 内の 2 列だけを同じ幅で揃える。
+        // 各列は内容に必要な幅だけ確保する。均等幅にはせず、列間も小さく詰める。
         var sectionGap = S(4);
-        var commentColumnGap = S(24);
+        var commentColumnGap = S(4);
         var col1X = 1;
         var col1W = S(92);
         var col2X = col1X + col1W + sectionGap;
-        var col2W = S(136);
+        var col2W = S(114);
         var col3X = col2X + col2W + commentColumnGap;
         var col3W = S(136);
         // Fade In などの遷移セクションと同じ「ヘッダー（26px 相当）＋1px」で行を開始する。
@@ -106,17 +105,32 @@ internal sealed class MarkerOptionsPanel : UserControl
             AutoEllipsis = true,
             Font = baseFont,
             Location = new Point(col2X + S(12), contentTop + RowPitch * 3),
-            Size = new Size(col2W + col3W - S(16), RowHeight),
+            Size = new Size(col3X + col3W - (col2X + S(12)), RowHeight),
             Text = string.Empty,
             TextAlign = ContentAlignment.MiddleLeft,
         };
 
-        _prefixCheckBox = CreateCheckBox("Prefix", baseFont, col3X + S(12), contentTop, S(64));
-        _prefixTextBox = CreateTextBox(baseFont, col3X + S(12) + S(76), contentTop, S(44));
-        _suffixCheckBox = CreateCheckBox("Suffix", baseFont, col3X + S(12), contentTop + RowPitch, S(64));
-        _suffixTextBox = CreateTextBox(baseFont, col3X + S(12) + S(76), contentTop + RowPitch, S(44));
-        _joinerCheckBox = CreateCheckBox("Separator", baseFont, col3X + S(12), contentTop + RowPitch * 2, S(76));
-        _joinerTextBox = CreateTextBox(baseFont, col3X + S(12) + S(88), contentTop + RowPitch * 2, S(32));
+        // 3つのエディタは、最長ラベル（Separator）の直後で左端を揃える。
+        var checkLeft = col3X + S(12);
+        var glyphAndGap = S(14) + S(7);
+        var editorGap = S(4);
+        var prefixTextW = MeasureLabelWidth("Prefix", baseFont);
+        var suffixTextW = MeasureLabelWidth("Suffix", baseFont);
+        var joinerTextW = MeasureLabelWidth("Separator", baseFont);
+        var editorX = checkLeft
+            + glyphAndGap
+            + Math.Max(prefixTextW, Math.Max(suffixTextW, joinerTextW))
+            + editorGap;
+
+        _prefixCheckBox = CreateCheckBox(
+            "Prefix", baseFont, checkLeft, contentTop, glyphAndGap + prefixTextW + S(2));
+        _prefixTextBox = CreateTextBox(baseFont, editorX, contentTop, S(44));
+        _suffixCheckBox = CreateCheckBox(
+            "Suffix", baseFont, checkLeft, contentTop + RowPitch, glyphAndGap + suffixTextW + S(2));
+        _suffixTextBox = CreateTextBox(baseFont, editorX, contentTop + RowPitch, S(44));
+        _joinerCheckBox = CreateCheckBox(
+            "Separator", baseFont, checkLeft, contentTop + RowPitch * 2, glyphAndGap + joinerTextW + S(2));
+        _joinerTextBox = CreateTextBox(baseFont, editorX, contentTop + RowPitch * 2, S(32));
 
         Controls.Add(_gridHeaderLabel);
         Controls.Add(_gridDefaultRadio);
@@ -275,6 +289,16 @@ internal sealed class MarkerOptionsPanel : UserControl
             }
         };
         return radio;
+    }
+
+    /// <summary>ラベル文字の描画幅を返す（余白を含まない Typographic 計測）。</summary>
+    private int MeasureLabelWidth(string text, Font font)
+    {
+        using var image = new Bitmap(1, 1);
+        using var g = Graphics.FromImage(image);
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        var size = g.MeasureString(text, font, int.MaxValue, StringFormat.GenericTypographic);
+        return Math.Max(1, (int)Math.Ceiling(size.Width));
     }
 
     private FlatOptionCheckBox CreateCheckBox(string text, Font font, int x, int y, int width)

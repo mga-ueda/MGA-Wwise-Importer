@@ -10,6 +10,7 @@
     <AssemblyName>MgaWwiseIMImporter</AssemblyName>
     <Product>MGA Wwise IMImporter</Product>
     <ApplicationTitle>MGA Wwise IMImporter</ApplicationTitle>
+    <ApplicationIcon>Assets\Branding\MgaWwiseIMImporter.ico</ApplicationIcon>
     <Version>1.0.0-beta</Version>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
     <FileVersion>1.0.0.0</FileVersion>
@@ -22,6 +23,11 @@
     <None Remove="tools\**" />
     <Compile Remove="_probe\**" />
     <None Remove="_probe\**" />
+  </ItemGroup>
+
+  <!-- 色調整パネルは開発ビルド専用。Release バイナリには含めない。 -->
+  <ItemGroup Condition="'$(Configuration)' == 'Release'">
+    <Compile Remove="UI\ColorDevPanelForm.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -42,6 +48,10 @@
     <None Update="Assets\Branding\MiyabiGameAudio.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <TargetPath>Branding\MiyabiGameAudio.png</TargetPath>
+    </None>
+    <None Update="Assets\Branding\MgaWwiseIMImporter.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>Branding\MgaWwiseIMImporter.ico</TargetPath>
     </None>
   </ItemGroup>
 

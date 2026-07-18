@@ -103,6 +103,16 @@ internal sealed class TransportBar : UserControl
 
     public event EventHandler<TransportCommand>? CommandInvoked;
 
+    /// <summary>
+    /// 全グループを横スクロールなしで表示するために必要な幅。
+    /// 左右 Padding と各グループの Margin も含む。
+    /// </summary>
+    public int RequiredWidth =>
+        Padding.Horizontal
+        + _groups.Controls
+            .Cast<Control>()
+            .Sum(control => control.Width + control.Margin.Horizontal);
+
     public bool IsPlaying
     {
         get => _playButton.IsPlaying;

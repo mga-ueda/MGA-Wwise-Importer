@@ -9,6 +9,9 @@ internal sealed class FlatPlaylistButton : Button
     private Color? _indicatorColor;
     private double _indicatorGlowLevel;
 
+    /// <summary>状態インジケーターと文字のあいだを含めた、テキスト左端までの余白。</summary>
+    public const int TextLeftInset = 2 /*indicatorLeft*/ + 6 /*indicatorWidth*/ + 5;
+
     /// <summary>
     /// 左端の状態インジケーター色。null のときは表示しない。
     /// </summary>
@@ -43,6 +46,17 @@ internal sealed class FlatPlaylistButton : Button
             Invalidate();
         }
     }
+
+    /// <summary>
+    /// OnPaint と同じ条件で文字幅を測る。
+    /// （NoPadding 無し。計測を描画と揃えないと省略記号が出る）
+    /// </summary>
+    public static int MeasureDisplayTextWidth(string text, Font font) =>
+        TextRenderer.MeasureText(
+            text,
+            font,
+            Size.Empty,
+            TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix).Width;
 
     public FlatPlaylistButton()
     {
@@ -91,10 +105,10 @@ internal sealed class FlatPlaylistButton : Button
         }
 
         var textBounds = Rectangle.FromLTRB(
-            Padding.Left + indicatorLeft + indicatorWidth + 5,
+            Padding.Left + TextLeftInset,
             Padding.Top,
             Math.Max(
-                Padding.Left + indicatorLeft + indicatorWidth + 5,
+                Padding.Left + TextLeftInset,
                 ClientSize.Width - Padding.Right),
             Math.Max(Padding.Top, ClientSize.Height - Padding.Bottom));
         TextRenderer.DrawText(

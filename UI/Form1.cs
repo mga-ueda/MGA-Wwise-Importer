@@ -83,7 +83,9 @@ public partial class Form1 : Form
     private double _smoothProgress;
     private double _anchorProgress;
     private long _anchorTickMs;
+#if DEBUG
     private ColorDevPanelForm? _colorDevPanel;
+#endif
     private int _exportGeneration;
     private WaveformPreviewData? _loadedPreview;
     private WaveformPreviewSession? _previewSession;
@@ -122,13 +124,18 @@ public partial class Form1 : Form
     private TransportCommand? _activeTransportShortcutCommand;
     private Keys _activeTransportShortcutKeyCode = Keys.None;
     private readonly MarkerSettings _markerSettings = MarkerSettings.Load();
+#if DEBUG
     private long _diagnosticSequence;
+#endif
 
     public Form1()
     {
         UiColors.LoadFromIni();
         AppFonts.EnsureRegistered();
         InitializeComponent();
+        UpdateMinimumWindowSize();
+        DpiChanged += (_, _) => UpdateMinimumWindowSize();
+        ApplyWindowIcon();
         brandLogoPictureBox.Image = LoadBrandLogo();
         // 初回レイアウト途中のフレームを見せず、描画完了後に一度で表示する。
         Opacity = 0d;
@@ -152,7 +159,16 @@ public partial class Form1 : Form
         _waapiSettings = WaapiSettings.Load();
         TopMost = _developerSettings.TopMost;
         topMostCheckBox.Checked = _developerSettings.TopMost;
+#if DEBUG
         detailedLogCheckBox.Checked = _developerSettings.DetailedPlaybackLog;
+#else
+        // リリース版では開発用ログ UI をレイアウトから除去し、イベントも無効化する。
+        detailedLogCheckBox.CheckedChanged -= DetailedLogCheckBox_CheckedChanged;
+        detailedLogCheckBox.Checked = false;
+        detailedLogCheckBox.Enabled = false;
+        detailedLogCheckBox.Visible = false;
+        actionControlsPanel.Controls.Remove(detailedLogCheckBox);
+#endif
         RestoreWindowBounds();
 
         _playheadTimer.Tick += (_, _) => UpdatePlayhead();
@@ -657,11 +673,13 @@ public partial class Form1 : Form
             return true;
         }
 
+#if DEBUG
         if (keyData == (Keys.Control | Keys.Shift | Keys.C))
         {
             ShowColorDevPanel();
             return true;
         }
+#endif
 
         return false;
     }
@@ -797,6 +815,7 @@ public partial class Form1 : Form
         UpdateTransportPlaybackState();
     }
 
+#if DEBUG
     private void ShowColorDevPanel()
     {
         if (_colorDevPanel is null || _colorDevPanel.IsDisposed)
@@ -818,6 +837,7 @@ public partial class Form1 : Form
         var y = Math.Max(screen.Top, Top);
         panel.Location = new Point(Math.Max(screen.Left, x), y);
     }
+#endif
 
     private void ApplyUiColors()
     {
@@ -1261,33 +1281,33 @@ public partial class Form1 : Form
             return;
         }
 
-        var textWidth = TextRenderer.MeasureText(
+        // 描画と同じ条件で測る（NoPadding 無し）。読み込み完了後の実テキストを使う。
+        var textWidth = FlatPlaylistButton.MeasureDisplayTextWidth(
             playlistHeaderLabel.Text,
-            playlistHeaderLabel.Font,
-            Size.Empty,
-            TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+            playlistHeaderLabel.Font);
         foreach (Control control in playlistListLayout.Controls)
         {
             textWidth = Math.Max(
                 textWidth,
-                TextRenderer.MeasureText(
-                    control.Text,
-                    control.Font,
-                    Size.Empty,
-                    TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width);
+                FlatPlaylistButton.MeasureDisplayTextWidth(control.Text, control.Font));
         }
 
+        // FlatPlaylistButton の描画余白に合わせる。
+        // （スクロール Padding + スクロールバー + ボタン Margin + テキスト左右 + わずかな安全幅）
+        var sampleMargin = playlistListLayout.Controls.Count > 0
+            ? playlistListLayout.Controls[0].Margin.Horizontal
+            : 6;
+        var samplePadding = playlistListLayout.Controls.Count > 0
+            ? playlistListLayout.Controls[0].Padding.Horizontal
+            : 4;
         var chromeWidth = playlistScrollPanel.Padding.Horizontal
             + SystemInformation.VerticalScrollBarWidth
-            + 20;
+            + sampleMargin
+            + samplePadding
+            + FlatPlaylistButton.TextLeftInset
+            + 4;
         const int minimumWidth = 132;
-        var maximumWidth = Math.Max(
-            minimumWidth,
-            (int)Math.Round(logAreaPanel.ClientSize.Width * 0.45d));
-        var desiredWidth = Math.Clamp(
-            textWidth + chromeWidth,
-            minimumWidth,
-            maximumWidth);
+        var desiredWidth = Math.Max(minimumWidth, textWidth + chromeWidth);
 
         // 下部のマーカーオプション（全カラム）が収まる幅を保証する。
         var transitionWidth = GetTransitionColumnWidth();
@@ -1305,6 +1325,21 @@ public partial class Form1 : Form
         {
             rightSidePanel.Width = desiredRightWidth;
         }
+    }
+
+    /// <summary>
+    /// プレイリスト項目の追加直後はレイアウト未確定のため、
+    /// 次のメッセージ処理で幅を確定する。
+    /// </summary>
+    private void QueuePlaylistSelectorWidthUpdate()
+    {
+        if (IsDisposed || !IsHandleCreated)
+        {
+            UpdatePlaylistSelectorWidth();
+            return;
+        }
+
+        BeginInvoke(UpdatePlaylistSelectorWidth);
     }
 
     /// <summary>
@@ -1416,7 +1451,7 @@ public partial class Form1 : Form
         finally
         {
             _populatingPlaylistChoices = false;
-            UpdatePlaylistSelectorWidth();
+            QueuePlaylistSelectorWidthUpdate();
             ApplyPlaylistSelectorColors();
         }
     }
@@ -1432,7 +1467,7 @@ public partial class Form1 : Form
         finally
         {
             _populatingPlaylistChoices = false;
-            UpdatePlaylistSelectorWidth();
+            QueuePlaylistSelectorWidthUpdate();
             ApplyPlaylistSelectorColors();
         }
     }
@@ -2261,6 +2296,30 @@ public partial class Form1 : Form
         ApplyPlaylistSelectorColors();
     }
 
+    /// <summary>
+    /// タイトルバー／タスクバー用のウィンドウアイコンを設定する。
+    /// exe 埋め込みアイコン（ApplicationIcon）とは別に Form.Icon が必要なため、
+    /// 同梱の .ico から読み込む。
+    /// </summary>
+    private void ApplyWindowIcon()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "Branding", "MgaWwiseIMImporter.ico");
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            using var stream = File.OpenRead(path);
+            Icon = new Icon(stream);
+        }
+        catch (Exception)
+        {
+            // アイコン読み込み失敗は致命的でないため既定アイコンのまま続行する。
+        }
+    }
+
     private static Image? LoadBrandLogo()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "Branding", "MiyabiGameAudio.png");
@@ -2309,11 +2368,13 @@ public partial class Form1 : Form
 
     private void DetailedLogCheckBox_CheckedChanged(object? sender, EventArgs e)
     {
+#if DEBUG
         DeveloperSettings.SaveDetailedPlaybackLog(detailedLogCheckBox.Checked);
         if (detailedLogCheckBox.Checked)
         {
             WritePlaybackDiagnostic("diagnostic.enabled");
         }
+#endif
     }
 
     private void LogClearButton_Click(object? sender, EventArgs e)
@@ -2397,16 +2458,23 @@ public partial class Form1 : Form
             return;
         }
 
-        if (settings.Width > 0 && settings.Height > 0)
-        {
-            // 起動時に INI から読んだ外形サイズを、このセッションの縮小限界にする。
-            MinimumSize = new Size(settings.Width, settings.Height);
-        }
-
         if (!settings.TryApply(this))
         {
             StartPosition = FormStartPosition.CenterScreen;
         }
+    }
+
+    /// <summary>
+    /// トランスポート全体が収まる幅を、メインフォームの縮小限界にする。
+    /// 保存された前回サイズは縮小限界には使用しない。
+    /// </summary>
+    private void UpdateMinimumWindowSize()
+    {
+        var nonClientWidth = Math.Max(0, Width - ClientSize.Width);
+        var safetyMargin = (int)Math.Ceiling(8f * DeviceDpi / 96f);
+        MinimumSize = new Size(
+            transportBar.RequiredWidth + nonClientWidth + safetyMargin,
+            MinimumSize.Height);
     }
 
     private void ApplyDarkTitleBar()
@@ -3402,6 +3470,7 @@ public partial class Form1 : Form
 
     private void WritePlaybackDiagnostic(string eventName, object? data = null)
     {
+#if DEBUG
         if (!detailedLogCheckBox.Checked || IsDisposed)
         {
             return;
@@ -3469,6 +3538,7 @@ public partial class Form1 : Form
             "[PlaybackDebug] "
             + JsonSerializer.Serialize(envelope)
             + Environment.NewLine);
+#endif
     }
 
     private void AppendReport(string text)
