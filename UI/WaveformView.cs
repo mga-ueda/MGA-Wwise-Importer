@@ -1823,8 +1823,16 @@ internal sealed class WaveformView : Control
         {
             var name = editor.Text.Trim();
             editor.Visible = false;
-            if (commit && name.Length > 0)
+            // TextBox を隠すと次の TabStop（フッタの GitHub 等）へフォーカスが飛ぶため、
+            // 波形ビューへ戻して点線枠の表示を避ける。
+            if (IsHandleCreated && CanFocus)
             {
+                Focus();
+            }
+
+            if (commit)
+            {
+                // 空欄も Form1 側へ渡し、元のファイル名へ戻す。
                 SourceNameEditCommitted?.Invoke(
                     this,
                     new SourceNameEditCommittedEventArgs(name));

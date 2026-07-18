@@ -710,7 +710,7 @@ partial class Form1
         copyrightLinkLabel.Name = "copyrightLinkLabel";
         copyrightLinkLabel.Size = new Size(300, 22);
         copyrightLinkLabel.TabIndex = 0;
-        copyrightLinkLabel.TabStop = true;
+        copyrightLinkLabel.TabStop = false;
         copyrightLinkLabel.Text = "© 2026 MIYABI GAME AUDIO INC.  Version 1.00 β  GitHub";
         copyrightLinkLabel.TextAlign = ContentAlignment.BottomLeft;
         copyrightLinkLabel.LinkArea = new LinkArea(47, 6);

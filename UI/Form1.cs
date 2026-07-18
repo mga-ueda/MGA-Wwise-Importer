@@ -3080,14 +3080,23 @@ public partial class Form1 : Form
             return;
         }
 
+        var originalName = Path.GetFileNameWithoutExtension(preview.SourcePath);
         var name = editedName.Trim();
         if (name.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
         {
             name = name[..^4].Trim();
         }
 
-        if (name.Length == 0
-            || name.EndsWith(' ')
+        // 空欄は元のファイル名へ戻す。
+        if (name.Length == 0)
+        {
+            _sourceBaseNameOverride = null;
+            waveformView.SetSourceDisplayName(originalName);
+            UpdatePlaylistDisplayNames(preview.OutputParts);
+            return;
+        }
+
+        if (name.EndsWith(' ')
             || name.EndsWith('.')
             || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
         {
@@ -3098,8 +3107,7 @@ public partial class Form1 : Form
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
             waveformView.SetSourceDisplayName(
-                _sourceBaseNameOverride
-                ?? Path.GetFileNameWithoutExtension(preview.SourcePath));
+                _sourceBaseNameOverride ?? originalName);
             return;
         }
 
