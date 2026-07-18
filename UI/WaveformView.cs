@@ -14,6 +14,16 @@ internal sealed class MarkerEditRequestedEventArgs(
     public IReadOnlyList<long> SampleOffsets { get; } = sampleOffsets;
 }
 
+internal sealed class SourceNameEditCommittedEventArgs(string name) : EventArgs
+{
+    public string Name { get; } = name;
+}
+
+internal sealed class SourceNameEditStateChangedEventArgs(bool isEditing) : EventArgs
+{
+    public bool IsEditing { get; } = isEditing;
+}
+
 /// <summary>
 /// 読み込んだ Wave のピーク波形と再生位置（シークバー）を描画する。
 /// </summary>
@@ -55,7 +65,11 @@ internal sealed class WaveformView : Control
 
     private WavPeakData? _peaks;
     private WavFileInfo? _wavInfo;
+    private string _sourcePath = string.Empty;
     private string _sourceDisplayName = string.Empty;
+    private TextBox? _sourceNameEditor;
+    private bool _endingSourceNameEdit;
+    private bool _interactionLocked;
     private int _infoLaneWidth = 120;
     private float _outputLevel;
     private WavPeakData? _detailPeaks;
@@ -72,12 +86,19 @@ internal sealed class WaveformView : Control
     private IReadOnlyList<WaveformCycleMark> _cycles = [];
     private IReadOnlyList<WaveformRegionMark> _regions = [];
     private IReadOnlyList<WaveformOutputPart> _outputParts = [];
+    private IReadOnlyDictionary<int, string> _playlistDisplayNames =
+        new Dictionary<int, string>();
+    private IReadOnlyDictionary<int, int> _playlistPartGroupIds =
+        new Dictionary<int, int>();
+    private IReadOnlyDictionary<int, Color> _playlistGroupColors =
+        new Dictionary<int, Color>();
+    private HashSet<int> _disabledPlaylistPartNumbers = [];
     private IReadOnlyList<WaveformSegmentNameMark> _segmentNames = [];
     private int? _hoveredPlaylistPartNumber;
     private int? _playlistHoverHighlightPartNumber;
     private int? _exportHighlightPartNumber;
     private readonly System.Windows.Forms.Timer _exportGlowTimer;
-    private readonly ToolTip _timelineToolTip = new()
+    private readonly DarkToolTip _timelineToolTip = new()
     {
         InitialDelay = 450,
         ReshowDelay = 100,
@@ -170,9 +191,10 @@ internal sealed class WaveformView : Control
         StopRevealAnimation();
         _peaks = peaks;
         _wavInfo = wavInfo;
+        _sourcePath = sourcePath ?? string.Empty;
         _sourceDisplayName = string.IsNullOrWhiteSpace(sourcePath)
             ? string.Empty
-            : Path.GetFileName(sourcePath);
+            : Path.GetFileNameWithoutExtension(sourcePath);
         _outputLevel = 0f;
         ClearDetailPeaks();
         StartPeakPyramidBuild(wavInfo);
@@ -181,11 +203,12 @@ internal sealed class WaveformView : Control
         _cycles = cycles ?? [];
         _regions = regions ?? [];
         _outputParts = outputParts ?? [];
+        _playlistDisplayNames = new Dictionary<int, string>();
+        _playlistPartGroupIds = new Dictionary<int, int>();
+        _playlistGroupColors = new Dictionary<int, Color>();
         SetHoveredPlaylistPart(null);
         SetPlaylistHoverHighlight(null);
-        _segmentNames = _outputParts.Count == 0
-            ? []
-            : WwiseMusicPlanBuilder.BuildSegmentLabelMarks(sourcePath, _outputParts, _regions);
+        RebuildSegmentNameMarks();
         ResetTimeZoom(refresh: false);
         ResetAmpZoom(refresh: false);
         ClearExportHighlight();
@@ -215,6 +238,75 @@ internal sealed class WaveformView : Control
     {
         _markers = markers;
         RebuildPresentationLayers(clearDetailPeaks: false);
+    }
+
+    public void SetSourceDisplayName(string name)
+    {
+        var next = name.Trim();
+        if (string.Equals(_sourceDisplayName, next, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _sourceDisplayName = next;
+        EndSourceNameEdit(commit: false);
+        RebuildPresentationLayers(clearDetailPeaks: false);
+    }
+
+    public void SetPlaylistDisplayNames(
+        IReadOnlyDictionary<int, string> names,
+        IReadOnlyDictionary<int, int>? partGroupIds = null,
+        IReadOnlyDictionary<int, Color>? partGroupColors = null)
+    {
+        _playlistDisplayNames = new Dictionary<int, string>(names);
+        _playlistPartGroupIds = partGroupIds is null
+            ? new Dictionary<int, int>()
+            : new Dictionary<int, int>(partGroupIds);
+        _playlistGroupColors = partGroupColors is null
+            ? new Dictionary<int, Color>()
+            : new Dictionary<int, Color>(partGroupColors);
+        RebuildSegmentNameMarks();
+        RebuildPresentationLayers(clearDetailPeaks: false);
+    }
+
+    /// <summary>
+    /// グループ帯の色だけを更新する（ドラッグ塗り中の軽量更新用。レイヤ再生成はしない）。
+    /// </summary>
+    public void SetPlaylistGroupColors(IReadOnlyDictionary<int, Color> partGroupColors)
+    {
+        _playlistGroupColors = new Dictionary<int, Color>(partGroupColors);
+        Invalidate();
+    }
+
+    /// <summary>
+    /// 無効化した Playlist パート番号。波形上は背景で覆って約 25% 不透明度に見せる。
+    /// </summary>
+    public void SetDisabledPlaylistParts(IEnumerable<int> partNumbers)
+    {
+        var next = partNumbers.ToHashSet();
+        if (_disabledPlaylistPartNumbers.SetEquals(next))
+        {
+            return;
+        }
+
+        _disabledPlaylistPartNumbers = next;
+        RebuildSegmentNameMarks();
+        RebuildPresentationLayers(clearDetailPeaks: false);
+    }
+
+    private void RebuildSegmentNameMarks()
+    {
+        var enabledParts = _outputParts
+            .Where(part => !_disabledPlaylistPartNumbers.Contains(part.Number))
+            .ToArray();
+        _segmentNames = enabledParts.Length == 0 || string.IsNullOrEmpty(_sourcePath)
+            ? []
+            : WwiseMusicPlanBuilder.BuildSegmentLabelMarks(
+                _sourcePath,
+                enabledParts,
+                _regions,
+                _playlistPartGroupIds,
+                _playlistDisplayNames);
     }
 
     /// <summary>
@@ -265,7 +357,9 @@ internal sealed class WaveformView : Control
         _holdScaffold = false;
         _peaks = null;
         _wavInfo = null;
+        _sourcePath = string.Empty;
         _sourceDisplayName = string.Empty;
+        EndSourceNameEdit(commit: false);
         _outputLevel = 0f;
         ClearDetailPeaks();
         _peakPyramid = null;
@@ -275,6 +369,10 @@ internal sealed class WaveformView : Control
         _cycles = [];
         _regions = [];
         _outputParts = [];
+        _playlistDisplayNames = new Dictionary<int, string>();
+        _playlistPartGroupIds = new Dictionary<int, int>();
+        _playlistGroupColors = new Dictionary<int, Color>();
+        _disabledPlaylistPartNumbers = [];
         UpdateTimelineToolTip(null);
         SetHoveredPlaylistPart(null);
         SetPlaylistHoverHighlight(null);
@@ -1181,7 +1279,11 @@ internal sealed class WaveformView : Control
         {
             if (_revealActive)
             {
+                // 再生成中に壁時計が進むと序盤のカスケード／ワイプが飛ぶため、
+                // かかった時間だけ演出開始時刻を後ろへずらす。
+                var rebuildStarted = Environment.TickCount64;
                 EnsureRevealLayers(bounds);
+                _revealStartTickMs += Environment.TickCount64 - rebuildStarted;
             }
             else
             {
@@ -1245,6 +1347,35 @@ internal sealed class WaveformView : Control
 
     /// <summary>Marker レーンで追加マーカーの描画／消去が要求された。</summary>
     public event EventHandler<MarkerEditRequestedEventArgs>? MarkerEditRequested;
+
+    /// <summary>左側で編集されたソース名が確定された。</summary>
+    public event EventHandler<SourceNameEditCommittedEventArgs>? SourceNameEditCommitted;
+
+    public event EventHandler<SourceNameEditStateChangedEventArgs>? SourceNameEditStateChanged;
+
+    /// <summary>
+    /// 書き出し中など、マウス操作を一時的に受け付けない。
+    /// Enabled=false にせず見た目を維持する。
+    /// </summary>
+    public bool InteractionLocked
+    {
+        get => _interactionLocked;
+        set
+        {
+            if (_interactionLocked == value)
+            {
+                return;
+            }
+
+            _interactionLocked = value;
+            if (value)
+            {
+                EndSourceNameEdit(commit: false);
+                _isDraggingSeek = false;
+                Capture = false;
+            }
+        }
+    }
 
     /// <summary>
     /// ドラッグ付与時のスナップ単位。描画されるグリッド線には影響しない。
@@ -1314,6 +1445,12 @@ internal sealed class WaveformView : Control
         base.OnResize(e);
         DisposeStaticLayer();
         InvalidateRevealLayers();
+        if (_sourceNameEditor is { Visible: true } editor
+            && TryGetSourceNameBounds(out var editorBounds))
+        {
+            editor.Bounds = GetSourceNameEditorBounds(editorBounds, editor);
+        }
+
         if (!IsHandleCreated)
         {
             return;
@@ -1344,7 +1481,9 @@ internal sealed class WaveformView : Control
         var bounds = ClientRectangle;
         if (bounds.Width > 2 && bounds.Height > 2)
         {
+            var rebuildStarted = Environment.TickCount64;
             EnsureRevealLayers(bounds);
+            _revealStartTickMs += Environment.TickCount64 - rebuildStarted;
         }
 
         Invalidate();
@@ -1507,6 +1646,11 @@ internal sealed class WaveformView : Control
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
+        if (_interactionLocked)
+        {
+            return;
+        }
+
         UpdateMouseGuide(e.X);
         if (e.Button != MouseButtons.Left)
         {
@@ -1536,7 +1680,7 @@ internal sealed class WaveformView : Control
     protected override void OnMouseDoubleClick(MouseEventArgs e)
     {
         base.OnMouseDoubleClick(e);
-        if (e.Button != MouseButtons.Left)
+        if (_interactionLocked || e.Button != MouseButtons.Left)
         {
             return;
         }
@@ -1551,6 +1695,13 @@ internal sealed class WaveformView : Control
         _isDraggingSeek = false;
         _seekMovedDuringDrag = false;
         Capture = false;
+
+        if (IsSourceNamePoint(e.Location))
+        {
+            BeginSourceNameEdit();
+            return;
+        }
+
         var previousZoom = _timeZoom;
         ZoomTimeToPlaylistUnderMouse(e.X);
         if (_timeZoom > previousZoom + 1e-9)
@@ -1564,9 +1715,138 @@ internal sealed class WaveformView : Control
         UpdateTimelineToolTip(e.Location);
     }
 
+    private bool IsSourceNamePoint(Point location)
+    {
+        return TryGetSourceNameBounds(out var bounds) && bounds.Contains(location);
+    }
+
+    private bool TryGetSourceNameBounds(out Rectangle bounds)
+    {
+        bounds = Rectangle.Empty;
+        if (_sourceDisplayName.Length == 0
+            || _peaks is null
+            || _peaks.IsEmpty
+            || ClientSize.Width <= 8
+            || ClientSize.Height <= 8)
+        {
+            return false;
+        }
+
+        using var g = CreateGraphics();
+        var content = Rectangle.Inflate(ClientRectangle, -4, -4);
+        var (info, _, wave, _, _, _) = GetLayout(content, g);
+        var nameWidth = Math.Max(
+            0,
+            info.Width
+            - InfoLanePadX * 2
+            - SourceMeterGapPx
+            - SourceMeterWidthPx);
+        bounds = new Rectangle(
+            info.Left + InfoLanePadX,
+            wave.Top + 2,
+            nameWidth,
+            Math.Max(0, wave.Height - 4));
+        return bounds.Width > 0 && bounds.Height > 0;
+    }
+
+    private void BeginSourceNameEdit()
+    {
+        if (_interactionLocked || !TryGetSourceNameBounds(out var bounds))
+        {
+            return;
+        }
+
+        _sourceNameEditor ??= CreateSourceNameEditor();
+        _sourceNameEditor.Bounds = GetSourceNameEditorBounds(bounds, _sourceNameEditor);
+        _sourceNameEditor.Text = _sourceDisplayName;
+        _sourceNameEditor.Visible = true;
+        _sourceNameEditor.BringToFront();
+        _sourceNameEditor.Focus();
+        _sourceNameEditor.SelectAll();
+        SourceNameEditStateChanged?.Invoke(
+            this,
+            new SourceNameEditStateChangedEventArgs(isEditing: true));
+    }
+
+    private static Rectangle GetSourceNameEditorBounds(Rectangle available, TextBox editor)
+    {
+        var height = Math.Min(available.Height, Math.Max(22, editor.PreferredHeight + 2));
+        return new Rectangle(
+            available.Left,
+            available.Top + Math.Max(0, (available.Height - height) / 2),
+            available.Width,
+            height);
+    }
+
+    private TextBox CreateSourceNameEditor()
+    {
+        var editor = new TextBox
+        {
+            AutoSize = false,
+            BackColor = UiColors.ForControlBack(UiColors.DialogInputBack),
+            BorderStyle = BorderStyle.FixedSingle,
+            Font = new Font(Font, FontStyle.Bold),
+            ForeColor = UiColors.DialogFore,
+            TextAlign = HorizontalAlignment.Center,
+            Visible = false,
+        };
+        editor.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                EndSourceNameEdit(commit: true);
+            }
+            else if (e.KeyCode == Keys.Escape)
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                EndSourceNameEdit(commit: false);
+            }
+        };
+        editor.LostFocus += (_, _) => EndSourceNameEdit(commit: true);
+        Controls.Add(editor);
+        return editor;
+    }
+
+    private void EndSourceNameEdit(bool commit)
+    {
+        if (_endingSourceNameEdit
+            || _sourceNameEditor is not { Visible: true } editor)
+        {
+            return;
+        }
+
+        _endingSourceNameEdit = true;
+        try
+        {
+            var name = editor.Text.Trim();
+            editor.Visible = false;
+            if (commit && name.Length > 0)
+            {
+                SourceNameEditCommitted?.Invoke(
+                    this,
+                    new SourceNameEditCommittedEventArgs(name));
+            }
+        }
+        finally
+        {
+            _endingSourceNameEdit = false;
+            SourceNameEditStateChanged?.Invoke(
+                this,
+                new SourceNameEditStateChangedEventArgs(isEditing: false));
+        }
+    }
+
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
+        if (_interactionLocked)
+        {
+            return;
+        }
+
         UpdateMouseGuide(e.X);
         UpdateTimelineToolTip(e.Location);
 
@@ -1603,6 +1883,11 @@ internal sealed class WaveformView : Control
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
+        if (_interactionLocked)
+        {
+            return;
+        }
+
         UpdateMouseGuide(e.X);
         if (e.Button == MouseButtons.Left && _markerEditMode is not null)
         {
@@ -1766,9 +2051,11 @@ internal sealed class WaveformView : Control
                 Math.Round(sample, MidpointRounding.AwayFromZero),
                 0d,
                 Math.Max(0L, frameCount - 1));
-            if (!_outputParts.Any(part =>
-                    sampleOffset >= part.StartSampleOffset
-                    && sampleOffset < part.EndSampleOffset))
+            var hostPart = _outputParts.FirstOrDefault(part =>
+                sampleOffset >= part.StartSampleOffset
+                && sampleOffset < part.EndSampleOffset);
+            if (hostPart.EndSampleOffset <= hostPart.StartSampleOffset
+                || _disabledPlaylistPartNumbers.Contains(hostPart.Number))
             {
                 return;
             }
@@ -1903,12 +2190,23 @@ internal sealed class WaveformView : Control
         string? text = null;
         if (mouseLocation is { } location
             && !_isDraggingSeek
+            && _markerEditMode is null
             && _outputParts.Count > 0
             && GetTimelineContentRect().Contains(location))
         {
-            text = CountPlaylistsIntersectingView() == 1
-                ? "Double-click to show the full timeline"
-                : "Double-click to zoom Music Playlist";
+            if (TryGetMarkerLane(out var markerLane, out _)
+                && markerLane.Contains(location))
+            {
+                text = "Shift + クリック／ドラッグ: マーカーを連続付与"
+                    + Environment.NewLine
+                    + "Ctrl + クリック／ドラッグ: マーカーを連続削除";
+            }
+            else
+            {
+                text = CountPlaylistsIntersectingView() == 1
+                    ? "ダブルクリックでタイムライン全体を表示"
+                    : "ダブルクリックで Music Playlist を拡大表示";
+            }
         }
 
         if (string.Equals(_timelineToolTipText, text, StringComparison.Ordinal))
@@ -2018,6 +2316,9 @@ internal sealed class WaveformView : Control
             }
         }
 
+        // 静的内容を先に暗くし、再生ヘッドやホバー枠は手前に残す。
+        DrawDisabledPlaylistDimOverlay(g);
+
         var content = Rectangle.Inflate(bounds, -4, -4);
         var timeline = GetTimelineRect(content);
         DrawSourceLevelMeter(g, content);
@@ -2040,6 +2341,125 @@ internal sealed class WaveformView : Control
             _anacrusisTrailSamples,
             UiColors.SeekAnacrusis);
         DrawMouseGuide(g, timeline);
+        DrawPlaylistGroupNameLaneOverlays(g);
+    }
+
+    /// <summary>
+    /// 無効 Playlist の波形部分だけをテーマ背景色で覆い、約 25% 不透明度に見せる。
+    /// ラベル行・名前レーンは覆わない。
+    /// </summary>
+    private void DrawDisabledPlaylistDimOverlay(Graphics g)
+    {
+        if (_disabledPlaylistPartNumbers.Count == 0
+            || _peaks is null
+            || _peaks.FrameCount <= 0
+            || _outputParts.Count == 0)
+        {
+            return;
+        }
+
+        var layoutContent = Rectangle.Inflate(ClientRectangle, -4, -4);
+        var (_, _, wave, _, _, _) = GetLayout(layoutContent, g);
+        if (wave.Width <= 0 || wave.Height <= 0)
+        {
+            return;
+        }
+
+        var frameCount = _peaks.FrameCount;
+        // 191/255 ≈ 75%。背景で覆うと下の描画が約 25% 残って見える。
+        using var brush = new SolidBrush(Color.FromArgb(191, UiColors.WaveformBack));
+        var previousSmoothing = g.SmoothingMode;
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+        try
+        {
+            foreach (var part in _outputParts)
+            {
+                if (!_disabledPlaylistPartNumbers.Contains(part.Number))
+                {
+                    continue;
+                }
+
+                var a0 = SampleToAbsolute(part.StartSampleOffset, frameCount);
+                var a1 = SampleToAbsolute(part.EndSampleOffset, frameCount);
+                if (!TryMapAbsoluteRange(a0, a1, wave, out var x0, out var x1))
+                {
+                    continue;
+                }
+
+                var width = Math.Max(1f, x1 - x0);
+                g.FillRectangle(brush, x0, wave.Top, width, wave.Height);
+            }
+        }
+        finally
+        {
+            g.SmoothingMode = previousSmoothing;
+        }
+    }
+
+    /// <summary>
+    /// グループ化された Playlist の範囲を、Music Segment／Playlist 名前レーンへ
+    /// 半透明色で最前面に重ねる。波形本体には着色しない。
+    /// </summary>
+    private void DrawPlaylistGroupNameLaneOverlays(Graphics g)
+    {
+        if (_playlistGroupColors.Count == 0
+            || _peaks is null
+            || _peaks.FrameCount <= 0
+            || _outputParts.Count == 0)
+        {
+            return;
+        }
+
+        var layoutContent = Rectangle.Inflate(ClientRectangle, -4, -4);
+        var (_, _, wave, playlistLane, segmentLane, _) = GetLayout(layoutContent, g);
+        if (wave.Width <= 0
+            || (playlistLane.Height <= 0 && segmentLane.Height <= 0))
+        {
+            return;
+        }
+
+        var frameCount = _peaks.FrameCount;
+        var previousSmoothing = g.SmoothingMode;
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+        try
+        {
+            foreach (var part in _outputParts)
+            {
+                if (_disabledPlaylistPartNumbers.Contains(part.Number))
+                {
+                    continue;
+                }
+
+                if (!_playlistGroupColors.TryGetValue(part.Number, out var color))
+                {
+                    continue;
+                }
+
+                var start = SampleToAbsolute(part.StartSampleOffset, frameCount);
+                var end = SampleToAbsolute(part.EndSampleOffset, frameCount);
+                if (!TryMapAbsoluteRange(start, end, wave, out var x0, out var x1)
+                    || x1 - x0 < 1f)
+                {
+                    continue;
+                }
+
+                // 名前を読み取りやすいよう、グループ色は 25% の薄い重ね塗りにする。
+                using var fill = new SolidBrush(Color.FromArgb(64, color));
+                if (segmentLane.Height > 0)
+                {
+                    g.FillRectangle(fill, x0, segmentLane.Top, x1 - x0, segmentLane.Height);
+                }
+
+                if (playlistLane.Height > 0)
+                {
+                    g.FillRectangle(fill, x0, playlistLane.Top, x1 - x0, playlistLane.Height);
+                }
+            }
+        }
+        finally
+        {
+            g.SmoothingMode = previousSmoothing;
+        }
     }
 
     private void DrawEmptyScaffold(Graphics g, Rectangle bounds)
@@ -3239,11 +3659,18 @@ internal sealed class WaveformView : Control
             return;
         }
 
-        // Playlist 名に " (.wav)" を添えて表示
+        // Playlist 名に " (.wav)" を添えて表示。無効パートはレーンに名前を出さない。
         var items = new List<(string Text, long Start, long End)>(_outputParts.Count);
         foreach (var part in _outputParts)
         {
-            var name = Path.GetFileNameWithoutExtension(part.FileName);
+            if (_disabledPlaylistPartNumbers.Contains(part.Number))
+            {
+                continue;
+            }
+
+            var name = _playlistDisplayNames.TryGetValue(part.Number, out var displayName)
+                ? displayName
+                : Path.GetFileNameWithoutExtension(part.FileName);
             if (string.IsNullOrEmpty(name))
             {
                 name = part.FileName;
@@ -3859,6 +4286,7 @@ internal sealed class WaveformView : Control
         var triH = Math.Min(rowHeight - 3f, 9f);
 
         using var triangleBrush = new SolidBrush(UiColors.MarkerTriangle);
+        using var sharedTriangleBrush = new SolidBrush(Color.FromArgb(64, UiColors.MarkerTriangle));
         using var textBrush = new SolidBrush(UiColors.WaveformInfoFg);
 
         // 三角は時刻順に描画
@@ -3878,7 +4306,9 @@ internal sealed class WaveformView : Control
                 new(x - triHalfW, tipY - triH),
                 new(x + triHalfW, tipY - triH),
             ];
-            g.FillPolygon(triangleBrush, triangle);
+            g.FillPolygon(
+                marker.IsSharedProjection ? sharedTriangleBrush : triangleBrush,
+                triangle);
         }
 
         // コメントは左から配置。好みの位置に収まらない／前の文字と重なる場合は描かない
@@ -3887,7 +4317,7 @@ internal sealed class WaveformView : Control
         var lastOccupiedRight = (float)labels.Left;
         foreach (var marker in _markers.OrderBy(m => m.SampleOffset))
         {
-            if (string.IsNullOrEmpty(marker.Comment))
+            if (marker.IsSharedProjection || string.IsNullOrEmpty(marker.Comment))
             {
                 continue;
             }

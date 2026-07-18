@@ -25,9 +25,11 @@ internal readonly record struct WaveformBarMark(
 /// <summary>波形上の単発マーカーコメント 1 件。</summary>
 /// <param name="SampleOffset">波形先頭基準のサンプル位置。</param>
 /// <param name="Comment">マーカー名（コメント）。</param>
+/// <param name="IsSharedProjection">グループの基準 Playlist から同期先へ投影された表示なら true。</param>
 internal readonly record struct WaveformMarkerMark(
     long SampleOffset,
-    string Comment);
+    string Comment,
+    bool IsSharedProjection = false);
 
 /// <summary>波形上のサイクル（範囲）マーカー 1 件。</summary>
 /// <param name="StartSampleOffset">範囲開始（波形先頭基準サンプル）。</param>

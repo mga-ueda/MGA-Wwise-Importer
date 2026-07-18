@@ -56,6 +56,9 @@ internal readonly record struct MarkerCommentRule(
 internal sealed class WaveformPreviewSession
 {
     private readonly List<UserWaveformMarker> _userMarkers = [];
+    private readonly Dictionary<int, WaveformOutputPart> _markerShareAnchorByPartNumber = [];
+    private readonly List<IReadOnlyList<WaveformOutputPart>> _markerShareGroups = [];
+    private HashSet<int> _disabledPartNumbers = [];
     private IReadOnlyList<WaveformMarkerMark> _effectiveMarkers;
     private IReadOnlyList<WaveformMarkerMark> _wwiseMarkers;
     private MarkerCommentRule _commentRule = MarkerCommentRule.Default;
@@ -88,12 +91,82 @@ internal sealed class WaveformPreviewSession
 
     public IReadOnlyList<WaveformMarkerMark> WwiseMarkers => _wwiseMarkers;
 
+    /// <summary>
+    /// 無効パート番号を反映する。無効範囲へのマーカー追加／削除とグループ投影を抑止する。
+    /// マーカー実体は保持し、再有効化後に復帰する。
+    /// </summary>
+    public void SetDisabledPartNumbers(IEnumerable<int>? partNumbers)
+    {
+        var next = partNumbers?.ToHashSet() ?? [];
+        if (_disabledPartNumbers.SetEquals(next))
+        {
+            return;
+        }
+
+        _disabledPartNumbers = next;
+        RebuildMarkerSnapshots();
+    }
+
+    /// <summary>
+    /// Playlist グループを反映する。2 件以上のグループでは最小 part 番号のマーカーを基準に、
+    /// Playlist 先頭からの相対位置とコメントを全メンバーへ投影する。
+    /// </summary>
+    public void SetPlaylistGroups(IReadOnlyDictionary<int, int>? partGroupIds)
+    {
+        _markerShareAnchorByPartNumber.Clear();
+        _markerShareGroups.Clear();
+
+        if (partGroupIds is { Count: > 0 })
+        {
+            var groups = new Dictionary<int, List<WaveformOutputPart>>();
+            foreach (var part in Preview.OutputParts)
+            {
+                if (_disabledPartNumbers.Contains(part.Number)
+                    || !partGroupIds.TryGetValue(part.Number, out var groupId))
+                {
+                    continue;
+                }
+
+                if (!groups.TryGetValue(groupId, out var members))
+                {
+                    members = [];
+                    groups[groupId] = members;
+                }
+
+                members.Add(part);
+            }
+
+            foreach (var members in groups.Values)
+            {
+                if (members.Count < 2)
+                {
+                    continue;
+                }
+
+                members.Sort((a, b) => a.Number.CompareTo(b.Number));
+                var anchor = members[0];
+                _markerShareGroups.Add(members);
+                foreach (var member in members)
+                {
+                    _markerShareAnchorByPartNumber[member.Number] = anchor;
+                }
+            }
+        }
+
+        RebuildMarkerSnapshots();
+    }
+
     public bool AddMarkers(IEnumerable<long> sampleOffsets)
     {
         var existing = _userMarkers.Select(marker => marker.SampleOffset).ToHashSet();
         var changed = false;
-        foreach (var sampleOffset in sampleOffsets.Distinct())
+        foreach (var requestedSampleOffset in sampleOffsets.Distinct())
         {
+            if (!TryResolveSharedMarkerSample(requestedSampleOffset, out var sampleOffset))
+            {
+                continue;
+            }
+
             if (!IsEditableMarkerSample(sampleOffset)
                 || !existing.Add(sampleOffset))
             {
@@ -114,7 +187,14 @@ internal sealed class WaveformPreviewSession
 
     public bool RemoveMarkers(IEnumerable<long> sampleOffsets)
     {
-        var removals = sampleOffsets.ToHashSet();
+        var removals = sampleOffsets
+            .Select(sampleOffset =>
+                TryResolveSharedMarkerSample(sampleOffset, out var sharedSample)
+                    ? (long?)sharedSample
+                    : null)
+            .Where(sampleOffset => sampleOffset.HasValue)
+            .Select(sampleOffset => sampleOffset!.Value)
+            .ToHashSet();
         if (removals.Count == 0)
         {
             return false;
@@ -129,6 +209,35 @@ internal sealed class WaveformPreviewSession
         return removed > 0;
     }
 
+    /// <summary>
+    /// グループ内の編集位置を、最小 part 番号の基準 Playlist 上の同じ相対位置へ変換する。
+    /// </summary>
+    private bool TryResolveSharedMarkerSample(long requestedSampleOffset, out long sampleOffset)
+    {
+        sampleOffset = requestedSampleOffset;
+        var part = Preview.OutputParts
+            .Where(candidate =>
+                requestedSampleOffset >= candidate.StartSampleOffset
+                && requestedSampleOffset < candidate.EndSampleOffset)
+            .Select(candidate => (WaveformOutputPart?)candidate)
+            .FirstOrDefault();
+        if (part is not { } matchedPart
+            || !_markerShareAnchorByPartNumber.TryGetValue(matchedPart.Number, out var anchor))
+        {
+            return true;
+        }
+
+        var relativeSample = requestedSampleOffset - matchedPart.StartSampleOffset;
+        var resolved = anchor.StartSampleOffset + relativeSample;
+        if (resolved < anchor.StartSampleOffset || resolved >= anchor.EndSampleOffset)
+        {
+            return false;
+        }
+
+        sampleOffset = resolved;
+        return true;
+    }
+
     private bool IsEditableMarkerSample(long sampleOffset)
     {
         if (sampleOffset < 0 || sampleOffset >= Preview.WavInfo.FrameCount)
@@ -136,10 +245,18 @@ internal sealed class WaveformPreviewSession
             return false;
         }
 
-        var insidePlaylist = Preview.OutputParts.Any(part =>
-            sampleOffset >= part.StartSampleOffset
-            && sampleOffset < part.EndSampleOffset);
-        if (!insidePlaylist)
+        var hostPart = Preview.OutputParts
+            .Where(part =>
+                sampleOffset >= part.StartSampleOffset
+                && sampleOffset < part.EndSampleOffset)
+            .Select(part => (WaveformOutputPart?)part)
+            .FirstOrDefault();
+        if (hostPart is not { } part)
+        {
+            return false;
+        }
+
+        if (_disabledPartNumbers.Contains(part.Number))
         {
             return false;
         }
@@ -153,7 +270,12 @@ internal sealed class WaveformPreviewSession
 
     private void RebuildMarkerSnapshots()
     {
+        // 連番は「権威ある」追加マーカーだけを数える。
+        // グループ同期先へ投影される側は、基準 Playlist 上のマーカーとコメントを共有する。
         var orderedUserMarkers = _userMarkers
+            .Where(marker =>
+                IsAuthoritativeUserMarkerSample(marker.SampleOffset)
+                && !IsMarkerOnDisabledPart(marker.SampleOffset))
             .OrderBy(marker => marker.SampleOffset)
             .ToArray();
         var userMarkerMarks = new WaveformMarkerMark[orderedUserMarkers.Length];
@@ -167,7 +289,8 @@ internal sealed class WaveformPreviewSession
             var number = globalNumber;
             if (_commentRule.ResetPerPart)
             {
-                var partIndex = FindOutputPartIndex(marker.SampleOffset);
+                // グループは基準 Playlist を 1 つのパートとして数え、同期先では連番をリセットしない。
+                var partIndex = FindNumberingPartIndex(marker.SampleOffset);
                 if (partIndex != currentPartIndex)
                 {
                     currentPartIndex = partIndex;
@@ -183,24 +306,130 @@ internal sealed class WaveformPreviewSession
                 _commentRule.Format(number));
         }
 
-        _effectiveMarkers = Preview.Markers
+        var baseMarkers = Preview.Markers
             .Concat(userMarkerMarks)
+            .Where(marker => !IsMarkerOnDisabledPart(marker.SampleOffset))
             .OrderBy(marker => marker.SampleOffset)
             .ToArray();
 
+        if (_markerShareGroups.Count == 0)
+        {
+            _effectiveMarkers = baseMarkers;
+            _wwiseMarkers = _effectiveMarkers;
+            return;
+        }
+
+        var groupedPartNumbers = _markerShareGroups
+            .SelectMany(group => group)
+            .Select(part => part.Number)
+            .ToHashSet();
+        var sharedMarkers = baseMarkers
+            .Where(marker => !Preview.OutputParts.Any(part =>
+                groupedPartNumbers.Contains(part.Number)
+                && marker.SampleOffset >= part.StartSampleOffset
+                && marker.SampleOffset < part.EndSampleOffset))
+            .ToList();
+
+        foreach (var group in _markerShareGroups)
+        {
+            var anchor = group[0];
+            var anchorMarkers = baseMarkers
+                .Where(marker =>
+                    marker.SampleOffset >= anchor.StartSampleOffset
+                    && marker.SampleOffset < anchor.EndSampleOffset)
+                .ToArray();
+            foreach (var member in group)
+            {
+                if (_disabledPartNumbers.Contains(member.Number))
+                {
+                    continue;
+                }
+
+                var memberLength = member.EndSampleOffset - member.StartSampleOffset;
+                foreach (var marker in anchorMarkers)
+                {
+                    var relativeSample = marker.SampleOffset - anchor.StartSampleOffset;
+                    if (relativeSample < 0 || relativeSample >= memberLength)
+                    {
+                        continue;
+                    }
+
+                    sharedMarkers.Add(new WaveformMarkerMark(
+                        member.StartSampleOffset + relativeSample,
+                        marker.Comment,
+                        IsSharedProjection: member.Number != anchor.Number));
+                }
+            }
+        }
+
+        _effectiveMarkers = sharedMarkers
+            .OrderBy(marker => marker.SampleOffset)
+            .ToArray();
         _wwiseMarkers = _effectiveMarkers;
     }
 
-    private int FindOutputPartIndex(long sampleOffset)
+    private bool IsMarkerOnDisabledPart(long sampleOffset)
+    {
+        if (_disabledPartNumbers.Count == 0)
+        {
+            return false;
+        }
+
+        return Preview.OutputParts.Any(part =>
+            _disabledPartNumbers.Contains(part.Number)
+            && sampleOffset >= part.StartSampleOffset
+            && sampleOffset < part.EndSampleOffset);
+    }
+
+    /// <summary>
+    /// 追加マーカーが連番・保持の対象か。グループ同期先上の実体は対象外。
+    /// </summary>
+    private bool IsAuthoritativeUserMarkerSample(long sampleOffset)
+    {
+        var part = Preview.OutputParts
+            .Where(candidate =>
+                sampleOffset >= candidate.StartSampleOffset
+                && sampleOffset < candidate.EndSampleOffset)
+            .Select(candidate => (WaveformOutputPart?)candidate)
+            .FirstOrDefault();
+        if (part is not { } matchedPart)
+        {
+            return true;
+        }
+
+        if (!_markerShareAnchorByPartNumber.TryGetValue(matchedPart.Number, out var anchor))
+        {
+            return true;
+        }
+
+        return matchedPart.Number == anchor.Number;
+    }
+
+    /// <summary>
+    /// Reset Per Part 用のパート番号。グループ時は基準 Playlist の index に寄せる。
+    /// </summary>
+    private int FindNumberingPartIndex(long sampleOffset)
     {
         for (var i = 0; i < Preview.OutputParts.Count; i++)
         {
             var part = Preview.OutputParts[i];
-            if (sampleOffset >= part.StartSampleOffset
-                && sampleOffset < part.EndSampleOffset)
+            if (sampleOffset < part.StartSampleOffset || sampleOffset >= part.EndSampleOffset)
             {
-                return i;
+                continue;
             }
+
+            if (_markerShareAnchorByPartNumber.TryGetValue(part.Number, out var anchor))
+            {
+                for (var j = 0; j < Preview.OutputParts.Count; j++)
+                {
+                    if (Preview.OutputParts[j].Number == anchor.Number)
+                    {
+                        return j;
+                    }
+                }
+            }
+
+            return i;
         }
 
         return -1;

@@ -26,6 +26,8 @@ internal sealed class WaveAudioPlayer : IDisposable
     private WaveOutEvent? _output;
     private StereoFloatWaveProvider? _provider;
     private string? _path;
+    /// <summary>再生専用の一時コピー。元ファイルをロックしない。</summary>
+    private string? _playbackCopyPath;
     private bool _isPlaying;
     private bool _disposed;
     private bool _suppressPlaybackEnded;
@@ -454,14 +456,17 @@ internal sealed class WaveAudioPlayer : IDisposable
 
         StopAndRelease();
         _path = path;
+        // 元 WAV を掴み続けないよう、再生用に一時コピーを開く。
+        // （外部アプリが同じファイルへ上書き保存できるようにする）
+        _playbackCopyPath = CreatePlaybackCopy(path);
         // AudioFileReader は多チャンネル Extensible の float 変換で
         // ACM（acmFormatSuggest）に頼り NoDriver で失敗するため、変換は自前で行う
         var info = WavFileInfo.Read(path);
-        _reader = new WaveFileReader(path);
-        _exitReader = new WaveFileReader(path);
-        _playlistFadeReader = new WaveFileReader(path);
-        _playlistExitFadeReader = new WaveFileReader(path);
-        _playlistPreRollReader = new WaveFileReader(path);
+        _reader = new WaveFileReader(_playbackCopyPath);
+        _exitReader = new WaveFileReader(_playbackCopyPath);
+        _playlistFadeReader = new WaveFileReader(_playbackCopyPath);
+        _playlistExitFadeReader = new WaveFileReader(_playbackCopyPath);
+        _playlistPreRollReader = new WaveFileReader(_playbackCopyPath);
         _provider = new StereoFloatWaveProvider(
             _reader,
             _exitReader,
@@ -474,6 +479,57 @@ internal sealed class WaveAudioPlayer : IDisposable
         _output = new WaveOutEvent();
         _output.Init(_provider);
         _output.PlaybackStopped += OnPlaybackStopped;
+    }
+
+    /// <summary>
+    /// 元ファイルを一時領域へコピーし、そのパスを返す。
+    /// 失敗時は呼び元が元ファイルを掴む状態にならないよう、コピーを破棄する。
+    /// </summary>
+    private static string CreatePlaybackCopy(string sourcePath)
+    {
+        var extension = Path.GetExtension(sourcePath);
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            extension = ".wav";
+        }
+
+        var copyPath = Path.Combine(
+            Path.GetTempPath(),
+            $"mga-wwise-playback-{Guid.NewGuid():N}{extension}");
+        try
+        {
+            File.Copy(sourcePath, copyPath, overwrite: true);
+            return copyPath;
+        }
+        catch
+        {
+            TryDeleteFile(copyPath);
+            throw;
+        }
+    }
+
+    private static void TryDeleteFile(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return;
+        }
+
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (IOException)
+        {
+            // 一時ファイル削除失敗は致命的ではない。
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // 一時ファイル削除失敗は致命的ではない。
+        }
     }
 
     public void Clear()
@@ -667,6 +723,9 @@ internal sealed class WaveAudioPlayer : IDisposable
             _playlistPreRollReader.Dispose();
             _playlistPreRollReader = null;
         }
+
+        TryDeleteFile(_playbackCopyPath);
+        _playbackCopyPath = null;
     }
 
     private void Trace(string message) => Diagnostic?.Invoke(this, message);

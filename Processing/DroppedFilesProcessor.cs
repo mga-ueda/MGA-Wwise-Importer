@@ -165,7 +165,7 @@ internal static class DroppedFilesProcessor
                     sb.AppendLine("=== 波形範囲外（無視） ===");
                     sb.AppendLine(
                         "Message : 波形タイムライン外のマーカー／サイクルは描画せず、"
-                        + "出力計画にも含めません。");
+                        + "出力にも含めません。");
                     sb.AppendLine(
                         $"WavePpq : [{barOverlay.WaveStartPpq:0.###} .. {barOverlay.WaveEndPpq:0.###}]");
                     foreach (var ignored in barOverlay.IgnoredOutsideMarks)

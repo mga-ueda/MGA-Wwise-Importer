@@ -69,6 +69,7 @@ internal static class UiColors
     public static Color TransportBack => ChromeBack;
     public static Color TransportBorder => ChromeBorder;
     public static Color TransportFore => PrimaryFore;
+    public static Color TransportDisabledFore => ChromeDim;
     public static Color TransportSectionFore => MutedFore;
     public static Color TransportHoverBack => ChromeBorder;
     public static Color TransportPressedBack => ChromeMid;
@@ -85,6 +86,11 @@ internal static class UiColors
     public static Color LogButtonFore => PrimaryFore;
     public static Color LogButtonBorder => ChromeBorder;
     public static Color LogButtonHoverBack { get; set; } = Color.FromArgb(39, 43, 63);
+
+    // --- ツールチップ（共通トークンの別名） ---
+    public static Color ToolTipBack => ChromeBack;
+    public static Color ToolTipFore => PrimaryFore;
+    public static Color ToolTipBorder => ChromeBorder;
 
     // --- 共通オプションコントロール ---
     public static Color OptionGlyphBorder => MutedFore;
@@ -108,6 +114,50 @@ internal static class UiColors
     public static Color PlaylistManualBorder { get; set; } = Color.FromArgb(255, 255, 0);
     public static Color MarkerCommentErrorFore { get; set; } = Color.FromArgb(255, 110, 110);
 
+    /// <summary>
+    /// Playlist グループ枠用の高コントラスト色列（Kelly 系の識別しやすい出現順）。
+    /// </summary>
+    public static IReadOnlyList<Color> PlaylistGroupPalette { get; } =
+    [
+        Color.FromArgb(255, 179, 40),   // vivid orange
+        Color.FromArgb(0, 127, 255),    // strong blue
+        Color.FromArgb(255, 255, 50),   // vivid yellow
+        Color.FromArgb(160, 60, 200),   // strong purple
+        Color.FromArgb(255, 80, 80),    // vivid red
+        Color.FromArgb(0, 180, 120),    // vivid green
+        Color.FromArgb(255, 140, 200),  // strong pink
+        Color.FromArgb(100, 210, 255),  // light blue
+        Color.FromArgb(200, 160, 60),   // olive/gold
+        Color.FromArgb(120, 80, 40),    // brown
+        Color.FromArgb(0, 220, 220),    // cyan
+        Color.FromArgb(180, 220, 80),   // yellow-green
+        Color.FromArgb(220, 100, 40),   // orange-red
+        Color.FromArgb(80, 80, 220),    // blue-purple
+        Color.FromArgb(255, 200, 120),  // light orange
+        Color.FromArgb(40, 140, 80),    // dark green
+        Color.FromArgb(220, 60, 140),   // magenta
+        Color.FromArgb(140, 200, 180),  // seafoam
+        Color.FromArgb(255, 120, 160),  // salmon pink
+        Color.FromArgb(90, 90, 90),     // medium gray
+    ];
+
+    public static Color PlaylistGroupColorAt(int index)
+    {
+        var palette = PlaylistGroupPalette;
+        if (palette.Count == 0)
+        {
+            return AccentCyan;
+        }
+
+        var i = index % palette.Count;
+        if (i < 0)
+        {
+            i += palette.Count;
+        }
+
+        return palette[i];
+    }
+
     // --- 下部アクションバー ---
     public static Color ActionBarBack => ChromeBack;
     public static Color ActionOptionFore => PrimaryFore;
@@ -115,12 +165,12 @@ internal static class UiColors
     public static Color ActionLinkFore { get; set; } = Color.FromArgb(110, 180, 255);
     public static Color ActionLinkHoverFore => AccentCyan;
     public static Color ActionButtonInnerBack => ChromeBack;
-    public static Color ClearButtonFill { get; set; } = Color.FromArgb(43, 19, 22);
-    public static Color ClearButtonHoverFill { get; set; } = Color.FromArgb(68, 26, 31);
-    public static Color ClearButtonBack { get; set; } = Color.FromArgb(190, 50, 50);
-    public static Color ClearButtonFore => PrimaryFore;
-    public static Color ClearButtonHoverBack { get; set; } = Color.FromArgb(210, 70, 70);
-    public static Color ClearButtonPressedBack { get; set; } = Color.FromArgb(160, 35, 35);
+    public static Color ReloadButtonFill { get; set; } = Color.FromArgb(45, 33, 19);
+    public static Color ReloadButtonHoverFill { get; set; } = Color.FromArgb(82, 55, 26);
+    public static Color ReloadButtonBack { get; set; } = Color.FromArgb(217, 130, 43);
+    public static Color ReloadButtonFore => PrimaryFore;
+    public static Color ReloadButtonHoverBack { get; set; } = Color.FromArgb(245, 158, 66);
+    public static Color ReloadButtonPressedBack { get; set; } = Color.FromArgb(184, 106, 31);
     public static Color ExportButtonFill { get; set; } = Color.FromArgb(15, 27, 45);
     public static Color ExportButtonHoverFill { get; set; } = Color.FromArgb(18, 40, 67);
     public static Color ExportButtonBack { get; set; } = Color.FromArgb(30, 110, 210);
@@ -209,11 +259,11 @@ internal static class UiColors
         new("MarkerCommentErrorFore", "Marker Comment・エラー文字", () => MarkerCommentErrorFore, c => MarkerCommentErrorFore = c),
 
         new("ActionLinkFore", "Action Bar・リンク文字", () => ActionLinkFore, c => ActionLinkFore = c),
-        new("ClearButtonFill", "CLEAR・塗り", () => ClearButtonFill, c => ClearButtonFill = c),
-        new("ClearButtonHoverFill", "CLEAR・ホバー塗り", () => ClearButtonHoverFill, c => ClearButtonHoverFill = c),
-        new("ClearButtonBack", "CLEAR・枠", () => ClearButtonBack, c => ClearButtonBack = c),
-        new("ClearButtonHoverBack", "CLEAR・ホバー枠", () => ClearButtonHoverBack, c => ClearButtonHoverBack = c),
-        new("ClearButtonPressedBack", "CLEAR・押下枠", () => ClearButtonPressedBack, c => ClearButtonPressedBack = c),
+        new("ReloadButtonFill", "RELOAD・塗り", () => ReloadButtonFill, c => ReloadButtonFill = c),
+        new("ReloadButtonHoverFill", "RELOAD・ホバー塗り", () => ReloadButtonHoverFill, c => ReloadButtonHoverFill = c),
+        new("ReloadButtonBack", "RELOAD・枠", () => ReloadButtonBack, c => ReloadButtonBack = c),
+        new("ReloadButtonHoverBack", "RELOAD・ホバー枠", () => ReloadButtonHoverBack, c => ReloadButtonHoverBack = c),
+        new("ReloadButtonPressedBack", "RELOAD・押下枠", () => ReloadButtonPressedBack, c => ReloadButtonPressedBack = c),
         new("ExportButtonFill", "EXPORT・塗り", () => ExportButtonFill, c => ExportButtonFill = c),
         new("ExportButtonHoverFill", "EXPORT・ホバー塗り", () => ExportButtonHoverFill, c => ExportButtonHoverFill = c),
         new("ExportButtonBack", "EXPORT・枠", () => ExportButtonBack, c => ExportButtonBack = c),
@@ -283,7 +333,7 @@ internal static class UiColors
                 "WindowFore", "WaveformInfoFg", "OutputPartFg", "TransportFore",
                 "LogButtonFore", "OptionGlyphHover", "PlaylistOptionFore",
                 "PlaylistHoverFore", "PlaylistActiveFore", "PlaylistHoverBorder",
-                "ActionOptionFore", "ClearButtonFore", "ExportButtonFore",
+                "ActionOptionFore", "ReloadButtonFore", "ExportButtonFore",
                 "StatusBarDetailFore", "DialogFore", "ColorPanelInputFore",
             ]),
             ("MutedFore",
@@ -309,7 +359,11 @@ internal static class UiColors
                 "WaveformScrollThumb", "TransportPressedBack",
                 "ActionButtonDisabledBorder", "BarNumberBg",
             ]),
-            ("ChromeDim", ["WaveformScrollThumbHover", "OptionGlyphDisabled"]),
+            ("ChromeDim",
+            [
+                "WaveformScrollThumbHover", "OptionGlyphDisabled",
+                "TransportDisabledFore",
+            ]),
         ];
 
         var changed = false;

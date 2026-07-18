@@ -26,7 +26,7 @@ internal static class PlaylistUiNames
         _ => mode.ToString(),
     };
 
-    /// <summary>Dest. Sync To ラジオの表示名。</summary>
+    /// <summary>遷移先同期モードの表示名（ログ・診断用）。</summary>
     public static string ToUiName(this PlaylistDestinationSyncMode mode) => mode switch
     {
         PlaylistDestinationSyncMode.EntryCue => "Entry Cue",
@@ -53,6 +53,14 @@ internal static class PlaylistUiNames
 
         return $"{seconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} Sec.";
     }
+}
+
+[Flags]
+internal enum UiInteractionLock
+{
+    None = 0,
+    SourceNameEdit = 1,
+    Export = 2,
 }
 
 public partial class Form1 : Form
@@ -89,14 +97,15 @@ public partial class Form1 : Form
     private int _exportGeneration;
     private WaveformPreviewData? _loadedPreview;
     private WaveformPreviewSession? _previewSession;
+    private IReadOnlyList<string> _lastInputFiles = [];
+    private string? _sourceBaseNameOverride;
     private bool _exportBusy;
+    private UiInteractionLock _uiInteractionLocks;
     private bool _populatingPlaylistChoices;
     private bool _automaticPlaylistPlayback;
     private double _playlistFadeInSeconds;
     private double _playlistFadeSeconds = 0.5d;
     private PlaylistExitSourceMode _playlistExitSourceMode = PlaylistExitSourceMode.NextBar;
-    private PlaylistDestinationSyncMode _playlistDestinationSyncMode =
-        PlaylistDestinationSyncMode.EntryCue;
     private int? _activeAutomaticPlaylistPartNumber;
     private int? _requestedPlaylistPartNumber;
     private int? _manualPlaylistPartNumber;
@@ -117,6 +126,26 @@ public partial class Form1 : Form
     private double _playlistTransitionGlowDurationMs;
     private double _playlistTransitionGlowLevel;
     private double? _pendingWaveformScrollStart;
+
+    /// <summary>パート番号 → グループ ID（セッション内のみ）。</summary>
+    private readonly Dictionary<int, int> _playlistPartGroupIds = new();
+
+    /// <summary>グループ ID → 色パレット index（作成順）。</summary>
+    private readonly Dictionary<int, int> _playlistGroupColorIndexes = new();
+
+    /// <summary>書き出し対象外のパート番号（セッション内のみ）。</summary>
+    private readonly HashSet<int> _disabledPlaylistPartNumbers = [];
+
+    private int _nextPlaylistGroupId = 1;
+    private int _nextPlaylistGroupColorIndex;
+    private bool _playlistGroupPaintActive;
+    private bool _playlistGroupPaintErase;
+    private int? _playlistGroupPaintGroupId;
+    private int? _playlistGroupPaintLastPartNumber;
+    private bool _playlistDisablePaintActive;
+    private bool _playlistDisablePaintSetDisabled;
+    private int? _playlistDisablePaintLastPartNumber;
+    private bool _suppressNextPlaylistClick;
     /// <summary>
     /// 戻る方向ジャンプ中に再生を一時停止したとき true。キーアップで再開する。
     /// </summary>
@@ -133,6 +162,7 @@ public partial class Form1 : Form
         UiColors.LoadFromIni();
         AppFonts.EnsureRegistered();
         InitializeComponent();
+        ApplyActionBarToolTips();
         UpdateMinimumWindowSize();
         DpiChanged += (_, _) => UpdateMinimumWindowSize();
         ApplyWindowIcon();
@@ -147,8 +177,7 @@ public partial class Form1 : Form
         UpdateTransportPlaybackState();
         ClearPlaylistChoices("Playlist はありません");
         AdjustTransitionSectionHeights();
-        UpdateMarkerOptionsPanelHeight();
-        rightSidePanel.Resize += (_, _) => UpdateMarkerOptionsPanelHeight();
+        ApplyMarkerOptionsPanelFixedHeight();
         markerOptionsPanel.Bind(_markerSettings);
         markerOptionsPanel.SettingsChanged += (_, _) => ApplyMarkerSettings();
         waveformView.MarkerGridOverride = _markerSettings.GridOverride;
@@ -228,6 +257,9 @@ public partial class Form1 : Form
         _waveformScrollTimer.Tick += (_, _) => FlushWaveformHorizontalScroll();
         UpdateWaveformHorizontalScrollBar();
         waveformView.MarkerEditRequested += WaveformView_MarkerEditRequested;
+        waveformView.SourceNameEditCommitted += (_, e) => ApplySourceBaseName(e.Name);
+        waveformView.SourceNameEditStateChanged += (_, e) =>
+            SetUiInteractionLocked(UiInteractionLock.SourceNameEdit, e.IsEditing);
         waveformView.PlaylistHoverChanged += (_, partNumber) =>
         {
             _hoveredPlaylistPartNumber = partNumber;
@@ -469,6 +501,11 @@ public partial class Form1 : Form
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
+        if (_uiInteractionLocks != UiInteractionLock.None)
+        {
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
         // Playlist一覧でも Space は全体の再生／一時停止を優先する。
         // 遷移設定・Transport 上では矢印キーをフォーカス移動へ渡す。
         // Playlist 項目自体はフォーカスを取らない（FlatPlaylistButton.Selectable=false）。
@@ -540,6 +577,11 @@ public partial class Form1 : Form
     /// </summary>
     private bool TryProcessWaveformShortcut(Keys keyData, bool showUiFeedback = true)
     {
+        if (_uiInteractionLocks != UiInteractionLock.None)
+        {
+            return false;
+        }
+
         if (showUiFeedback
             && TryGetTransportCommandForShortcut(keyData, out var feedbackCommand))
         {
@@ -728,6 +770,11 @@ public partial class Form1 : Form
 
     private void TransportBar_CommandInvoked(object? sender, TransportCommand command)
     {
+        if (_uiInteractionLocks != UiInteractionLock.None)
+        {
+            return;
+        }
+
         var keyData = command switch
         {
             TransportCommand.TogglePlayback => Keys.Space,
@@ -854,6 +901,7 @@ public partial class Form1 : Form
         ApplyActionBarButtonColors();
         ApplyActionBarTextColors();
         topMostCheckBox.ForeColor = UiColors.ActionOptionFore;
+        compactFileNumbersCheckBox.ForeColor = UiColors.ActionOptionFore;
         detailedLogCheckBox.ForeColor = UiColors.ActionOptionFore;
         waapiStatusBar.ApplyColors();
         transportBar.ApplyColors();
@@ -928,21 +976,24 @@ public partial class Form1 : Form
         exportButton.DisabledBorderColor = UiColors.ForControlBack(UiColors.ActionButtonDisabledBorder);
         exportButton.BorderSize = 2;
 
-        clearButton.BackColor = UiColors.ForControlBack(UiColors.ClearButtonFill);
-        clearButton.ForeColor = UiColors.ClearButtonFore;
-        clearButton.HoverBackColor = UiColors.ForControlBack(UiColors.ClearButtonHoverFill);
-        clearButton.PressedBackColor = UiColors.ForControlBack(UiColors.ClearButtonHoverFill);
-        clearButton.DisabledBackColor = innerBack;
-        clearButton.DisabledForeColor = UiColors.ActionButtonDisabledFore;
-        clearButton.BorderColor = UiColors.ForControlBack(UiColors.ClearButtonBack);
-        clearButton.HoverBorderColor = UiColors.ForControlBack(UiColors.ClearButtonHoverBack);
-        clearButton.PressedBorderColor = UiColors.ForControlBack(UiColors.ClearButtonPressedBack);
-        clearButton.DisabledBorderColor = UiColors.ForControlBack(UiColors.ActionButtonDisabledBorder);
-        clearButton.BorderSize = 2;
+        reloadButton.BackColor = UiColors.ForControlBack(UiColors.ReloadButtonFill);
+        reloadButton.ForeColor = UiColors.ReloadButtonFore;
+        reloadButton.HoverBackColor = UiColors.ForControlBack(UiColors.ReloadButtonHoverFill);
+        reloadButton.PressedBackColor = UiColors.ForControlBack(UiColors.ReloadButtonHoverFill);
+        reloadButton.DisabledBackColor = innerBack;
+        reloadButton.DisabledForeColor = UiColors.ActionButtonDisabledFore;
+        reloadButton.BorderColor = UiColors.ForControlBack(UiColors.ReloadButtonBack);
+        reloadButton.HoverBorderColor = UiColors.ForControlBack(UiColors.ReloadButtonHoverBack);
+        reloadButton.PressedBorderColor = UiColors.ForControlBack(UiColors.ReloadButtonPressedBack);
+        reloadButton.DisabledBorderColor = UiColors.ForControlBack(UiColors.ActionButtonDisabledBorder);
+        reloadButton.BorderSize = 2;
 
         topMostCheckBox.ForeColor = UiColors.ActionOptionFore;
         topMostCheckBox.BackColor = actionBar.BackColor;
         RefreshFlatOptionControl(topMostCheckBox);
+        compactFileNumbersCheckBox.ForeColor = UiColors.ActionOptionFore;
+        compactFileNumbersCheckBox.BackColor = actionBar.BackColor;
+        RefreshFlatOptionControl(compactFileNumbersCheckBox);
         detailedLogCheckBox.ForeColor = UiColors.ActionOptionFore;
         detailedLogCheckBox.BackColor = actionBar.BackColor;
         RefreshFlatOptionControl(detailedLogCheckBox);
@@ -991,7 +1042,6 @@ public partial class Form1 : Form
         AdjustTransitionSectionHeight(fadeInSectionPanel, fadeInHeaderLabel, fadeInChoicesPanel);
         AdjustTransitionSectionHeight(fadeOutSectionPanel, transitionTimeHeaderLabel, transitionTimeChoicesPanel);
         AdjustTransitionSectionHeight(exitSourceAtSectionPanel, exitSourceAtHeaderLabel, exitSourceAtChoicesPanel);
-        AdjustTransitionSectionHeight(destinationSyncSectionPanel, destinationSyncHeaderLabel, destinationSyncChoicesPanel);
     }
 
     private static void AdjustTransitionSectionHeight(
@@ -1038,11 +1088,6 @@ public partial class Form1 : Form
         exitSourceAtHeaderLabel.BackColor = back;
         exitSourceAtHeaderLabel.BarColor = headerBack;
         exitSourceAtHeaderLabel.ForeColor = UiColors.PlaylistDefaultFore;
-        destinationSyncSectionPanel.BackColor = back;
-        destinationSyncChoicesPanel.BackColor = back;
-        destinationSyncHeaderLabel.BackColor = back;
-        destinationSyncHeaderLabel.BarColor = headerBack;
-        destinationSyncHeaderLabel.ForeColor = UiColors.PlaylistDefaultFore;
         transitionTimeSeparator.BackColor =
             UiColors.ForControlBack(UiColors.PlaylistButtonBorder);
         foreach (var radio in new[]
@@ -1062,8 +1107,6 @@ public partial class Form1 : Form
             exitSourceNextBeatRadio,
             exitSourceNextCueRadio,
             exitSourceExitCueRadio,
-            destinationSyncEntryCueRadio,
-            destinationSyncSameTimeRadio,
         })
         {
             radio.BackColor = back;
@@ -1075,15 +1118,22 @@ public partial class Form1 : Form
         {
             control.BackColor = back;
             control.ForeColor = UiColors.PlaylistDefaultFore;
+            if (control is PlaylistGroupSwatch { Tag: WaveformOutputPart swatchPart } swatch)
+            {
+                swatch.GroupColor = TryGetPlaylistGroupColor(swatchPart.Number);
+                continue;
+            }
+
             if (control is not FlatPlaylistButton { Tag: WaveformOutputPart part } button)
             {
                 continue;
             }
 
             button.Enabled = true;
+            // 通常時は枠なし。遷移待ちの明滅と遷移完了時の発光だけ枠へ描く。
             button.FlatAppearance.BorderSize = 0;
-            button.IndicatorColor = null;
-            button.IndicatorGlowLevel = 0d;
+            button.FlatAppearance.BorderColor =
+                UiColors.ForControlBack(UiColors.PlaylistButtonBorder);
             var isAutomatic = _automaticPlaylistPlayback
                 && _activeAutomaticPlaylistPartNumber == part.Number;
             var isManual = !_automaticPlaylistPlayback
@@ -1093,7 +1143,8 @@ public partial class Form1 : Form
 
             if (_audioPlayer.IsPlaying && isPending)
             {
-                button.IndicatorColor = BlendColor(
+                button.FlatAppearance.BorderSize = 2;
+                button.FlatAppearance.BorderColor = BlendColor(
                     UiColors.ForControlBack(UiColors.PlaylistButtonBorder),
                     UiColors.ForControlBack(UiColors.PlaylistTransitionBorder),
                     _pendingPlaylistBlinkLevel);
@@ -1101,10 +1152,11 @@ public partial class Form1 : Form
             }
             else if (_audioPlayer.IsPlaying && (isAutomatic || isManual))
             {
-                button.IndicatorColor = UiColors.ForControlBack(
+                // 再生中は枠ではなく塗り色で示す。
+                button.BackColor = UiColors.ForControlBack(
                     isManual
-                        ? UiColors.PlaylistManualBorder
-                        : UiColors.PlaylistTransitionBorder);
+                        ? UiColors.PlaylistManualBack
+                        : UiColors.PlaylistAutoBack);
                 button.ForeColor = UiColors.PlaylistActiveFore;
             }
             else if (_hoveredPlaylistPartNumber == part.Number
@@ -1116,15 +1168,139 @@ public partial class Form1 : Form
             if (_playlistTransitionGlowPartNumber == part.Number
                 && _playlistTransitionGlowLevel > 0d)
             {
-                button.IndicatorColor ??= UiColors.ForControlBack(
-                    isManual
-                        ? UiColors.PlaylistManualBorder
-                        : UiColors.PlaylistTransitionBorder);
-                button.IndicatorGlowLevel = _playlistTransitionGlowLevel;
+                // 従来の完了フェード値をそのまま使い、塗りではなく枠を発光させる。
+                button.FlatAppearance.BorderSize = 2;
+                button.FlatAppearance.BorderColor = BlendColor(
+                    UiColors.ForControlBack(UiColors.PlaylistButtonBorder),
+                    UiColors.ForControlBack(
+                        isManual
+                            ? UiColors.PlaylistManualBorder
+                            : UiColors.PlaylistTransitionBorder),
+                    _playlistTransitionGlowLevel);
+            }
+
+            // 無効パートは再生・ホバー色より優先して赤文字にする。
+            if (_disabledPlaylistPartNumbers.Contains(part.Number))
+            {
+                button.ForeColor = UiColors.LogError;
             }
         }
 
         EnsureHighlightedPlaylistVisible();
+    }
+
+    private Color? TryGetPlaylistGroupColor(int partNumber)
+    {
+        if (!_playlistPartGroupIds.TryGetValue(partNumber, out var groupId)
+            || !_playlistGroupColorIndexes.TryGetValue(groupId, out var colorIndex))
+        {
+            return null;
+        }
+
+        return UiColors.PlaylistGroupColorAt(colorIndex);
+    }
+
+    /// <summary>グループ枠色だけを更新する（一覧の自動スクロール副作用を避ける）。</summary>
+    private void ApplyPlaylistGroupColorsOnly()
+    {
+        foreach (Control control in playlistListLayout.Controls)
+        {
+            if (control is not PlaylistGroupSwatch { Tag: WaveformOutputPart part } swatch)
+            {
+                continue;
+            }
+
+            swatch.GroupColor = TryGetPlaylistGroupColor(part.Number);
+        }
+
+        waveformView.SetPlaylistGroupColors(BuildPlaylistGroupColorMap());
+        if (_loadedPreview is { } preview)
+        {
+            UpdatePlaylistDisplayNames(preview.OutputParts, updateWaveform: false);
+        }
+    }
+
+    private void UpdatePlaylistDisplayNames(
+        IReadOnlyList<WaveformOutputPart> parts,
+        bool updateWaveform = true)
+    {
+        var sourcePath = _loadedPreview?.SourcePath;
+        if (string.IsNullOrEmpty(sourcePath))
+        {
+            return;
+        }
+
+        var namingSourcePath = BuildNamingSourcePath(sourcePath);
+        var enabledParts = BuildProjectedEnabledParts(parts, namingSourcePath);
+        var enabledGroups = BuildEnabledPartGroupIds();
+        var nameOverrides = BuildPlaylistNameOverrides(enabledParts);
+        var names = enabledParts.Length == 0
+            ? new Dictionary<int, string>()
+            : WwiseMusicPlanBuilder.BuildPlaylistDisplayNames(
+                namingSourcePath,
+                enabledParts,
+                enabledGroups,
+                nameOverrides).ToDictionary(pair => pair.Key, pair => pair.Value);
+
+        var excludedIndex = 0;
+        foreach (var part in parts.OrderBy(part => part.StartSampleOffset))
+        {
+            if (_disabledPlaylistPartNumbers.Contains(part.Number))
+            {
+                names[part.Number] = $"Excluded Region {++excludedIndex}";
+            }
+        }
+
+        foreach (Control control in playlistListLayout.Controls)
+        {
+            if (control.Tag is not WaveformOutputPart part)
+            {
+                continue;
+            }
+
+            if (!names.TryGetValue(part.Number, out var name))
+            {
+                name = Path.GetFileNameWithoutExtension(part.FileName);
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    name = part.FileName;
+                }
+            }
+
+            if (control is FlatPlaylistButton button)
+            {
+                button.Text = name;
+                button.AccessibleName = name;
+            }
+
+            playlistToolTip.SetToolTip(control, BuildPlaylistGroupToolTip(name));
+        }
+
+        if (updateWaveform)
+        {
+            waveformView.SetPlaylistDisplayNames(
+                names,
+                enabledGroups,
+                BuildPlaylistGroupColorMap());
+            waveformView.SetDisabledPlaylistParts(_disabledPlaylistPartNumbers);
+        }
+
+        QueuePlaylistSelectorWidthUpdate();
+    }
+
+    /// <summary>グループ所属パートの番号 → グループ色。未グループのパートは含めない。</summary>
+    private Dictionary<int, Color> BuildPlaylistGroupColorMap()
+    {
+        var map = new Dictionary<int, Color>();
+        foreach (var partNumber in _playlistPartGroupIds.Keys)
+        {
+            if (TryGetPlaylistGroupColor(partNumber) is Color color)
+            {
+                map[partNumber] = color;
+            }
+        }
+
+        return map;
     }
 
     private static void RefreshFlatOptionControl(Control control)
@@ -1242,28 +1418,6 @@ public partial class Form1 : Form
             });
     }
 
-    private void DestinationSyncRadio_CheckedChanged(object? sender, EventArgs e)
-    {
-        if (sender is not RadioButton
-            {
-                Checked: true,
-                Tag: PlaylistDestinationSyncMode mode,
-            })
-        {
-            return;
-        }
-
-        _playlistDestinationSyncMode = mode;
-        ApplyPlaylistSelectorColors();
-        WritePlaybackDiagnostic(
-            "playlist.destination-sync-mode-changed",
-            new
-            {
-                mode = mode.ToUiName(),
-                appliesFromNextRequest = _pendingPlaylistTransitionGeneration != 0,
-            });
-    }
-
     private static Color BlendColor(Color from, Color to, double amount)
     {
         amount = Math.Clamp(amount, 0d, 1d);
@@ -1293,18 +1447,24 @@ public partial class Form1 : Form
         }
 
         // FlatPlaylistButton の描画余白に合わせる。
-        // （スクロール Padding + スクロールバー + ボタン Margin + テキスト左右 + わずかな安全幅）
-        var sampleMargin = playlistListLayout.Controls.Count > 0
-            ? playlistListLayout.Controls[0].Margin.Horizontal
-            : 6;
-        var samplePadding = playlistListLayout.Controls.Count > 0
-            ? playlistListLayout.Controls[0].Padding.Horizontal
-            : 4;
+        // （スクロール Padding + スクロールバー + グループ枠カラム
+        //  + ボタン Margin + テキスト左右 + わずかな安全幅）
+        var sampleButton = playlistListLayout.Controls
+            .OfType<FlatPlaylistButton>()
+            .FirstOrDefault();
+        var sampleMargin = sampleButton?.Margin.Horizontal ?? 6;
+        var samplePadding = sampleButton?.Padding.Horizontal ?? 4;
+        var sampleSwatch = playlistListLayout.Controls
+            .OfType<PlaylistGroupSwatch>()
+            .FirstOrDefault();
+        var swatchColumnWidth = sampleSwatch is null
+            ? 0
+            : sampleSwatch.Width + sampleSwatch.Margin.Horizontal;
         var chromeWidth = playlistScrollPanel.Padding.Horizontal
             + SystemInformation.VerticalScrollBarWidth
+            + swatchColumnWidth
             + sampleMargin
             + samplePadding
-            + FlatPlaylistButton.TextLeftInset
             + 4;
         const int minimumWidth = 132;
         var desiredWidth = Math.Max(minimumWidth, textWidth + chromeWidth);
@@ -1355,13 +1515,12 @@ public partial class Form1 : Form
     }
 
     /// <summary>
-    /// マーカーオプション領域の上端を Exit Source At セクションの下端に合わせる。
-    /// （Playlist と遷移設定の高さがそこまでになる）
+    /// Marker Grid / Marker Comment は内容が収まる高さへ固定し、
+    /// 右ペインの残り高さを Playlist に割り当てる。
     /// </summary>
-    private void UpdateMarkerOptionsPanelHeight()
+    private void ApplyMarkerOptionsPanelFixedHeight()
     {
-        var topHeight = fadeInSectionPanel.Height + exitSourceAtSectionPanel.Height;
-        var desiredHeight = Math.Max(0, rightSidePanel.ClientSize.Height - topHeight);
+        var desiredHeight = markerOptionsPanel.RequiredHeight;
         if (markerOptionsPanel.Height != desiredHeight)
         {
             markerOptionsPanel.Height = desiredHeight;
@@ -1440,13 +1599,40 @@ public partial class Form1 : Form
                 };
                 button.FlatAppearance.BorderSize = 0;
                 button.Click += PlaylistButton_Click;
+                button.MouseDown += PlaylistGroupTarget_MouseDown;
+                button.MouseMove += PlaylistGroupTarget_MouseMove;
+                button.MouseUp += PlaylistGroupTarget_MouseUp;
                 button.MouseEnter += PlaylistButton_MouseEnter;
                 button.MouseLeave += PlaylistButton_MouseLeave;
                 button.DragEnter += EditorTextBox_DragEnter;
                 button.DragDrop += EditorTextBox_DragDrop;
-                playlistToolTip.SetToolTip(button, name);
+                playlistToolTip.SetToolTip(button, BuildPlaylistGroupToolTip(name));
+
+                var swatch = new PlaylistGroupSwatch
+                {
+                    AllowDrop = true,
+                    BackColor = UiColors.ForControlBack(UiColors.PlaylistBack),
+                    Dock = DockStyle.Fill,
+                    Height = 30,
+                    Margin = new Padding(3, 1, 0, 1),
+                    Tag = part,
+                    Width = PlaylistGroupSwatch.ControlWidth,
+                };
+                swatch.MouseDown += PlaylistGroupTarget_MouseDown;
+                swatch.MouseMove += PlaylistGroupTarget_MouseMove;
+                swatch.MouseUp += PlaylistGroupTarget_MouseUp;
+                swatch.MouseEnter += PlaylistButton_MouseEnter;
+                swatch.MouseLeave += PlaylistButton_MouseLeave;
+                swatch.DragEnter += EditorTextBox_DragEnter;
+                swatch.DragDrop += EditorTextBox_DragDrop;
+                swatch.GroupColor = TryGetPlaylistGroupColor(part.Number);
+                playlistToolTip.SetToolTip(swatch, BuildPlaylistGroupToolTip(name));
+
+                playlistListLayout.Controls.Add(swatch);
                 playlistListLayout.Controls.Add(button);
             }
+
+            UpdatePlaylistDisplayNames(parts);
         }
         finally
         {
@@ -1481,6 +1667,8 @@ public partial class Form1 : Form
         _hoveredPlaylistPartNumber = null;
         _hoveredPlaylistListPartNumber = null;
         _lastAutoScrolledPlaylistPartNumber = null;
+        ClearPlaylistDisableState();
+        ClearPlaylistGroupState();
         ClearPlaylistTransitionGlow();
         waveformView.SetPlaylistHoverHighlight(null);
         var controls = playlistListLayout.Controls.Cast<Control>().ToArray();
@@ -1491,6 +1679,45 @@ public partial class Form1 : Form
         {
             control.Dispose();
         }
+    }
+
+    private void ClearPlaylistGroupState()
+    {
+        _playlistPartGroupIds.Clear();
+        _playlistGroupColorIndexes.Clear();
+        _nextPlaylistGroupId = 1;
+        _nextPlaylistGroupColorIndex = 0;
+        ApplyPlaylistGroupMarkerSharing();
+        EndPlaylistGroupPaint();
+    }
+
+    private void ClearPlaylistDisableState()
+    {
+        _disabledPlaylistPartNumbers.Clear();
+        EndPlaylistDisablePaint();
+        waveformView.SetDisabledPlaylistParts([]);
+        if (_previewSession is { } session)
+        {
+            session.SetDisabledPartNumbers(null);
+        }
+    }
+
+    private void EndPlaylistGroupPaint()
+    {
+        _playlistGroupPaintActive = false;
+        _playlistGroupPaintErase = false;
+        _playlistGroupPaintGroupId = null;
+        _playlistGroupPaintLastPartNumber = null;
+        if (_loadedPreview is { } preview)
+        {
+            UpdatePlaylistDisplayNames(preview.OutputParts);
+        }
+    }
+
+    private void EndPlaylistDisablePaint()
+    {
+        _playlistDisablePaintActive = false;
+        _playlistDisablePaintLastPartNumber = null;
     }
 
     private void ClearPlaylistPlaybackSelection()
@@ -1519,12 +1746,24 @@ public partial class Form1 : Form
         label.DragEnter += EditorTextBox_DragEnter;
         label.DragDrop += EditorTextBox_DragDrop;
         playlistListLayout.Controls.Add(label);
+        playlistListLayout.SetColumnSpan(label, 2);
     }
 
     private void PlaylistButton_Click(object? sender, EventArgs e)
     {
         if (_populatingPlaylistChoices
             || sender is not Button { Tag: WaveformOutputPart part })
+        {
+            return;
+        }
+
+        if (_suppressNextPlaylistClick)
+        {
+            _suppressNextPlaylistClick = false;
+            return;
+        }
+
+        if (_disabledPlaylistPartNumbers.Contains(part.Number))
         {
             return;
         }
@@ -1541,9 +1780,333 @@ public partial class Form1 : Form
         RequestPlaylistPlayback(part);
     }
 
+    private void PlaylistGroupTarget_MouseDown(object? sender, MouseEventArgs e)
+    {
+        if (_populatingPlaylistChoices
+            || e.Button != MouseButtons.Left
+            || sender is not Control { Tag: WaveformOutputPart part })
+        {
+            return;
+        }
+
+        var modifiers = ModifierKeys;
+        var ctrl = (modifiers & Keys.Control) == Keys.Control;
+        var shift = (modifiers & Keys.Shift) == Keys.Shift;
+        if (ctrl && shift)
+        {
+            _suppressNextPlaylistClick = sender is Button;
+            _playlistDisablePaintActive = true;
+            _playlistDisablePaintSetDisabled =
+                !_disabledPlaylistPartNumbers.Contains(part.Number);
+            _playlistDisablePaintLastPartNumber = null;
+            ApplyPlaylistDisablePaintAtCursor();
+            return;
+        }
+
+        var erase = ctrl;
+        var paint = shift;
+        if (!erase && !paint)
+        {
+            return;
+        }
+
+        // 無効（Excluded Region）はグループ化・解除の対象にしない。
+        if (_disabledPlaylistPartNumbers.Contains(part.Number))
+        {
+            return;
+        }
+
+        _suppressNextPlaylistClick = sender is Button;
+        _playlistGroupPaintActive = true;
+        _playlistGroupPaintErase = erase;
+        _playlistGroupPaintLastPartNumber = null;
+        if (erase)
+        {
+            _playlistGroupPaintGroupId = null;
+        }
+        else if (_playlistPartGroupIds.TryGetValue(part.Number, out var existingGroupId))
+        {
+            _playlistGroupPaintGroupId = existingGroupId;
+        }
+        else
+        {
+            var groupId = _nextPlaylistGroupId++;
+            _playlistGroupColorIndexes[groupId] = _nextPlaylistGroupColorIndex++;
+            _playlistGroupPaintGroupId = groupId;
+        }
+
+        ApplyPlaylistGroupPaintAtCursor();
+    }
+
+    private void PlaylistGroupTarget_MouseMove(object? sender, MouseEventArgs e)
+    {
+        if ((e.Button & MouseButtons.Left) == 0)
+        {
+            return;
+        }
+
+        if (_playlistDisablePaintActive)
+        {
+            ApplyPlaylistDisablePaintAtCursor();
+            return;
+        }
+
+        if (!_playlistGroupPaintActive)
+        {
+            return;
+        }
+
+        ApplyPlaylistGroupPaintAtCursor();
+    }
+
+    private void PlaylistGroupTarget_MouseUp(object? sender, MouseEventArgs e)
+    {
+        if (_playlistDisablePaintActive)
+        {
+            ApplyPlaylistDisablePaintAtCursor();
+            EndPlaylistDisablePaint();
+            if (_suppressNextPlaylistClick && IsHandleCreated)
+            {
+                BeginInvoke(() => _suppressNextPlaylistClick = false);
+            }
+
+            return;
+        }
+
+        if (!_playlistGroupPaintActive)
+        {
+            return;
+        }
+
+        ApplyPlaylistGroupPaintAtCursor();
+        EndPlaylistGroupPaint();
+
+        // Button の Click は MouseUp の直後に発火する。ドラッグで Click が発火しない場合に
+        // 抑制状態を次回へ持ち越さないよう、現在の入力処理が終わった後で解除する。
+        if (_suppressNextPlaylistClick && IsHandleCreated)
+        {
+            BeginInvoke(() => _suppressNextPlaylistClick = false);
+        }
+    }
+
+    private static string BuildPlaylistGroupToolTip(string playlistName) =>
+        $"{playlistName}{Environment.NewLine}"
+        + "Shift + クリック／ドラッグ: グループ化"
+        + Environment.NewLine
+        + "Ctrl + クリック／ドラッグ: グループ解除"
+        + Environment.NewLine
+        + "Ctrl + Shift + クリック／ドラッグ: 無効化／再有効化";
+
+    private WaveformOutputPart? HitTestPlaylistPartAtCursor()
+    {
+        // マウスキャプチャ下でも隣行へ塗れるよう、レイアウト座標でヒットテストする。
+        // 枠・ボタンのどちらの上を通っても同じ行として扱う。
+        var client = playlistListLayout.PointToClient(Cursor.Position);
+        foreach (Control control in playlistListLayout.Controls)
+        {
+            if (control.Tag is WaveformOutputPart candidate
+                && control.Bounds.Contains(client))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private void ApplyPlaylistGroupPaintAtCursor()
+    {
+        if (!_playlistGroupPaintActive)
+        {
+            return;
+        }
+
+        if (HitTestPlaylistPartAtCursor() is not { } part)
+        {
+            return;
+        }
+
+        if (_playlistGroupPaintLastPartNumber == part.Number)
+        {
+            return;
+        }
+
+        _playlistGroupPaintLastPartNumber = part.Number;
+        if (_disabledPlaylistPartNumbers.Contains(part.Number))
+        {
+            return;
+        }
+
+        if (_playlistGroupPaintErase)
+        {
+            RemovePlaylistPartFromGroup(part.Number);
+        }
+        else if (_playlistGroupPaintGroupId is int groupId)
+        {
+            AssignPlaylistPartToGroup(part.Number, groupId);
+        }
+
+        ApplyPlaylistGroupMarkerSharing();
+        ApplyPlaylistGroupColorsOnly();
+    }
+
+    private void ApplyPlaylistDisablePaintAtCursor()
+    {
+        if (!_playlistDisablePaintActive)
+        {
+            return;
+        }
+
+        if (HitTestPlaylistPartAtCursor() is not { } part)
+        {
+            return;
+        }
+
+        if (_playlistDisablePaintLastPartNumber == part.Number)
+        {
+            return;
+        }
+
+        _playlistDisablePaintLastPartNumber = part.Number;
+        SetPlaylistPartDisabled(part.Number, _playlistDisablePaintSetDisabled);
+    }
+
+    private void SetPlaylistPartDisabled(int partNumber, bool disabled)
+    {
+        var changed = disabled
+            ? _disabledPlaylistPartNumbers.Add(partNumber)
+            : _disabledPlaylistPartNumbers.Remove(partNumber);
+        if (!changed)
+        {
+            return;
+        }
+
+        if (disabled)
+        {
+            CancelPlaybackForDisabledPart(partNumber);
+            RemovePlaylistPartFromGroup(partNumber);
+        }
+
+        ApplyPlaylistDisableUi();
+    }
+
+    private void CancelPlaybackForDisabledPart(int partNumber)
+    {
+        if (_requestedPlaylistPartNumber == partNumber)
+        {
+            _audioPlayer.CancelPlaylistTransition();
+            ClearPendingPlaylistUiTransition();
+            _requestedPlaylistPartNumber = null;
+        }
+
+        if (_activeAutomaticPlaylistPartNumber == partNumber
+            || _manualPlaylistPartNumber == partNumber)
+        {
+            _audioPlayer.CancelPlaylistTransition();
+            ClearPendingPlaylistUiTransition();
+            if (_audioPlayer.IsPlaying
+                && (_activeAutomaticPlaylistPartNumber == partNumber
+                    || _manualPlaylistPartNumber == partNumber))
+            {
+                _audioPlayer.Stop();
+                UpdateTransportPlaybackState();
+                _playheadTimer.Stop();
+            }
+
+            ClearPlaylistPlaybackSelection();
+        }
+    }
+
+    private void ApplyPlaylistDisableUi()
+    {
+        if (_previewSession is { } session)
+        {
+            session.SetDisabledPartNumbers(_disabledPlaylistPartNumbers);
+            session.SetPlaylistGroups(BuildEnabledPartGroupIds());
+            waveformView.SetMarkers(session.EffectiveMarkers);
+        }
+
+        waveformView.SetDisabledPlaylistParts(_disabledPlaylistPartNumbers);
+        if (_loadedPreview is { } preview)
+        {
+            UpdatePlaylistDisplayNames(preview.OutputParts);
+        }
+
+        ApplyPlaylistSelectorColors();
+        UpdateExportButtonState();
+    }
+
+    /// <summary>
+    /// 現在の Playlist グループをマーカーセッションへ反映する。
+    /// グループ内では最小 part 番号のマーカー情報が全メンバーへ共有される。
+    /// 無効パートはグループ共有から除外する。
+    /// </summary>
+    private void ApplyPlaylistGroupMarkerSharing()
+    {
+        if (_previewSession is not { } session)
+        {
+            return;
+        }
+
+        session.SetDisabledPartNumbers(_disabledPlaylistPartNumbers);
+        session.SetPlaylistGroups(BuildEnabledPartGroupIds());
+        waveformView.SetMarkers(session.EffectiveMarkers);
+    }
+
+    private Dictionary<int, int> BuildEnabledPartGroupIds() =>
+        _playlistPartGroupIds
+            .Where(pair => !_disabledPlaylistPartNumbers.Contains(pair.Key))
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+
+    private void AssignPlaylistPartToGroup(int partNumber, int groupId)
+    {
+        if (_disabledPlaylistPartNumbers.Contains(partNumber))
+        {
+            return;
+        }
+
+        if (_playlistPartGroupIds.TryGetValue(partNumber, out var previous)
+            && previous == groupId)
+        {
+            return;
+        }
+
+        if (_playlistPartGroupIds.TryGetValue(partNumber, out var oldGroupId))
+        {
+            _playlistPartGroupIds.Remove(partNumber);
+            DiscardPlaylistGroupIfEmpty(oldGroupId);
+        }
+
+        _playlistPartGroupIds[partNumber] = groupId;
+        if (!_playlistGroupColorIndexes.ContainsKey(groupId))
+        {
+            _playlistGroupColorIndexes[groupId] = _nextPlaylistGroupColorIndex++;
+        }
+    }
+
+    private void RemovePlaylistPartFromGroup(int partNumber)
+    {
+        if (!_playlistPartGroupIds.Remove(partNumber, out var groupId))
+        {
+            return;
+        }
+
+        DiscardPlaylistGroupIfEmpty(groupId);
+    }
+
+    private void DiscardPlaylistGroupIfEmpty(int groupId)
+    {
+        if (_playlistPartGroupIds.Values.Any(id => id == groupId))
+        {
+            return;
+        }
+
+        _playlistGroupColorIndexes.Remove(groupId);
+    }
+
     private void PlaylistButton_MouseEnter(object? sender, EventArgs e)
     {
-        if (sender is not Button { Tag: WaveformOutputPart part })
+        if (sender is not Control { Tag: WaveformOutputPart part })
         {
             return;
         }
@@ -1555,7 +2118,7 @@ public partial class Form1 : Form
 
     private void PlaylistButton_MouseLeave(object? sender, EventArgs e)
     {
-        if (sender is not Button { Tag: WaveformOutputPart part }
+        if (sender is not Control { Tag: WaveformOutputPart part }
             || _hoveredPlaylistListPartNumber != part.Number)
         {
             return;
@@ -1602,7 +2165,8 @@ public partial class Form1 : Form
     {
         if (_loadedPreview is not { } preview
             || !_audioPlayer.HasSource
-            || preview.WavInfo.FrameCount <= 0)
+            || preview.WavInfo.FrameCount <= 0
+            || _disabledPlaylistPartNumbers.Contains(target.Number))
         {
             return;
         }
@@ -1676,7 +2240,7 @@ public partial class Form1 : Form
             }
         }
 
-        var destinationSyncMode = _playlistDestinationSyncMode;
+        var destinationSyncMode = ResolvePlaylistDestinationSyncMode(currentPart, target);
         var anacrusisFrames =
             destinationSyncMode == PlaylistDestinationSyncMode.EntryCue
                 ? GetLeadingAnacrusisFrameCount(preview, target)
@@ -1792,6 +2356,24 @@ public partial class Form1 : Form
             new { target = target.Number, currentSample, currentPartEnd });
         _requestedPlaylistPartNumber = null;
         ApplyPlaylistSelectorColors();
+    }
+
+    private PlaylistDestinationSyncMode ResolvePlaylistDestinationSyncMode(
+        WaveformOutputPart? current,
+        WaveformOutputPart target)
+    {
+        if (current is not { } currentPart
+            || !_playlistPartGroupIds.TryGetValue(currentPart.Number, out var currentGroupId)
+            || !_playlistPartGroupIds.TryGetValue(target.Number, out var targetGroupId))
+        {
+            return PlaylistDestinationSyncMode.EntryCue;
+        }
+
+        // 同じレイヤーグループ内は再生位置を維持する。
+        // 別のグループ間、および未グループとの遷移は Entry Cue に同期する。
+        return currentGroupId == targetGroupId
+            ? PlaylistDestinationSyncMode.SameTime
+            : PlaylistDestinationSyncMode.EntryCue;
     }
 
     private bool TrySchedulePlaylistTransition(
@@ -2332,11 +2914,109 @@ public partial class Form1 : Form
         return new Bitmap(source);
     }
 
+    private void ApplyActionBarToolTips()
+    {
+        playlistToolTip.SetToolTip(
+            detailedLogCheckBox,
+            "再生・操作の詳細ログをファイルへ出力します（開発用）。");
+        playlistToolTip.SetToolTip(
+            compactFileNumbersCheckBox,
+            "ON: 無効化した Playlist があっても、書き出す WAV の番号を 1 から詰めます。"
+            + Environment.NewLine
+            + "OFF: 元の番号を維持します（欠番が残ります）。");
+        playlistToolTip.SetToolTip(
+            topMostCheckBox,
+            "ウィンドウを常に最前面へ表示します。");
+        playlistToolTip.SetToolTip(
+            reloadButton,
+            "最後にドロップまたは自動読み込みした WAV／XML を、元のファイルから再読み込みします。"
+            + Environment.NewLine
+            + "ログ・Playlist のグループ化・無効化・追加マーカーはリセットされます。");
+        playlistToolTip.SetToolTip(
+            exportButton,
+            "分割 WAV を書き出し、続けて Wwise へインポートします。"
+            + Environment.NewLine
+            + "無効化した Playlist は書き出し対象外です。");
+    }
+
+    /// <summary>
+    /// 編集や書き出し中の操作ロックを理由別に管理する。
+    /// 複数の理由が重なっても、最後のロックが解除されるまでショートカットは再開しない。
+    /// </summary>
+    private void SetUiInteractionLocked(UiInteractionLock reason, bool locked)
+    {
+        var next = locked
+            ? _uiInteractionLocks | reason
+            : _uiInteractionLocks & ~reason;
+        if (next == _uiInteractionLocks)
+        {
+            return;
+        }
+
+        _uiInteractionLocks = next;
+        EndActiveTransportShortcutFeedback();
+        _resumePlaybackAfterBackwardSeek = false;
+
+        ApplyExportInteractiveLock(_uiInteractionLocks.HasFlag(UiInteractionLock.Export));
+        UpdateExportButtonState();
+    }
+
+    /// <summary>
+    /// 書き出し中は操作可能な子だけを無効化する。
+    /// 親 Panel の Enabled=false は Label／TextBox が OS 無効色（黒文字）になるため使わない。
+    /// </summary>
+    private void ApplyExportInteractiveLock(bool locked)
+    {
+        waveformView.InteractionLocked = locked;
+        SetInteractiveControlsEnabled(transportBar, !locked);
+        SetInteractiveControlsEnabled(rightSidePanel, !locked);
+        SetInteractiveControlsEnabled(actionControlsPanel, !locked);
+        SetInteractiveControlsEnabled(waveformHostPanel, !locked);
+        if (!locked)
+        {
+            reloadButton.Enabled = _lastInputFiles.Count > 0;
+        }
+    }
+
+    private static void SetInteractiveControlsEnabled(Control root, bool enabled)
+    {
+        foreach (Control child in root.Controls)
+        {
+            switch (child)
+            {
+                case MarkerOptionsPanel markerPanel:
+                    markerPanel.SetInteractionLocked(!enabled);
+                    continue;
+                case FlatOptionRadioButton:
+                case FlatOptionCheckBox:
+                case FlatPlaylistButton:
+                case RoundedButton:
+                case TransportIconButton:
+                case PlaylistGroupSwatch:
+                case ThinHorizontalScrollBar:
+                    child.Enabled = enabled;
+                    continue;
+                case WaveformView:
+                case Label: // SectionHeaderLabel / LinkLabel 含む
+                case TextBox:
+                case RichTextBox:
+                    // 見た目用／自前ロック対象。Enabled は触らない。
+                    continue;
+                default:
+                    SetInteractiveControlsEnabled(child, enabled);
+                    break;
+            }
+        }
+    }
+
     private void UpdateExportButtonState()
     {
-        exportButton.Enabled =
-            !_exportBusy
-            && _loadedPreview is { OutputParts.Count: > 0 };
+        var hasEnabledParts = _loadedPreview is { OutputParts.Count: > 0 } preview
+            && preview.OutputParts.Any(part =>
+                !_disabledPlaylistPartNumbers.Contains(part.Number));
+        exportButton.Enabled = !_exportBusy
+            && !_uiInteractionLocks.HasFlag(UiInteractionLock.Export)
+            && hasEnabledParts;
     }
 
     private void TopMostCheckBox_CheckedChanged(object? sender, EventArgs e)
@@ -2344,6 +3024,140 @@ public partial class Form1 : Form
         TopMost = topMostCheckBox.Checked;
         DeveloperSettings.SaveTopMost(topMostCheckBox.Checked);
     }
+
+    private void CompactFileNumbersCheckBox_CheckedChanged(object? sender, EventArgs e)
+    {
+        if (_loadedPreview is { } preview)
+        {
+            UpdatePlaylistDisplayNames(preview.OutputParts);
+        }
+
+        UpdateExportButtonState();
+    }
+
+    private WaveformOutputPart[] BuildProjectedEnabledParts(
+        IReadOnlyList<WaveformOutputPart> parts,
+        string sourcePath)
+    {
+        var baseName = Path.GetFileNameWithoutExtension(sourcePath);
+        if (string.IsNullOrEmpty(baseName))
+        {
+            baseName = "wave";
+        }
+
+        var enabled = parts
+            .Where(part => !_disabledPlaylistPartNumbers.Contains(part.Number))
+            .OrderBy(part => part.StartSampleOffset)
+            .ThenBy(part => part.Number)
+            .ToArray();
+        var projected = new WaveformOutputPart[enabled.Length];
+        for (var i = 0; i < enabled.Length; i++)
+        {
+            var part = enabled[i];
+            var fileNumber = compactFileNumbersCheckBox.Checked ? i + 1 : part.Number;
+            projected[i] = part with { FileName = $"{baseName}_{fileNumber}.wav" };
+        }
+
+        return projected;
+    }
+
+    private string BuildNamingSourcePath(string sourcePath)
+    {
+        var baseName = _sourceBaseNameOverride;
+        if (string.IsNullOrWhiteSpace(baseName))
+        {
+            return sourcePath;
+        }
+
+        var directory = Path.GetDirectoryName(sourcePath) ?? string.Empty;
+        return Path.Combine(directory, baseName + Path.GetExtension(sourcePath));
+    }
+
+    private void ApplySourceBaseName(string editedName)
+    {
+        if (_loadedPreview is not { } preview)
+        {
+            return;
+        }
+
+        var name = editedName.Trim();
+        if (name.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
+        {
+            name = name[..^4].Trim();
+        }
+
+        if (name.Length == 0
+            || name.EndsWith(' ')
+            || name.EndsWith('.')
+            || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            MessageBox.Show(
+                this,
+                "ファイル名として使用できる、拡張子なしの名前を入力してください。",
+                "名前を変更できません",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            waveformView.SetSourceDisplayName(
+                _sourceBaseNameOverride
+                ?? Path.GetFileNameWithoutExtension(preview.SourcePath));
+            return;
+        }
+
+        _sourceBaseNameOverride = name;
+        waveformView.SetSourceDisplayName(name);
+        UpdatePlaylistDisplayNames(preview.OutputParts);
+    }
+
+    private Dictionary<int, string> BuildPlaylistNameOverrides(
+        IReadOnlyList<WaveformOutputPart> enabledParts)
+    {
+        // 除外が無い通常時、または番号を詰めるときは Playlist 単位の連番に任せる。
+        // （パート単位の FileName を流用すると、グループの2つ目が _4 など欠番に見える）
+        if (_disabledPlaylistPartNumbers.Count == 0
+            || compactFileNumbersCheckBox.Checked)
+        {
+            return [];
+        }
+
+        // Compact OFF: 各 Playlist 単位の代表番号（最小 Number）を残す。
+        return enabledParts.ToDictionary(
+            part => part.Number,
+            part => Path.GetFileNameWithoutExtension(part.FileName));
+    }
+
+    /// <summary>
+    /// 無効パートを除いた書き出し／Wwise 用スナップショット。
+    /// Compact File Numbers が ON なら FileName だけ 1 から詰める（Number は安定 ID）。
+    /// </summary>
+    private PlaylistExportSnapshot BuildPlaylistExportSnapshot(
+        WaveformPreviewData preview,
+        IReadOnlyList<WaveformMarkerMark> markers)
+    {
+        var parts = BuildProjectedEnabledParts(
+            preview.OutputParts,
+            BuildNamingSourcePath(preview.SourcePath));
+        var enabledNumbers = parts.Select(part => part.Number).ToHashSet();
+        var groups = _playlistPartGroupIds
+            .Where(pair => enabledNumbers.Contains(pair.Key))
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+        var filteredMarkers = markers
+            .Where(marker => parts.Any(part =>
+                marker.SampleOffset >= part.StartSampleOffset
+                && marker.SampleOffset < part.EndSampleOffset))
+            .ToArray();
+
+        return new PlaylistExportSnapshot(
+            parts,
+            groups,
+            filteredMarkers,
+            BuildPlaylistNameOverrides(parts));
+    }
+
+    private readonly record struct PlaylistExportSnapshot(
+        IReadOnlyList<WaveformOutputPart> Parts,
+        IReadOnlyDictionary<int, int> PartGroupIds,
+        IReadOnlyList<WaveformMarkerMark> Markers,
+        IReadOnlyDictionary<int, string> PlaylistNameOverrides);
 
     private void CopyrightLinkLabel_LinkClicked(object? sender, LinkLabelLinkClickedEventArgs e)
     {
@@ -2430,23 +3244,15 @@ public partial class Form1 : Form
         }
     }
 
-    private void ClearButton_Click(object? sender, EventArgs e)
+    private void ReloadButton_Click(object? sender, EventArgs e)
     {
-        _exportGeneration++;
-        _exportBusy = false;
-        _loadedPreview = null;
-        _previewSession = null;
-        _resumePlaybackAfterBackwardSeek = false;
-        ClearPendingPlaylistUiTransition();
-        _playheadTimer.Stop();
-        _audioPlayer.Stop();
-        _audioPlayer.Clear();
-        UpdateTransportPlaybackState();
-        waveformView.ClearPreview();
-        UpdateTransportPosition();
+        if (_lastInputFiles.Count == 0)
+        {
+            return;
+        }
+
         editorTextBox.Clear();
-        ClearPlaylistChoices("Playlist はありません");
-        UpdateExportButtonState();
+        ProcessDroppedFiles(_lastInputFiles, rememberInputFiles: false);
     }
 
     private void RestoreWindowBounds()
@@ -2557,6 +3363,12 @@ public partial class Form1 : Form
 
     private void EditorTextBox_DragEnter(object? sender, DragEventArgs e)
     {
+        if (_uiInteractionLocks.HasFlag(UiInteractionLock.Export))
+        {
+            e.Effect = DragDropEffects.None;
+            return;
+        }
+
         if (e.Data?.GetDataPresent(DataFormats.FileDrop) == true)
         {
             e.Effect = DragDropEffects.Copy;
@@ -2568,6 +3380,11 @@ public partial class Form1 : Form
 
     private void EditorTextBox_DragDrop(object? sender, DragEventArgs e)
     {
+        if (_uiInteractionLocks.HasFlag(UiInteractionLock.Export))
+        {
+            return;
+        }
+
         if (e.Data?.GetData(DataFormats.FileDrop) is not string[] files || files.Length == 0)
         {
             return;
@@ -2598,9 +3415,26 @@ public partial class Form1 : Form
         ProcessDroppedFiles([wavPath]);
     }
 
-    private async void ProcessDroppedFiles(IEnumerable<string> files)
+    private async void ProcessDroppedFiles(
+        IEnumerable<string> files,
+        bool rememberInputFiles = true)
     {
+        var fileList = files
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .ToArray();
+        if (fileList.Length == 0)
+        {
+            return;
+        }
+
+        if (rememberInputFiles)
+        {
+            _lastInputFiles = fileList;
+            reloadButton.Enabled = true;
+        }
+
         var exportGeneration = ++_exportGeneration;
+        _sourceBaseNameOverride = null;
         _loadedPreview = null;
         _previewSession = null;
         _exportBusy = false;
@@ -2610,14 +3444,14 @@ public partial class Form1 : Form
         UpdateExportButtonState();
         waveformView.ClearExportHighlight();
         _playheadTimer.Stop();
-        _audioPlayer.Stop();
+        // 再読込前に再生ハンドル／一時コピーを解放し、元 WAV の上書きや再解析を妨げない。
+        _audioPlayer.Clear();
         UpdateTransportPlaybackState();
 
         // 解析中に OS が白消ししないよう、先に暗いフレームを確定する
         waveformView.CommitDarkFrame();
 
         // 巨大 WAV のピーク走査で UI を止めないよう、解析は背景スレッドで行う
-        var fileList = files.ToList();
         var (report, preview) = await Task.Run(() =>
         {
             var text = DroppedFilesProcessor.Process(fileList, out var previewData);
@@ -2697,7 +3531,7 @@ public partial class Form1 : Form
         var directory = Path.GetDirectoryName(preview.SourcePath) ?? string.Empty;
         AppendReport(
             $"=== Export ==={Environment.NewLine}"
-            + $"Message : 出力パート {preview.OutputParts.Count} 件。［エクスポート］で分割 WAV を書き出せます。{Environment.NewLine}"
+            + $"Message : 出力パート {preview.OutputParts.Count} 件。［EXPORT］で分割 WAV を書き出せます。{Environment.NewLine}"
             + $"保存先  : {directory}{Environment.NewLine}{Environment.NewLine}");
     }
 
@@ -2711,25 +3545,34 @@ public partial class Form1 : Form
         var exportGeneration = _exportGeneration;
         var exportMarkers = (_previewSession?.EffectiveMarkers ?? preview.Markers).ToArray();
         var wwiseMarkers = (_previewSession?.WwiseMarkers ?? preview.Markers).ToArray();
+        var exportSnapshot = BuildPlaylistExportSnapshot(preview, exportMarkers);
+        var wwiseSnapshot = BuildPlaylistExportSnapshot(preview, wwiseMarkers);
+        if (exportSnapshot.Parts.Count == 0)
+        {
+            return;
+        }
+
         _exportBusy = true;
+        SetUiInteractionLocked(UiInteractionLock.Export, locked: true);
         UpdateExportButtonState();
 
         try
         {
-            await RunExportAsync(preview, exportMarkers, exportGeneration);
+            await RunExportAsync(preview, exportSnapshot, exportGeneration);
 
             if (IsDisposed || exportGeneration != _exportGeneration)
             {
                 return;
             }
 
-            await RunWwiseImportAsync(preview, wwiseMarkers, exportGeneration);
+            await RunWwiseImportAsync(preview, wwiseSnapshot, exportGeneration);
         }
         finally
         {
             if (!IsDisposed)
             {
                 _exportBusy = false;
+                SetUiInteractionLocked(UiInteractionLock.Export, locked: false);
                 UpdateExportButtonState();
             }
         }
@@ -2741,12 +3584,12 @@ public partial class Form1 : Form
     /// </summary>
     private async Task RunWwiseImportAsync(
         WaveformPreviewData preview,
-        IReadOnlyList<WaveformMarkerMark> markers,
+        PlaylistExportSnapshot snapshot,
         int exportGeneration)
     {
-        // 書き出しに失敗したパートがあるときは中断（全ファイルの存在を確認）
+        // 書き出しに失敗したパートがあるときは中断（有効パートの全ファイル存在を確認）
         var directory = Path.GetDirectoryName(preview.SourcePath) ?? string.Empty;
-        var missing = preview.OutputParts
+        var missing = snapshot.Parts
             .Select(p => Path.Combine(directory, p.FileName))
             .Where(p => !File.Exists(p))
             .ToList();
@@ -2793,12 +3636,14 @@ public partial class Form1 : Form
         try
         {
             plan = WwiseMusicPlanBuilder.Build(
-                preview.SourcePath,
+                BuildNamingSourcePath(preview.SourcePath),
                 preview.WavInfo.SampleRate,
-                preview.OutputParts,
+                snapshot.Parts,
                 preview.Regions,
                 preview.Bars,
-                markers);
+                snapshot.Markers,
+                snapshot.PartGroupIds,
+                snapshot.PlaylistNameOverrides);
         }
         catch (Exception ex)
         {
@@ -2928,7 +3773,7 @@ public partial class Form1 : Form
 
     private async Task RunExportAsync(
         WaveformPreviewData preview,
-        IReadOnlyList<WaveformMarkerMark> markers,
+        PlaylistExportSnapshot snapshot,
         int exportGeneration)
     {
         try
@@ -2936,10 +3781,10 @@ public partial class Form1 : Form
             await Task.Run(() => WaveformExporter.Export(
                 preview.SourcePath,
                 preview.WavInfo,
-                preview.OutputParts,
+                snapshot.Parts,
                 preview.Regions,
                 preview.Bars,
-                markers,
+                snapshot.Markers,
                 onPartBegin: part =>
                 {
                     // 書き出し開始の瞬間に発光を点ける（見えてから I/O へ）
@@ -3515,7 +4360,7 @@ public partial class Form1 : Form
                 transitionFadeSeconds = _playlistFadeSeconds,
                 transitionFadeOut = PlaylistUiNames.ToFadeUiName(_playlistFadeSeconds, isFadeIn: false),
                 exitSourceMode = _playlistExitSourceMode.ToUiName(),
-                destinationSyncMode = _playlistDestinationSyncMode.ToUiName(),
+                destinationSyncMode = "Automatic (same group: Same Time / otherwise: Entry Cue)",
                 markerGrid = _markerSettings.GridOverride.ToUiName(),
                 manualPart = _manualPlaylistPartNumber,
                 pendingGeneration = _pendingPlaylistTransitionGeneration,

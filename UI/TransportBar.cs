@@ -37,7 +37,7 @@ internal readonly record struct TransportPositionInfo(
 internal sealed class TransportBar : UserControl
 {
     private readonly FlowLayoutPanel _groups = new();
-    private readonly ToolTip _toolTip = new();
+    private readonly DarkToolTip _toolTip = new();
     private readonly TransportPositionDisplay _positionDisplay = new();
     private readonly Dictionary<TransportCommand, TransportIconButton> _commandButtons = [];
     private readonly TransportIconButton _playButton;
@@ -71,7 +71,7 @@ internal sealed class TransportBar : UserControl
         _playButton = AddGroup(
             "TRANSPORT",
             (TransportCommand.TogglePlayback, TransportIcon.PlayPause, "再生 / 一時停止  [Space]"),
-            (TransportCommand.JumpToBar, TransportIcon.JumpToBar, "Go To Measure  [G]"));
+            (TransportCommand.JumpToBar, TransportIcon.JumpToBar, "小節番号を指定して移動  [G]"));
 
         AddGroup(
             "NAVIGATION",
@@ -419,6 +419,20 @@ internal sealed class TransportIconButton : Button
         _shortcutFadeTimer.Tick += (_, _) => UpdateShortcutFeedbackFade();
     }
 
+    protected override void OnEnabledChanged(EventArgs e)
+    {
+        if (!Enabled)
+        {
+            _hovered = false;
+            _pressed = false;
+            _shortcutFeedbackLevel = 0d;
+            _shortcutFadeTimer.Stop();
+        }
+
+        Invalidate();
+        base.OnEnabledChanged(e);
+    }
+
     public TransportIcon Icon { get; }
     public Color HoverBackColor { get; set; }
     public Color PressedBackColor { get; set; }
@@ -514,7 +528,9 @@ internal sealed class TransportIconButton : Button
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(BackColor);
 
-        var hoverLevel = _hovered ? 1d : _shortcutFeedbackLevel;
+        var hoverLevel = Enabled
+            ? (_hovered ? 1d : _shortcutFeedbackLevel)
+            : 0d;
         var back = _pressed
             ? PressedBackColor
             : BlendColor(BackColor, HoverBackColor, hoverLevel);
@@ -535,16 +551,20 @@ internal sealed class TransportIconButton : Button
             }
         }
 
-        using var pen = new Pen(ForeColor, 1.8f)
+        using var pen = new Pen(
+            Enabled ? ForeColor : UiColors.TransportDisabledFore,
+            1.8f)
         {
             StartCap = LineCap.Round,
             EndCap = LineCap.Round,
             LineJoin = LineJoin.Round,
         };
         using var brush = new SolidBrush(
-            Icon == TransportIcon.PlayPause && IsPlaying
-                ? ActiveForeColor
-                : ForeColor);
+            !Enabled
+                ? UiColors.TransportDisabledFore
+                : Icon == TransportIcon.PlayPause && IsPlaying
+                    ? ActiveForeColor
+                    : ForeColor);
         var iconState = g.Save();
         g.ScaleTransform(Width / 34f, Height / 36f);
         DrawIcon(g, pen, brush);

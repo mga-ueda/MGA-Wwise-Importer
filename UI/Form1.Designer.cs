@@ -41,11 +41,6 @@ partial class Form1
     private FlatOptionRadioButton exitSourceNextBeatRadio;
     private FlatOptionRadioButton exitSourceNextCueRadio;
     private FlatOptionRadioButton exitSourceExitCueRadio;
-    private Panel destinationSyncSectionPanel;
-    private SectionHeaderLabel destinationSyncHeaderLabel;
-    private FlowLayoutPanel destinationSyncChoicesPanel;
-    private FlatOptionRadioButton destinationSyncEntryCueRadio;
-    private FlatOptionRadioButton destinationSyncSameTimeRadio;
     private Panel rightSidePanel;
     private MarkerOptionsPanel markerOptionsPanel;
     private Panel playlistSelectorPanel;
@@ -59,8 +54,9 @@ partial class Form1
     private LinkLabel copyrightLinkLabel;
     private FlowLayoutPanel actionControlsPanel;
     private FlatOptionCheckBox detailedLogCheckBox;
+    private FlatOptionCheckBox compactFileNumbersCheckBox;
     private FlatOptionCheckBox topMostCheckBox;
-    private RoundedButton clearButton;
+    private RoundedButton reloadButton;
     private RoundedButton exportButton;
     private WaapiStatusBar waapiStatusBar;
 
@@ -121,11 +117,6 @@ partial class Form1
         exitSourceNextBeatRadio = new FlatOptionRadioButton();
         exitSourceNextCueRadio = new FlatOptionRadioButton();
         exitSourceExitCueRadio = new FlatOptionRadioButton();
-        destinationSyncSectionPanel = new Panel();
-        destinationSyncHeaderLabel = new SectionHeaderLabel();
-        destinationSyncChoicesPanel = new FlowLayoutPanel();
-        destinationSyncEntryCueRadio = new FlatOptionRadioButton();
-        destinationSyncSameTimeRadio = new FlatOptionRadioButton();
         rightSidePanel = new Panel();
         markerOptionsPanel = new MarkerOptionsPanel();
         playlistSelectorPanel = new Panel();
@@ -133,14 +124,15 @@ partial class Form1
         playlistHeaderLabel = new SectionHeaderLabel();
         playlistScrollPanel = new Panel();
         playlistListLayout = new TableLayoutPanel();
-        playlistToolTip = new ToolTip(components);
+        playlistToolTip = new DarkToolTip(components);
         actionBar = new Panel();
         brandLogoPictureBox = new PictureBox();
         copyrightLinkLabel = new LinkLabel();
         actionControlsPanel = new FlowLayoutPanel();
         detailedLogCheckBox = new FlatOptionCheckBox();
+        compactFileNumbersCheckBox = new FlatOptionCheckBox();
         topMostCheckBox = new FlatOptionCheckBox();
-        clearButton = new RoundedButton();
+        reloadButton = new RoundedButton();
         exportButton = new RoundedButton();
         waapiStatusBar = new WaapiStatusBar();
         SuspendLayout();
@@ -156,8 +148,6 @@ partial class Form1
         transitionTimeChoicesPanel.SuspendLayout();
         exitSourceAtSectionPanel.SuspendLayout();
         exitSourceAtChoicesPanel.SuspendLayout();
-        destinationSyncSectionPanel.SuspendLayout();
-        destinationSyncChoicesPanel.SuspendLayout();
         rightSidePanel.SuspendLayout();
         playlistSelectorPanel.SuspendLayout();
         playlistScrollPanel.SuspendLayout();
@@ -240,7 +230,7 @@ partial class Form1
         logClearButton.Name = "logClearButton";
         logClearButton.Size = new Size(24, 24);
         logClearButton.TabIndex = 0;
-        playlistToolTip.SetToolTip(logClearButton, "Clear");
+        playlistToolTip.SetToolTip(logClearButton, "ログをクリア");
         logClearButton.Click += LogClearButton_Click;
         //
         // logCopyButton
@@ -250,7 +240,7 @@ partial class Form1
         logCopyButton.Name = "logCopyButton";
         logCopyButton.Size = new Size(24, 24);
         logCopyButton.TabIndex = 1;
-        playlistToolTip.SetToolTip(logCopyButton, "Copy");
+        playlistToolTip.SetToolTip(logCopyButton, "ログをクリップボードへコピー");
         logCopyButton.Click += LogCopyButton_Click;
         //
         // logDownloadButton
@@ -260,7 +250,7 @@ partial class Form1
         logDownloadButton.Name = "logDownloadButton";
         logDownloadButton.Size = new Size(24, 24);
         logDownloadButton.TabIndex = 2;
-        playlistToolTip.SetToolTip(logDownloadButton, "Download");
+        playlistToolTip.SetToolTip(logDownloadButton, "ログをファイルへ保存");
         logDownloadButton.Click += LogDownloadButton_Click;
         //
         // logEditorPanel
@@ -323,7 +313,6 @@ partial class Form1
         transitionSettingsPanel.Controls.Add(fadeInSectionPanel);
         transitionSettingsPanel.Controls.Add(fadeOutSectionPanel);
         transitionSettingsPanel.Controls.Add(exitSourceAtSectionPanel);
-        transitionSettingsPanel.Controls.Add(destinationSyncSectionPanel);
         transitionSettingsPanel.SetFlowBreak(fadeOutSectionPanel, true);
         //
         // transitionTimeSeparator
@@ -627,65 +616,6 @@ partial class Form1
         exitSourceExitCueRadio.Text = "Exit Cue";
         exitSourceExitCueRadio.CheckedChanged += ExitSourceAtRadio_CheckedChanged;
         //
-        // destinationSyncSectionPanel
-        //
-        destinationSyncSectionPanel.Margin = new Padding(0);
-        destinationSyncSectionPanel.Name = "destinationSyncSectionPanel";
-        destinationSyncSectionPanel.Size = new Size(108, 94);
-        destinationSyncSectionPanel.TabIndex = 3;
-        destinationSyncSectionPanel.Controls.Add(destinationSyncChoicesPanel);
-        destinationSyncSectionPanel.Controls.Add(destinationSyncHeaderLabel);
-        //
-        // destinationSyncHeaderLabel
-        //
-        destinationSyncHeaderLabel.Font = new Font("Yu Gothic UI", 8.5F, FontStyle.Bold);
-        destinationSyncHeaderLabel.Dock = DockStyle.Top;
-        destinationSyncHeaderLabel.Margin = new Padding(0);
-        destinationSyncHeaderLabel.Name = "destinationSyncHeaderLabel";
-        destinationSyncHeaderLabel.Padding = new Padding(10, 0, 4, 0);
-        destinationSyncHeaderLabel.Size = new Size(108, 26);
-        destinationSyncHeaderLabel.TabIndex = 4;
-        destinationSyncHeaderLabel.Text = "Dest. Sync To";
-        destinationSyncHeaderLabel.TextAlign = ContentAlignment.MiddleLeft;
-        //
-        // destinationSyncChoicesPanel
-        //
-        destinationSyncChoicesPanel.Dock = DockStyle.Fill;
-        destinationSyncChoicesPanel.FlowDirection = FlowDirection.TopDown;
-        destinationSyncChoicesPanel.Margin = new Padding(0);
-        destinationSyncChoicesPanel.Name = "destinationSyncChoicesPanel";
-        destinationSyncChoicesPanel.Padding = new Padding(9, 0, 4, 4);
-        destinationSyncChoicesPanel.Size = new Size(108, 68);
-        destinationSyncChoicesPanel.TabIndex = 5;
-        destinationSyncChoicesPanel.WrapContents = false;
-        destinationSyncChoicesPanel.Controls.Add(destinationSyncEntryCueRadio);
-        destinationSyncChoicesPanel.Controls.Add(destinationSyncSameTimeRadio);
-        //
-        // destinationSyncEntryCueRadio
-        //
-        destinationSyncEntryCueRadio.AutoSize = false;
-        destinationSyncEntryCueRadio.Height = 30;
-        destinationSyncEntryCueRadio.Checked = true;
-        destinationSyncEntryCueRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        destinationSyncEntryCueRadio.Margin = new Padding(3, 1, 3, 1);
-        destinationSyncEntryCueRadio.Name = "destinationSyncEntryCueRadio";
-        destinationSyncEntryCueRadio.TabIndex = 0;
-        destinationSyncEntryCueRadio.Tag = PlaylistDestinationSyncMode.EntryCue;
-        destinationSyncEntryCueRadio.Text = "Entry Cue";
-        destinationSyncEntryCueRadio.CheckedChanged += DestinationSyncRadio_CheckedChanged;
-        //
-        // destinationSyncSameTimeRadio
-        //
-        destinationSyncSameTimeRadio.AutoSize = false;
-        destinationSyncSameTimeRadio.Height = 30;
-        destinationSyncSameTimeRadio.Font = new Font("Yu Gothic UI", 8.5F);
-        destinationSyncSameTimeRadio.Margin = new Padding(3, 1, 3, 1);
-        destinationSyncSameTimeRadio.Name = "destinationSyncSameTimeRadio";
-        destinationSyncSameTimeRadio.TabIndex = 1;
-        destinationSyncSameTimeRadio.Tag = PlaylistDestinationSyncMode.SameTime;
-        destinationSyncSameTimeRadio.Text = "Same Time";
-        destinationSyncSameTimeRadio.CheckedChanged += DestinationSyncRadio_CheckedChanged;
-        //
         // playlistSelectorPanel
         //
         playlistSelectorPanel.Dock = DockStyle.Right;
@@ -737,7 +667,8 @@ partial class Form1
         playlistListLayout.AutoSize = true;
         playlistListLayout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         playlistListLayout.AllowDrop = true;
-        playlistListLayout.ColumnCount = 1;
+        playlistListLayout.ColumnCount = 2;
+        playlistListLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         playlistListLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         playlistListLayout.Dock = DockStyle.Top;
         playlistListLayout.GrowStyle = TableLayoutPanelGrowStyle.AddRows;
@@ -796,8 +727,9 @@ partial class Form1
         actionControlsPanel.TabIndex = 1;
         actionControlsPanel.WrapContents = false;
         actionControlsPanel.Controls.Add(exportButton);
-        actionControlsPanel.Controls.Add(clearButton);
+        actionControlsPanel.Controls.Add(reloadButton);
         actionControlsPanel.Controls.Add(topMostCheckBox);
+        actionControlsPanel.Controls.Add(compactFileNumbersCheckBox);
         actionControlsPanel.Controls.Add(detailedLogCheckBox);
         //
         // detailedLogCheckBox
@@ -813,26 +745,40 @@ partial class Form1
         detailedLogCheckBox.UseVisualStyleBackColor = true;
         detailedLogCheckBox.CheckedChanged += DetailedLogCheckBox_CheckedChanged;
         //
+        // compactFileNumbersCheckBox
+        //
+        compactFileNumbersCheckBox.AutoSize = true;
+        compactFileNumbersCheckBox.Checked = true;
+        compactFileNumbersCheckBox.CheckState = CheckState.Checked;
+        compactFileNumbersCheckBox.Font = new Font("Yu Gothic UI", 9F);
+        compactFileNumbersCheckBox.Margin = new Padding(0, 8, 8, 0);
+        compactFileNumbersCheckBox.Name = "compactFileNumbersCheckBox";
+        compactFileNumbersCheckBox.TabIndex = 1;
+        compactFileNumbersCheckBox.Text = "Compact File Numbers";
+        compactFileNumbersCheckBox.UseVisualStyleBackColor = true;
+        compactFileNumbersCheckBox.CheckedChanged += CompactFileNumbersCheckBox_CheckedChanged;
+        //
         // topMostCheckBox
         //
         topMostCheckBox.AutoSize = true;
         topMostCheckBox.Font = new Font("Yu Gothic UI", 9F);
         topMostCheckBox.Margin = new Padding(0, 8, 8, 0);
         topMostCheckBox.Name = "topMostCheckBox";
-        topMostCheckBox.TabIndex = 1;
+        topMostCheckBox.TabIndex = 2;
         topMostCheckBox.Text = "Always on Top";
         topMostCheckBox.UseVisualStyleBackColor = true;
         topMostCheckBox.CheckedChanged += TopMostCheckBox_CheckedChanged;
         //
-        // clearButton
+        // reloadButton
         //
-        clearButton.Font = new Font("Yu Gothic UI", 9F, FontStyle.Bold);
-        clearButton.Margin = new Padding(0, 0, 8, 0);
-        clearButton.Name = "clearButton";
-        clearButton.Size = new Size(108, 32);
-        clearButton.TabIndex = 2;
-        clearButton.Text = "CLEAR";
-        clearButton.Click += ClearButton_Click;
+        reloadButton.Enabled = false;
+        reloadButton.Font = new Font("Yu Gothic UI", 9F, FontStyle.Bold);
+        reloadButton.Margin = new Padding(0, 0, 8, 0);
+        reloadButton.Name = "reloadButton";
+        reloadButton.Size = new Size(108, 32);
+        reloadButton.TabIndex = 3;
+        reloadButton.Text = "RELOAD";
+        reloadButton.Click += ReloadButton_Click;
         //
         // exportButton
         //
@@ -841,7 +787,7 @@ partial class Form1
         exportButton.Margin = Padding.Empty;
         exportButton.Name = "exportButton";
         exportButton.Size = new Size(108, 32);
-        exportButton.TabIndex = 3;
+        exportButton.TabIndex = 4;
         exportButton.Text = "EXPORT";
         exportButton.Click += ExportButton_Click;
         //
@@ -876,9 +822,6 @@ partial class Form1
         actionBar.ResumeLayout(false);
         actionBar.PerformLayout();
         logButtonPanel.ResumeLayout(false);
-        destinationSyncChoicesPanel.ResumeLayout(false);
-        destinationSyncChoicesPanel.PerformLayout();
-        destinationSyncSectionPanel.ResumeLayout(false);
         exitSourceAtChoicesPanel.ResumeLayout(false);
         exitSourceAtChoicesPanel.PerformLayout();
         exitSourceAtSectionPanel.ResumeLayout(false);

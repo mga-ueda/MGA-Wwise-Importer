@@ -62,7 +62,7 @@ internal sealed class SectionHeaderLabel : Label
             Text,
             Font,
             textBounds,
-            ForeColor,
+            Enabled ? ForeColor : UiColors.ActionButtonDisabledFore,
             TextFormatFlags.Left
             | TextFormatFlags.VerticalCenter
             | TextFormatFlags.EndEllipsis

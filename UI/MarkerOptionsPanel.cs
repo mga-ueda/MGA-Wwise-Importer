@@ -12,7 +12,7 @@ internal sealed class MarkerOptionsPanel : UserControl
     private const int RowHeight = 30;
 
     private readonly Panel _leftSeparator = new() { Dock = DockStyle.Left, Width = 1, TabStop = false };
-    private readonly ToolTip _toolTip = new()
+    private readonly DarkToolTip _toolTip = new()
     {
         AutoPopDelay = 12000,
         InitialDelay = 350,
@@ -41,6 +41,7 @@ internal sealed class MarkerOptionsPanel : UserControl
 
     private MarkerSettings? _settings;
     private bool _updating;
+    private bool _interactionLocked;
 
     /// <summary>設定値が UI 操作で変更された（保存・適用は購読側で行う）。</summary>
     public event EventHandler? SettingsChanged;
@@ -67,9 +68,9 @@ internal sealed class MarkerOptionsPanel : UserControl
         RequiredWidth = col3X + col3W + S(8);
 
         _gridHeaderLabel = CreateHeader("Marker Grid", headerFont, col1X, col1W);
-        _gridDefaultRadio = CreateGridRadio("Timeline", MarkerGridOverrideMode.Default, col1X, col1W, contentTop);
-        _gridBarRadio = CreateGridRadio("Bar", MarkerGridOverrideMode.Bar, col1X, col1W, contentTop + RowPitch);
-        _gridBeatRadio = CreateGridRadio("Beat", MarkerGridOverrideMode.Beat, col1X, col1W, contentTop + RowPitch * 2);
+        _gridBarRadio = CreateGridRadio("Bar", MarkerGridOverrideMode.Bar, col1X, col1W, contentTop);
+        _gridBeatRadio = CreateGridRadio("Beat", MarkerGridOverrideMode.Beat, col1X, col1W, contentTop + RowPitch);
+        _gridDefaultRadio = CreateGridRadio("Timeline", MarkerGridOverrideMode.Default, col1X, col1W, contentTop + RowPitch * 2);
 
         // 見出し背景がコメント設定の全列（col2＋col3）を覆うよう幅を広げる。
         _commentHeaderLabel = CreateHeader("Marker Comment", headerFont, col2X, col3X + col3W - col2X);
@@ -132,10 +133,13 @@ internal sealed class MarkerOptionsPanel : UserControl
             "Separator", baseFont, checkLeft, contentTop + RowPitch * 2, glyphAndGap + joinerTextW + S(2));
         _joinerTextBox = CreateTextBox(baseFont, editorX, contentTop + RowPitch * 2, S(32));
 
+        RequiredHeight = contentTop + RowPitch * 3 + RowHeight + 2;
+        Height = RequiredHeight;
+
         Controls.Add(_gridHeaderLabel);
-        Controls.Add(_gridDefaultRadio);
         Controls.Add(_gridBarRadio);
         Controls.Add(_gridBeatRadio);
+        Controls.Add(_gridDefaultRadio);
         Controls.Add(_commentHeaderLabel);
         Controls.Add(_digitsLabel);
         Controls.Add(_digitsTextBox);
@@ -158,6 +162,9 @@ internal sealed class MarkerOptionsPanel : UserControl
 
     /// <summary>全カラムが収まるために必要な幅（DPI 反映済み）。</summary>
     public int RequiredWidth { get; }
+
+    /// <summary>全項目が収まる固定高さ（DPI 反映済み）。</summary>
+    public int RequiredHeight { get; }
 
     /// <summary>DPI スケール（96dpi 基準）を適用する。</summary>
     private int S(int value) => (int)Math.Round(value * DeviceDpi / 96f);
@@ -224,7 +231,7 @@ internal sealed class MarkerOptionsPanel : UserControl
         _digitsLabel.ForeColor = optionFore;
         _previewLabel.BackColor = back;
 
-        foreach (var radio in new[] { _gridDefaultRadio, _gridBarRadio, _gridBeatRadio })
+        foreach (var radio in new[] { _gridBarRadio, _gridBeatRadio, _gridDefaultRadio })
         {
             radio.BackColor = back;
             radio.ForeColor = optionFore;
@@ -253,6 +260,50 @@ internal sealed class MarkerOptionsPanel : UserControl
 
         ApplyDependentColors();
         UpdatePreview();
+    }
+
+    /// <summary>
+    /// 書き出し中の操作ロック。TextBox は Enabled=false にせず ReadOnly＋色で無効化する。
+    /// </summary>
+    public void SetInteractionLocked(bool locked)
+    {
+        if (_interactionLocked == locked)
+        {
+            return;
+        }
+
+        _interactionLocked = locked;
+        foreach (var radio in new[] { _gridBarRadio, _gridBeatRadio, _gridDefaultRadio })
+        {
+            radio.Enabled = !locked;
+        }
+
+        foreach (var checkBox in new[]
+        {
+            _zeroPadCheckBox,
+            _resetPerPartCheckBox,
+            _prefixCheckBox,
+            _suffixCheckBox,
+            _joinerCheckBox,
+        })
+        {
+            checkBox.Enabled = !locked;
+        }
+
+        if (locked)
+        {
+            var disabledFore = UiColors.OptionGlyphDisabled;
+            foreach (var textBox in new[] { _digitsTextBox, _prefixTextBox, _suffixTextBox, _joinerTextBox })
+            {
+                textBox.ReadOnly = true;
+                textBox.ForeColor = disabledFore;
+                textBox.Cursor = Cursors.Default;
+            }
+
+            return;
+        }
+
+        UpdateDependentStates();
     }
 
     private SectionHeaderLabel CreateHeader(string text, Font font, int x, int width) => new()
@@ -363,6 +414,11 @@ internal sealed class MarkerOptionsPanel : UserControl
     {
         // Enabled=false だと OS の無効色（暗い背景で黒）になるため、
         // ReadOnly＋色で見た目の無効状態を表す。
+        if (_interactionLocked)
+        {
+            return;
+        }
+
         _digitsTextBox.ReadOnly = false;
         _prefixTextBox.ReadOnly = !_prefixCheckBox.Checked;
         _suffixTextBox.ReadOnly = !_suffixCheckBox.Checked;

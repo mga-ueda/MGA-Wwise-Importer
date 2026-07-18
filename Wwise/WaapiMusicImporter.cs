@@ -77,7 +77,9 @@ internal static class WaapiMusicImporter
 
         if (plan.IsMultiPart)
         {
-            sb.AppendLine("Transition : any→any / Exit Source at=Immediate / Fade-out ON");
+            sb.AppendLine(
+                "Transition : any→any / Exit Source at=Immediate"
+                + " / Destination Sync To=Entry Cue / Fade-out ON");
             sb.AppendLine("Transition : Fade Time/Offset/Curve は WAAPI 非対応のため未設定（Wwise 上で手動設定）");
         }
 
@@ -107,6 +109,11 @@ internal static class WaapiMusicImporter
                     flags.Add($"cues={segment.CustomCues.Count}");
                 }
 
+                if (segment.Tracks.Count > 1)
+                {
+                    flags.Add($"tracks={segment.Tracks.Count}");
+                }
+
                 var durationMs = Math.Max(0.0, segment.ClipEndMs - segment.ClipStartMs);
                 var entryLocal = Math.Max(0.0, segment.EntryCueMs - segment.ClipStartMs);
                 sb.AppendLine(
@@ -124,20 +131,31 @@ internal static class WaapiMusicImporter
         return sb.ToString();
     }
 
-    /// <summary>パート WAV（エクスポート結果）の参照パスを決める。WaveCopyDir があればそこへコピー。</summary>
+    /// <summary>
+    /// パート WAV（エクスポート結果）の参照パスを決める。WaveCopyDir があればそこへコピー。
+    /// キーは元の SourceWavPath。
+    /// </summary>
     private static Dictionary<string, string> ResolvePartWavPaths(
         WwiseMusicPlan plan,
         WwiseImportSettings settings,
         StringBuilder log)
     {
+        var sources = plan.Playlists
+            .SelectMany(p => p.Segments)
+            .SelectMany(s => s.Tracks)
+            .Select(t => t.SourceWavPath)
+            .Concat(plan.Playlists.Select(p => p.SourceWavPath))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var copyDir = settings.WaveCopyDir;
         if (copyDir.Length == 0)
         {
             log.AppendLine("Copy    : （パート WAV のコピーなし）");
-            foreach (var playlist in plan.Playlists)
+            foreach (var source in sources)
             {
-                map[playlist.Name] = playlist.SourceWavPath;
+                map[source] = source;
             }
 
             return map;
@@ -145,19 +163,19 @@ internal static class WaapiMusicImporter
 
         Directory.CreateDirectory(copyDir);
         log.AppendLine($"Copy    : {copyDir}");
-        foreach (var playlist in plan.Playlists)
+        foreach (var source in sources)
         {
-            var dest = Path.Combine(copyDir, Path.GetFileName(playlist.SourceWavPath));
-            File.Copy(playlist.SourceWavPath, dest, overwrite: true);
-            map[playlist.Name] = dest;
+            var dest = Path.Combine(copyDir, Path.GetFileName(source));
+            File.Copy(source, dest, overwrite: true);
+            map[source] = dest;
         }
 
         return map;
     }
 
     /// <summary>
-    /// 各セグメントの可聴範囲だけを切り出して個別 WAV にする。
-    /// 返り値はセグメント名 → 切り出し WAV パス。
+    /// 各トラックの可聴範囲だけを切り出して個別 WAV にする。
+    /// 返り値は TrackSliceKey → 切り出し WAV パス。
     /// </summary>
     private static Dictionary<string, string> SliceSegmentWavs(
         WwiseMusicPlan plan,
@@ -178,36 +196,69 @@ internal static class WaapiMusicImporter
         log.AppendLine($"Slices  : {sliceDir}");
 
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var usedFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var playlist in plan.Playlists)
         {
-            if (!partWavs.TryGetValue(playlist.Name, out var partPath))
-            {
-                throw new InvalidOperationException($"パート WAV が見つかりません: {playlist.Name}");
-            }
-
             foreach (var segment in playlist.Segments)
             {
-                var startSample = MsToSample(segment.ClipStartMs, sampleRate);
-                var endSample = MsToSample(segment.ClipEndMs, sampleRate);
-                if (endSample <= startSample)
+                if (segment.Tracks.Count == 0)
                 {
-                    throw new InvalidOperationException(
-                        $"セグメント範囲が空です: {segment.Name} ({segment.ClipStartMs}..{segment.ClipEndMs} ms)");
+                    throw new InvalidOperationException($"トラックがありません: {segment.Name}");
                 }
 
-                var dest = Path.Combine(sliceDir, segment.Name + ".wav");
-                WavCueWriter.WriteSegment(
-                    partPath,
-                    dest,
-                    startSample,
-                    endSample,
-                    blockAlign,
-                    cues: []);
-                map[segment.Name] = dest;
+                foreach (var track in segment.Tracks)
+                {
+                    if (!partWavs.TryGetValue(track.SourceWavPath, out var partPath))
+                    {
+                        throw new InvalidOperationException(
+                            $"パート WAV が見つかりません: {track.SourceWavPath}");
+                    }
+
+                    var startSample = MsToSample(track.ClipStartMs, sampleRate);
+                    var endSample = MsToSample(track.ClipEndMs, sampleRate);
+                    if (endSample <= startSample)
+                    {
+                        throw new InvalidOperationException(
+                            $"トラック範囲が空です: {segment.Name}/{track.Name}"
+                            + $" ({track.ClipStartMs}..{track.ClipEndMs} ms)");
+                    }
+
+                    // Track 名は Segment 名＋レイヤー番号で一意に付けているため、
+                    // 旧形式の segment__track 結合は冗長（例: BGM_x__BGM_x_1.wav）。
+                    var fileName = UniqueSliceFileName(
+                        $"{track.Name}.wav",
+                        usedFileNames);
+                    var dest = Path.Combine(sliceDir, fileName);
+                    WavCueWriter.WriteSegment(
+                        partPath,
+                        dest,
+                        startSample,
+                        endSample,
+                        blockAlign,
+                        cues: []);
+                    map[TrackSliceKey(segment.Name, track.Name)] = dest;
+                }
             }
         }
 
         return map;
+    }
+
+    private static string TrackSliceKey(string segmentName, string trackName) =>
+        segmentName + "\u001f" + trackName;
+
+    private static string UniqueSliceFileName(string desired, HashSet<string> used)
+    {
+        var name = desired;
+        var stem = Path.GetFileNameWithoutExtension(desired);
+        var ext = Path.GetExtension(desired);
+        var suffix = 2;
+        while (!used.Add(name))
+        {
+            name = $"{stem}_{suffix++}{ext}";
+        }
+
+        return name;
     }
 
     private static long MsToSample(double ms, uint sampleRate) =>
@@ -235,15 +286,10 @@ internal static class WaapiMusicImporter
             for (var i = 0; i < playlist.Segments.Count; i++)
             {
                 var segment = playlist.Segments[i];
-                if (!segmentWavs.TryGetValue(segment.Name, out var wavPath))
-                {
-                    throw new InvalidOperationException($"切り出し WAV が見つかりません: {segment.Name}");
-                }
-
                 segmentDefs.Add(BuildSegmentDef(
                     segment,
-                    wavPath,
-                    isFirst: i == 0,
+                    segmentWavs,
+                    isFirstSegment: i == 0,
                     lookAheadMs,
                     prefetchLengthMs));
                 itemDefs.Add(new Dictionary<string, object?>
@@ -348,8 +394,8 @@ internal static class WaapiMusicImporter
 
     private static Dictionary<string, object?> BuildSegmentDef(
         WwiseSegmentPlan segment,
-        string wavPath,
-        bool isFirst,
+        IReadOnlyDictionary<string, string> trackWavs,
+        bool isFirstSegment,
         int lookAheadMs,
         int prefetchLengthMs)
     {
@@ -387,22 +433,35 @@ internal static class WaapiMusicImporter
             });
         }
 
-        var track = new Dictionary<string, object?>
+        var trackDefs = new List<object>();
+        for (var t = 0; t < segment.Tracks.Count; t++)
         {
-            ["type"] = "MusicTrack",
-            ["name"] = segment.Name,
-            ["@IsStreamingEnabled"] = true,
-            ["@IsZeroLatency"] = isFirst,
-            ["@LookAheadTime"] = isFirst ? 0 : lookAheadMs,
-            ["@PreFetchLength"] = prefetchLengthMs,
-            ["import"] = new Dictionary<string, object?>
+            var track = segment.Tracks[t];
+            var key = TrackSliceKey(segment.Name, track.Name);
+            if (!trackWavs.TryGetValue(key, out var wavPath))
             {
-                ["files"] = new object[]
+                throw new InvalidOperationException(
+                    $"切り出し WAV が見つかりません: {segment.Name}/{track.Name}");
+            }
+
+            var zeroLatency = isFirstSegment && t == 0;
+            trackDefs.Add(new Dictionary<string, object?>
+            {
+                ["type"] = "MusicTrack",
+                ["name"] = track.Name,
+                ["@IsStreamingEnabled"] = true,
+                ["@IsZeroLatency"] = zeroLatency,
+                ["@LookAheadTime"] = zeroLatency ? 0 : lookAheadMs,
+                ["@PreFetchLength"] = prefetchLengthMs,
+                ["import"] = new Dictionary<string, object?>
                 {
-                    new Dictionary<string, object?> { ["audioFile"] = wavPath },
+                    ["files"] = new object[]
+                    {
+                        new Dictionary<string, object?> { ["audioFile"] = wavPath },
+                    },
                 },
-            },
-        };
+            });
+        }
 
         return new Dictionary<string, object?>
         {
@@ -414,7 +473,7 @@ internal static class WaapiMusicImporter
             ["@TimeSignatureLower"] = segment.TimeSignatureLower,
             ["@EndPosition"] = endLocal,
             ["@Cues"] = cues,
-            ["children"] = new object[] { track },
+            ["children"] = trackDefs,
         };
     }
 }
