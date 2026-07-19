@@ -180,6 +180,8 @@ public partial class Form1 : Form
     private bool _resumePlaybackAfterBackwardSeek;
     private TransportCommand? _activeTransportShortcutCommand;
     private Keys _activeTransportShortcutKeyCode = Keys.None;
+    /// <summary>G ジャンプで最後に確定した小節番号（リロードで破棄。INI には書かない）。</summary>
+    private int? _lastJumpedBarNumber;
     private readonly MarkerSettings _markerSettings = new();
 #if DEBUG
     private long _diagnosticSequence;
@@ -719,13 +721,13 @@ public partial class Form1 : Form
         if (keyData == (Keys.Control | Keys.Left))
         {
             PauseForBackwardSeekHold();
-            waveformView.SeekToPreviousRegionSplit();
+            waveformView.SeekToPreviousPlaylist();
             return true;
         }
 
         if (keyData == (Keys.Control | Keys.Right))
         {
-            waveformView.SeekToNextRegionSplit();
+            waveformView.SeekToNextPlaylist();
             return true;
         }
 
@@ -799,12 +801,12 @@ public partial class Form1 : Form
             Keys.Space => TransportCommand.TogglePlayback,
             Keys.G => TransportCommand.JumpToBar,
             Keys.Control | Keys.Home => TransportCommand.GoToStart,
-            Keys.Control | Keys.Left => TransportCommand.PreviousRegion,
+            Keys.Control | Keys.Left => TransportCommand.PreviousPlaylist,
             Keys.Home => TransportCommand.PreviousBar,
             Keys.PageUp => TransportCommand.PreviousPage,
             Keys.PageDown => TransportCommand.NextPage,
             Keys.End => TransportCommand.NextBar,
-            Keys.Control | Keys.Right => TransportCommand.NextRegion,
+            Keys.Control | Keys.Right => TransportCommand.NextPlaylist,
             Keys.Control | Keys.End => TransportCommand.GoToEnd,
             Keys.Up => TransportCommand.TimeZoomIn,
             Keys.Down => TransportCommand.TimeZoomOut,
@@ -844,12 +846,12 @@ public partial class Form1 : Form
             TransportCommand.TogglePlayback => Keys.Space,
             TransportCommand.JumpToBar => Keys.G,
             TransportCommand.GoToStart => Keys.Control | Keys.Home,
-            TransportCommand.PreviousRegion => Keys.Control | Keys.Left,
+            TransportCommand.PreviousPlaylist => Keys.Control | Keys.Left,
             TransportCommand.PreviousBar => Keys.Home,
             TransportCommand.PreviousPage => Keys.PageUp,
             TransportCommand.NextPage => Keys.PageDown,
             TransportCommand.NextBar => Keys.End,
-            TransportCommand.NextRegion => Keys.Control | Keys.Right,
+            TransportCommand.NextPlaylist => Keys.Control | Keys.Right,
             TransportCommand.GoToEnd => Keys.Control | Keys.End,
             TransportCommand.TimeZoomIn => Keys.Up,
             TransportCommand.TimeZoomOut => Keys.Down,
@@ -4634,7 +4636,9 @@ public partial class Form1 : Form
 
     private void ShowBarJumpDialog()
     {
-        using var dialog = new BarJumpDialogForm(waveformView.GetNearestBarNumber())
+        // 初回は現在位置の最近傍小節。一度ジャンプしたあとはその値を初期表示する。
+        using var dialog = new BarJumpDialogForm(
+            _lastJumpedBarNumber ?? waveformView.GetNearestBarNumber())
         {
             // メインが最前面でもダイアログが背面に回らないようにする
             TopMost = TopMost,
@@ -4644,6 +4648,7 @@ public partial class Form1 : Form
             return;
         }
 
+        _lastJumpedBarNumber = barNumber;
         if (!waveformView.TrySeekToBarNumber(barNumber))
         {
             AppendReport(

@@ -784,13 +784,11 @@ internal sealed class WaveformView : Control
         return best;
     }
 
-    /// <summary>再生位置を直前のリージョン分割点へ。成功したら true。</summary>
-    public bool SeekToPreviousRegionSplit() =>
-        TrySeekAlongSamples(CollectRegionSplitSamples(), previous: true);
+    /// <summary>現在の Music Playlist の1つ前にある有効な Playlist の先頭へ。</summary>
+    public bool SeekToPreviousPlaylist() => TrySeekToAdjacentPlaylist(previous: true);
 
-    /// <summary>再生位置を直後のリージョン分割点へ。成功したら true。</summary>
-    public bool SeekToNextRegionSplit() =>
-        TrySeekAlongSamples(CollectRegionSplitSamples(), previous: false);
+    /// <summary>現在の Music Playlist の1つ後にある有効な Playlist の先頭へ。</summary>
+    public bool SeekToNextPlaylist() => TrySeekToAdjacentPlaylist(previous: false);
 
     private List<long> CollectBarSamples()
     {
@@ -819,32 +817,55 @@ internal sealed class WaveformView : Control
         return result;
     }
 
-    private List<long> CollectRegionSplitSamples()
+    private bool TrySeekToAdjacentPlaylist(bool previous)
     {
-        var result = new List<long>();
-        if (_peaks is null || _peaks.IsEmpty || _peaks.FrameCount <= 0 || _regions.Count == 0)
+        if (_peaks is null
+            || _peaks.IsEmpty
+            || _peaks.FrameCount <= 0
+            || _outputParts.Count == 0)
         {
-            return result;
+            return false;
         }
 
         var frameCount = _peaks.FrameCount;
-        var seen = new HashSet<long>();
-        foreach (var region in _regions)
+        var parts = _outputParts
+            .Where(part =>
+                !_disabledPlaylistPartNumbers.Contains(part.Number)
+                && part.EndSampleOffset > part.StartSampleOffset)
+            .OrderBy(part => part.StartSampleOffset)
+            .ThenBy(part => part.Number)
+            .ToArray();
+        if (parts.Length == 0)
         {
-            var start = Math.Clamp(region.StartSampleOffset, 0L, frameCount);
-            if (seen.Add(start))
-            {
-                result.Add(start);
-            }
-
-            var end = Math.Clamp(region.EndSampleOffset, 0L, frameCount);
-            if (seen.Add(end))
-            {
-                result.Add(end);
-            }
+            return false;
         }
 
-        return result;
+        var currentSample = (long)Math.Round((_playheadProgress ?? 0d) * frameCount);
+        currentSample = Math.Clamp(currentSample, 0L, frameCount);
+
+        // 現在位置を含む Playlist を基準に、明示的に隣の Playlist を選ぶ。
+        // Playlist 間の空白にいる場合は、その位置の直前／直後を選ぶ。
+        var currentIndex = Array.FindIndex(
+            parts,
+            part =>
+                currentSample >= part.StartSampleOffset
+                && currentSample < part.EndSampleOffset);
+        var targetIndex = currentIndex >= 0
+            ? currentIndex + (previous ? -1 : 1)
+            : previous
+                ? Array.FindLastIndex(parts, part => part.StartSampleOffset < currentSample)
+                : Array.FindIndex(parts, part => part.StartSampleOffset > currentSample);
+        if (targetIndex < 0 || targetIndex >= parts.Length)
+        {
+            return false;
+        }
+
+        var sample = Math.Clamp(parts[targetIndex].StartSampleOffset, 0L, frameCount);
+        var progress = Math.Clamp(sample / (double)frameCount, 0d, 1d);
+        _playheadProgress = progress;
+        EnsureAbsoluteVisible(progress);
+        SeekRequested?.Invoke(this, progress);
+        return true;
     }
 
     private bool TrySeekAlongSamples(List<long> samples, bool previous)

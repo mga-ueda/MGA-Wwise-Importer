@@ -7,12 +7,12 @@ internal enum TransportCommand
     TogglePlayback,
     JumpToBar,
     GoToStart,
-    PreviousRegion,
+    PreviousPlaylist,
     PreviousBar,
     PreviousPage,
     NextPage,
     NextBar,
-    NextRegion,
+    NextPlaylist,
     GoToEnd,
     TimeZoomIn,
     TimeZoomOut,
@@ -81,30 +81,30 @@ internal sealed class TransportBar : UserControl
         AddGroup(
             "NAVIGATION",
             repeatOnHold: true,
-            (TransportCommand.GoToStart, TransportIcon.GoToStart, "先頭へ移動  [Ctrl+Home]"),
-            (TransportCommand.PreviousPage, TransportIcon.PreviousPage, "前の表示ページ  [Page Up]"),
-            (TransportCommand.PreviousRegion, TransportIcon.PreviousRegion, "前のリージョン境界  [Ctrl+←]"),
-            (TransportCommand.PreviousBar, TransportIcon.PreviousBar, "前の小節  [Home]"),
-            (TransportCommand.NextBar, TransportIcon.NextBar, "次の小節  [End]"),
-            (TransportCommand.NextRegion, TransportIcon.NextRegion, "次のリージョン境界  [Ctrl+→]"),
-            (TransportCommand.NextPage, TransportIcon.NextPage, "次の表示ページ  [Page Down]"),
-            (TransportCommand.GoToEnd, TransportIcon.GoToEnd, "末尾へ移動  [Ctrl+End]"));
+            (TransportCommand.GoToStart, TransportIcon.GoToStart, WithKeyRepeat("先頭へ移動  [Ctrl+Home]")),
+            (TransportCommand.PreviousPage, TransportIcon.PreviousPage, WithKeyRepeat("前の表示ページ  [Page Up]")),
+            (TransportCommand.PreviousPlaylist, TransportIcon.PreviousRegion, WithKeyRepeat("前の Music Playlist へ移動  [Ctrl+←]")),
+            (TransportCommand.PreviousBar, TransportIcon.PreviousBar, WithKeyRepeat("前の小節  [Home]")),
+            (TransportCommand.NextBar, TransportIcon.NextBar, WithKeyRepeat("次の小節  [End]")),
+            (TransportCommand.NextPlaylist, TransportIcon.NextRegion, WithKeyRepeat("次の Music Playlist へ移動  [Ctrl+→]")),
+            (TransportCommand.NextPage, TransportIcon.NextPage, WithKeyRepeat("次の表示ページ  [Page Down]")),
+            (TransportCommand.GoToEnd, TransportIcon.GoToEnd, WithKeyRepeat("末尾へ移動  [Ctrl+End]")));
 
         AddGroup(
             "TIME ZOOM",
             repeatOnHold: true,
-            (TransportCommand.TimeZoomIn, TransportIcon.TimeZoomIn, "時間軸を拡大  [↑]"),
-            (TransportCommand.TimeZoomOut, TransportIcon.TimeZoomOut, "時間軸を縮小  [↓]"),
-            (TransportCommand.TimeZoomMax, TransportIcon.TimeZoomMax, "時間軸を最大拡大  [Ctrl+↑]"),
-            (TransportCommand.TimeZoomReset, TransportIcon.TimeZoomReset, "時間軸を全体表示  [Ctrl+↓]"));
+            (TransportCommand.TimeZoomIn, TransportIcon.TimeZoomIn, WithKeyRepeat("時間軸を拡大  [↑]")),
+            (TransportCommand.TimeZoomOut, TransportIcon.TimeZoomOut, WithKeyRepeat("時間軸を縮小  [↓]")),
+            (TransportCommand.TimeZoomMax, TransportIcon.TimeZoomMax, WithKeyRepeat("時間軸を最大拡大  [Ctrl+↑]")),
+            (TransportCommand.TimeZoomReset, TransportIcon.TimeZoomReset, WithKeyRepeat("時間軸を全体表示  [Ctrl+↓]")));
 
         AddGroup(
             "AMP ZOOM",
             repeatOnHold: true,
-            (TransportCommand.AmpZoomIn, TransportIcon.AmpZoomIn, "振幅を拡大  [Shift+↑]"),
-            (TransportCommand.AmpZoomOut, TransportIcon.AmpZoomOut, "振幅を縮小  [Shift+↓]"),
-            (TransportCommand.AmpZoomMax, TransportIcon.AmpZoomMax, "振幅を最大拡大  [Ctrl+Shift+↑]"),
-            (TransportCommand.AmpZoomReset, TransportIcon.AmpZoomReset, "振幅を既定に戻す  [Ctrl+Shift+↓]"));
+            (TransportCommand.AmpZoomIn, TransportIcon.AmpZoomIn, WithKeyRepeat("振幅を拡大  [Shift+↑]")),
+            (TransportCommand.AmpZoomOut, TransportIcon.AmpZoomOut, WithKeyRepeat("振幅を縮小  [Shift+↓]")),
+            (TransportCommand.AmpZoomMax, TransportIcon.AmpZoomMax, WithKeyRepeat("振幅を最大拡大  [Ctrl+Shift+↑]")),
+            (TransportCommand.AmpZoomReset, TransportIcon.AmpZoomReset, WithKeyRepeat("振幅を既定に戻す  [Ctrl+Shift+↓]")));
 
         _commandRepeatTimer.Tick += (_, _) => RepeatHeldCommand();
         ApplyColors();
@@ -115,6 +115,9 @@ internal sealed class TransportBar : UserControl
 
     /// <summary>NAVIGATION / ZOOM ボタンがマウスで押下中か。</summary>
     public bool IsCommandHeld => _heldCommand.HasValue;
+
+    private static string WithKeyRepeat(string text) =>
+        text + Environment.NewLine + "長押しでキーリピート";
 
     /// <summary>
     /// 全グループを横スクロールなしで表示するために必要な幅。
