@@ -55,6 +55,7 @@ partial class Form1
     private FlowLayoutPanel actionControlsPanel;
     private FlatOptionCheckBox detailedLogCheckBox;
     private FlatOptionCheckBox compactFileNumbersCheckBox;
+    private FlatOptionCheckBox loadLastWaveCheckBox;
     private FlatOptionCheckBox topMostCheckBox;
     private RoundedButton reloadButton;
     private RoundedButton exportButton;
@@ -140,6 +141,7 @@ partial class Form1
         actionControlsPanel = new FlowLayoutPanel();
         detailedLogCheckBox = new FlatOptionCheckBox();
         compactFileNumbersCheckBox = new FlatOptionCheckBox();
+        loadLastWaveCheckBox = new FlatOptionCheckBox();
         topMostCheckBox = new FlatOptionCheckBox();
         reloadButton = new RoundedButton();
         exportButton = new RoundedButton();
@@ -217,6 +219,7 @@ partial class Form1
         projectActionPanel.Controls.Add(projectFolderButton);
         projectActionPanel.Controls.Add(projectSaveButton);
         projectActionPanel.Controls.Add(projectDeleteButton);
+        projectActionPanel.Controls.Add(loadLastWaveCheckBox);
         projectActionPanel.Controls.Add(topMostCheckBox);
         projectActionPanel.Controls.Add(projectSpectrumView);
         //
@@ -263,13 +266,24 @@ partial class Form1
         projectDeleteButton.TabIndex = 2;
         playlistToolTip.SetToolTip(projectDeleteButton, "選択中のプロジェクトを削除（DEL）");
         //
+        // loadLastWaveCheckBox
+        //
+        loadLastWaveCheckBox.AutoSize = true;
+        loadLastWaveCheckBox.Font = new Font("Yu Gothic UI", 9F);
+        loadLastWaveCheckBox.Margin = new Padding(0, 3, 8, 0);
+        loadLastWaveCheckBox.Name = "loadLastWaveCheckBox";
+        loadLastWaveCheckBox.TabIndex = 3;
+        loadLastWaveCheckBox.Text = "Load Last Wave";
+        loadLastWaveCheckBox.UseVisualStyleBackColor = true;
+        loadLastWaveCheckBox.CheckedChanged += LoadLastWaveCheckBox_CheckedChanged;
+        //
         // projectSpectrumView
         //
         projectSpectrumView.AccessibleName = "Output spectrum";
         projectSpectrumView.Margin = new Padding(0);
         projectSpectrumView.Name = "projectSpectrumView";
         projectSpectrumView.Size = new Size(126, 24);
-        projectSpectrumView.TabIndex = 4;
+        projectSpectrumView.TabIndex = 5;
         projectSpectrumView.TabStop = false;
         //
         // waveformHostPanel
@@ -891,7 +905,7 @@ partial class Form1
         // projectActionPanel 内の 24px ボタンと文字ベースラインを揃えるための上マージン。
         topMostCheckBox.Margin = new Padding(0, 3, 8, 0);
         topMostCheckBox.Name = "topMostCheckBox";
-        topMostCheckBox.TabIndex = 3;
+        topMostCheckBox.TabIndex = 4;
         topMostCheckBox.Text = "Always on Top";
         topMostCheckBox.UseVisualStyleBackColor = true;
         topMostCheckBox.CheckedChanged += TopMostCheckBox_CheckedChanged;

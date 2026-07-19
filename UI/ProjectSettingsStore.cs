@@ -40,6 +40,10 @@ internal sealed class ProjectProfile
 
     public bool AlwaysOnTop { get; set; }
 
+    public bool LoadLastWaveOnStartup { get; set; }
+
+    public string LastWavePath { get; set; } = string.Empty;
+
     public string OutputDirectory { get; set; } = string.Empty;
 
     public ProjectProfile Clone() => new()
@@ -60,6 +64,8 @@ internal sealed class ProjectProfile
         CommentResetPerPart = CommentResetPerPart,
         CompactFileNumbers = CompactFileNumbers,
         AlwaysOnTop = AlwaysOnTop,
+        LoadLastWaveOnStartup = LoadLastWaveOnStartup,
+        LastWavePath = LastWavePath,
         OutputDirectory = OutputDirectory,
     };
 
@@ -130,6 +136,8 @@ internal sealed class ProjectSettingsStore
         CommentResetPerPart = true,
         CompactFileNumbers = true,
         AlwaysOnTop = false,
+        LoadLastWaveOnStartup = false,
+        LastWavePath = string.Empty,
         OutputDirectory = string.Empty,
     };
 
@@ -197,6 +205,28 @@ internal sealed class ProjectSettingsStore
     public void SaveActiveNameOnly()
     {
         WriteIndex();
+    }
+
+    public void SaveLoadLastWaveOnStartup(string name, bool enabled)
+    {
+        if (!_profiles.TryGetValue(name.Trim(), out var profile))
+        {
+            return;
+        }
+
+        profile.LoadLastWaveOnStartup = enabled;
+        WriteProfile(name, profile);
+    }
+
+    public void SaveLastWavePath(string name, string path)
+    {
+        if (!_profiles.TryGetValue(name.Trim(), out var profile))
+        {
+            return;
+        }
+
+        profile.LastWavePath = path;
+        WriteProfile(name, profile);
     }
 
     /// <summary>
@@ -316,8 +346,11 @@ internal sealed class ProjectSettingsStore
         var profile = CreateAppDefaults();
         var markers = MarkerSettings.Load();
         profile.CopyMarkerFrom(markers);
-        var developer = DeveloperSettings.Load();
-        profile.AlwaysOnTop = developer.TopMost;
+
+        // レガシー: [Developer] TopMost → AlwaysOnTop（キー除去前に読む）
+        var developerValues = IniFile.ReadSection(DeveloperSettings.Section);
+        profile.AlwaysOnTop = ReadBool(developerValues, "TopMost", defaultValue: false);
+
         _names.Clear();
         _profiles.Clear();
         _names.Add(DefaultName);
@@ -378,6 +411,8 @@ internal sealed class ProjectSettingsStore
             ["CommentResetPerPart"] = profile.CommentResetPerPart ? "1" : "0",
             ["CompactFileNumbers"] = profile.CompactFileNumbers ? "1" : "0",
             ["AlwaysOnTop"] = profile.AlwaysOnTop ? "1" : "0",
+            ["LoadLastWaveOnStartup"] = profile.LoadLastWaveOnStartup ? "1" : "0",
+            ["LastWavePath"] = profile.LastWavePath,
             ["OutputDirectory"] = profile.OutputDirectory,
         });
     }
@@ -431,6 +466,10 @@ internal sealed class ProjectSettingsStore
         profile.CommentResetPerPart = ReadBool(values, "CommentResetPerPart", profile.CommentResetPerPart);
         profile.CompactFileNumbers = ReadBool(values, "CompactFileNumbers", profile.CompactFileNumbers);
         profile.AlwaysOnTop = ReadBool(values, "AlwaysOnTop", profile.AlwaysOnTop);
+        profile.LoadLastWaveOnStartup = ReadBool(
+            values,
+            "LoadLastWaveOnStartup",
+            profile.LoadLastWaveOnStartup);
 
         if (values.TryGetValue("CommentPrefix", out var prefix))
         {
@@ -450,6 +489,11 @@ internal sealed class ProjectSettingsStore
         if (values.TryGetValue("OutputDirectory", out var output))
         {
             profile.OutputDirectory = output;
+        }
+
+        if (values.TryGetValue("LastWavePath", out var lastWavePath))
+        {
+            profile.LastWavePath = lastWavePath;
         }
 
         return profile;

@@ -101,6 +101,7 @@ public partial class Form1 : Form
     private bool _creatingNewProject;
     private bool _suppressProjectUiEvents;
     private string _projectOutputDirectory = string.Empty;
+    private string _lastWavePath = string.Empty;
     private WaapiProbeResult? _waapiLastResult;
     private string _waapiLoggedSelectionPath = string.Empty;
     private string _lastLoggedPreflightKey = string.Empty;
@@ -399,7 +400,7 @@ public partial class Form1 : Form
 
         if (!IsDisposed)
         {
-            LoadAutoWaveAsDropped();
+            LoadLastWaveAsDropped();
         }
     }
 
@@ -1164,6 +1165,9 @@ public partial class Form1 : Form
         ApplyProjectIconButtonColors(projectFolderButton, iconFore, barBack);
         ApplyProjectIconButtonColors(projectSaveButton, iconFore, barBack);
         ApplyProjectIconButtonColors(projectDeleteButton, iconFore, barBack);
+        loadLastWaveCheckBox.ForeColor = UiColors.ActionOptionFore;
+        loadLastWaveCheckBox.BackColor = barBack;
+        RefreshFlatOptionControl(loadLastWaveCheckBox);
         topMostCheckBox.ForeColor = UiColors.ActionOptionFore;
         topMostCheckBox.BackColor = barBack;
         RefreshFlatOptionControl(topMostCheckBox);
@@ -1339,6 +1343,10 @@ public partial class Form1 : Form
             compactFileNumbersCheckBox.CheckedChanged -= CompactFileNumbersCheckBox_CheckedChanged;
             compactFileNumbersCheckBox.Checked = profile.CompactFileNumbers;
             compactFileNumbersCheckBox.CheckedChanged += CompactFileNumbersCheckBox_CheckedChanged;
+            loadLastWaveCheckBox.CheckedChanged -= LoadLastWaveCheckBox_CheckedChanged;
+            loadLastWaveCheckBox.Checked = profile.LoadLastWaveOnStartup;
+            loadLastWaveCheckBox.CheckedChanged += LoadLastWaveCheckBox_CheckedChanged;
+            _lastWavePath = profile.LastWavePath?.Trim() ?? string.Empty;
             topMostCheckBox.CheckedChanged -= TopMostCheckBox_CheckedChanged;
             topMostCheckBox.Checked = profile.AlwaysOnTop;
             topMostCheckBox.CheckedChanged += TopMostCheckBox_CheckedChanged;
@@ -1436,6 +1444,8 @@ public partial class Form1 : Form
         profile.CopyMarkerFrom(_markerSettings);
         profile.CompactFileNumbers = compactFileNumbersCheckBox.Checked;
         profile.AlwaysOnTop = topMostCheckBox.Checked;
+        profile.LoadLastWaveOnStartup = loadLastWaveCheckBox.Checked;
+        profile.LastWavePath = _lastWavePath;
         profile.OutputDirectory = _projectOutputDirectory;
         return profile;
     }
@@ -3602,12 +3612,15 @@ public partial class Form1 : Form
     {
         playlistToolTip.SetToolTip(
             detailedLogCheckBox,
-            "再生・操作の詳細ログをファイルへ出力します（開発用）。");
+            "再生・操作の詳細な診断情報を画面ログへ出力します（開発用）。");
         playlistToolTip.SetToolTip(
             compactFileNumbersCheckBox,
             "ON: 無効化した Playlist があっても、書き出す WAV の番号を 1 から詰めます。"
             + Environment.NewLine
             + "OFF: 元の番号を維持します（欠番が残ります）。");
+        playlistToolTip.SetToolTip(
+            loadLastWaveCheckBox,
+            "起動時に、選択中のプロジェクトで最後に読み込んだ波形を再読み込みします。");
         playlistToolTip.SetToolTip(
             topMostCheckBox,
             "ウィンドウを常に最前面へ表示します。");
@@ -3681,6 +3694,18 @@ public partial class Form1 : Form
     private void TopMostCheckBox_CheckedChanged(object? sender, EventArgs e)
     {
         TopMost = topMostCheckBox.Checked;
+        ReleaseFocusToWaveform();
+    }
+
+    private void LoadLastWaveCheckBox_CheckedChanged(object? sender, EventArgs e)
+    {
+        if (!_creatingNewProject && _projectStore.ContainsName(_loadedProjectName))
+        {
+            _projectStore.SaveLoadLastWaveOnStartup(
+                _loadedProjectName,
+                loadLastWaveCheckBox.Checked);
+        }
+
         ReleaseFocusToWaveform();
     }
 
@@ -4085,22 +4110,27 @@ public partial class Form1 : Form
         ProcessDroppedFiles(files);
     }
 
-    private void LoadAutoWaveAsDropped()
+    private void LoadLastWaveAsDropped()
     {
-        if (!_developerSettings.AutoLoadOnStartup)
+        if (!loadLastWaveCheckBox.Checked || string.IsNullOrWhiteSpace(_lastWavePath))
         {
             return;
         }
 
-        var wavPath = _developerSettings.ResolveAutoLoadWavePath();
-        if (wavPath is null)
+        string wavPath;
+        try
         {
+            wavPath = Path.GetFullPath(_lastWavePath);
+        }
+        catch (Exception ex)
+        {
+            AppendReport($"前回読み込んだ波形のパスが不正です: {ex.Message}" + Environment.NewLine);
             return;
         }
 
         if (!File.Exists(wavPath))
         {
-            AppendReport($"自動読み込み対象が見つかりません: {wavPath}" + Environment.NewLine);
+            AppendReport($"前回読み込んだ波形が見つかりません: {wavPath}" + Environment.NewLine);
             return;
         }
 
@@ -4207,6 +4237,12 @@ public partial class Form1 : Form
         waveformView.SetPlayhead(0, recordTrail: false);
 
         _loadedPreview = preview;
+        _lastWavePath = Path.GetFullPath(preview.SourcePath);
+        if (!_creatingNewProject && _projectStore.ContainsName(_loadedProjectName))
+        {
+            _projectStore.SaveLastWavePath(_loadedProjectName, _lastWavePath);
+        }
+
         UpdateTransportPosition();
 
         // プレイリスト UI 構築も重いので、演出が終わってから行う

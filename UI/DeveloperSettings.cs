@@ -9,15 +9,6 @@ internal sealed class DeveloperSettings
 {
     public const string Section = "Developer";
 
-    /// <summary>起動時に自動ドロップ扱いする波形。パス自体は <see cref="AutoLoadOnStartup"/> と独立。</summary>
-    public string AutoLoadWavePath { get; init; } = string.Empty;
-
-    /// <summary>起動時に <see cref="AutoLoadWavePath"/> を自動読み込みするか。既定はオン。</summary>
-    public bool AutoLoadOnStartup { get; init; } = true;
-
-    /// <summary>ウィンドウを最前面に固定するか。既定はオフ。</summary>
-    public bool TopMost { get; init; }
-
     /// <summary>Playlist／再生エンジンの詳細診断ログを出すか。既定はオン。</summary>
     public bool DetailedPlaybackLog { get; init; } = true;
 
@@ -28,14 +19,6 @@ internal sealed class DeveloperSettings
         var values = IniFile.ReadSection(Section);
         return new DeveloperSettings
         {
-            AutoLoadWavePath = values.TryGetValue("AutoLoadWavePath", out var wave)
-                ? wave
-                : string.Empty,
-            AutoLoadOnStartup = values.TryGetValue("AutoLoadOnStartup", out var autoLoad)
-                ? ParseBool(autoLoad, defaultValue: true)
-                : true,
-            TopMost = values.TryGetValue("TopMost", out var topMost)
-                && ParseBool(topMost, defaultValue: false),
             DetailedPlaybackLog = values.TryGetValue("DetailedPlaybackLog", out var detailedLog)
                 ? ParseBool(detailedLog, defaultValue: true)
                 : true,
@@ -56,24 +39,6 @@ internal sealed class DeveloperSettings
             changed = true;
         }
 
-        if (!values.ContainsKey("AutoLoadWavePath"))
-        {
-            values["AutoLoadWavePath"] = ResolveDefaultAutoLoadWavePath();
-            changed = true;
-        }
-
-        if (!values.ContainsKey("AutoLoadOnStartup"))
-        {
-            values["AutoLoadOnStartup"] = "1";
-            changed = true;
-        }
-
-        if (!values.ContainsKey("TopMost"))
-        {
-            values["TopMost"] = "0";
-            changed = true;
-        }
-
         if (!values.ContainsKey("DetailedPlaybackLog"))
         {
             values["DetailedPlaybackLog"] = "1";
@@ -82,35 +47,8 @@ internal sealed class DeveloperSettings
 
         if (changed)
         {
-            IniFile.WriteSection(Section, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["AutoLoadWavePath"] = values["AutoLoadWavePath"],
-                ["AutoLoadOnStartup"] = values["AutoLoadOnStartup"],
-                ["TopMost"] = values["TopMost"],
-                ["DetailedPlaybackLog"] = values["DetailedPlaybackLog"],
-            });
+            WriteSection(values);
         }
-    }
-
-    /// <summary>[Developer] TopMost だけ更新する（他キーは維持）。</summary>
-    public static void SaveTopMost(bool topMost)
-    {
-        EnsureDefaultsWritten();
-        var values = IniFile.ReadSection(Section);
-        values["TopMost"] = topMost ? "1" : "0";
-        IniFile.WriteSection(Section, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["AutoLoadWavePath"] = values.TryGetValue("AutoLoadWavePath", out var wave)
-                ? wave
-                : ResolveDefaultAutoLoadWavePath(),
-            ["AutoLoadOnStartup"] = values.TryGetValue("AutoLoadOnStartup", out var autoLoad)
-                ? autoLoad
-                : "1",
-            ["TopMost"] = values["TopMost"],
-            ["DetailedPlaybackLog"] = values.TryGetValue("DetailedPlaybackLog", out var detailedLog)
-                ? detailedLog
-                : "1",
-        });
     }
 
     /// <summary>[Developer] DetailedPlaybackLog だけ更新する（他キーは維持）。</summary>
@@ -119,30 +57,31 @@ internal sealed class DeveloperSettings
         EnsureDefaultsWritten();
         var values = IniFile.ReadSection(Section);
         values["DetailedPlaybackLog"] = enabled ? "1" : "0";
+        WriteSection(values);
+    }
+
+    private static void WriteSection(Dictionary<string, string> values)
+    {
         IniFile.WriteSection(Section, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["AutoLoadWavePath"] = values.TryGetValue("AutoLoadWavePath", out var wave)
-                ? wave
-                : ResolveDefaultAutoLoadWavePath(),
-            ["AutoLoadOnStartup"] = values.TryGetValue("AutoLoadOnStartup", out var autoLoad)
-                ? autoLoad
+            ["DetailedPlaybackLog"] = values.TryGetValue("DetailedPlaybackLog", out var detailedLog)
+                ? detailedLog
                 : "1",
-            ["TopMost"] = values.TryGetValue("TopMost", out var topMost)
-                ? topMost
-                : "0",
-            ["DetailedPlaybackLog"] = values["DetailedPlaybackLog"],
         });
     }
 
     private static bool MigrateLegacyKeys(Dictionary<string, string> values)
     {
-        // 旧プレビュー以前のキーは削除する（値は使わない）
+        // 旧キーは削除する（TopMost だけはプロジェクト形式の初回移行時に参照される）
         string[] obsolete =
         [
             "ExternalEditorPath",
             "OpenInExternalEditor",
             "SoundForgePath",
             "OpenInSoundForge",
+            "TopMost",
+            "AutoLoadWavePath",
+            "AutoLoadOnStartup",
         ];
 
         var changed = false;
@@ -155,74 +94,6 @@ internal sealed class DeveloperSettings
         }
 
         return changed;
-    }
-
-    public static string ResolveDefaultAutoLoadWavePath()
-    {
-        var testDirectory = FindTestDirectory();
-        if (testDirectory is null)
-        {
-            return string.Empty;
-        }
-
-        return Path.Combine(testDirectory, "a.wav");
-    }
-
-    public string? ResolveAutoLoadWavePath()
-    {
-        var configured = AutoLoadWavePath.Trim().Trim('"');
-        if (configured.Length == 0)
-        {
-            return null;
-        }
-
-        if (Path.IsPathRooted(configured))
-        {
-            return Path.GetFullPath(configured);
-        }
-
-        // 相対パス: exe 基準 → 見つからなければリポジトリ探索
-        var fromBase = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, configured));
-        if (File.Exists(fromBase))
-        {
-            return fromBase;
-        }
-
-        var testDirectory = FindTestDirectory();
-        if (testDirectory is not null)
-        {
-            var fromTestRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(testDirectory)!, configured));
-            if (File.Exists(fromTestRoot))
-            {
-                return fromTestRoot;
-            }
-
-            var fileName = Path.GetFileName(configured);
-            var besideTest = Path.Combine(testDirectory, fileName);
-            if (File.Exists(besideTest))
-            {
-                return besideTest;
-            }
-        }
-
-        return fromBase;
-    }
-
-    private static string? FindTestDirectory()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            var candidate = Path.Combine(directory.FullName, "test");
-            if (Directory.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            directory = directory.Parent;
-        }
-
-        return null;
     }
 
     private static bool ParseBool(string text, bool defaultValue)
