@@ -145,6 +145,9 @@ internal sealed class FlatOptionRadioButton : RadioButton
 
 internal sealed class FlatOptionCheckBox : CheckBox
 {
+    private const int LayoutGlyphSize = 14;
+    private const int DrawnGlyphSize = 10;
+
     private bool _hovered;
 
     public FlatOptionCheckBox()
@@ -168,14 +171,17 @@ internal sealed class FlatOptionCheckBox : CheckBox
 
     public override Size GetPreferredSize(Size proposedSize)
     {
-        var glyph = ScaleLogical(14);
+        // コントロール寸法とテキスト位置は従来どおりに保ち、枠だけを小さく描画する。
+        var glyph = ScaleLogical(LayoutGlyphSize);
         var gap = ScaleLogical(6);
         var text = TextRenderer.MeasureText(
             Text,
             Font,
             Size.Empty,
             TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
-        return new Size(glyph + gap + text.Width + ScaleLogical(2), Math.Max(glyph, text.Height) + ScaleLogical(4));
+        return new Size(
+            Padding.Horizontal + glyph + gap + text.Width + ScaleLogical(2),
+            Padding.Vertical + Math.Max(glyph, text.Height) + ScaleLogical(4));
     }
 
     protected override void OnMouseEnter(EventArgs e)
@@ -210,9 +216,10 @@ internal sealed class FlatOptionCheckBox : CheckBox
         g.Clear(BackColor);
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
-        var glyphSize = ScaleLogical(14);
+        var glyphSlotSize = ScaleLogical(LayoutGlyphSize);
+        var glyphSize = ScaleLogical(DrawnGlyphSize);
         var glyph = new RectangleF(
-            ScaleLogical(1),
+            Padding.Left + ScaleLogical(1) + (glyphSlotSize - glyphSize) / 2f,
             (Height - glyphSize) / 2f,
             glyphSize - 1f,
             glyphSize - 1f);
@@ -246,7 +253,7 @@ internal sealed class FlatOptionCheckBox : CheckBox
             ]);
         }
 
-        var textLeft = glyphSize + ScaleLogical(7);
+        var textLeft = Padding.Left + glyphSlotSize + ScaleLogical(7);
         TextRenderer.DrawText(
             g,
             Text,

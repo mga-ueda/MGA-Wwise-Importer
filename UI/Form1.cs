@@ -74,8 +74,25 @@ public partial class Form1 : Form
     private const uint PfmLineSpacing = 0x00000100;
     private const byte LineSpacingExact = 4;
 
+    /// <summary>プレイリスト行（グループ枠・ステータスラベル）の左インデント（非スケール px）。</summary>
+    private const int PlaylistItemIndent = 15;
+
     [DllImport("user32.dll")]
     private static extern bool HideCaret(IntPtr hWnd);
+
+    private const int EmSetRect = 0x00B3;
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref NativeRect lParam);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
 
     private DeveloperSettings _developerSettings = new();
     private WaapiSettings _waapiSettings = new();
@@ -174,9 +191,11 @@ public partial class Form1 : Form
         AppFonts.EnsureRegistered();
         InitializeComponent();
         ApplyActionBarToolTips();
-        UpdateMinimumWindowSize();
         DpiChanged += (_, _) =>
         {
+            AdjustTransitionSectionHeights();
+            AlignCompactFileNumbersCheckBox();
+            AlignProjectBarInputs();
             UpdateMinimumWindowSize();
             LayoutActionBarCopyright();
         };
@@ -196,6 +215,8 @@ public partial class Form1 : Form
         ClearPlaylistChoices("Playlist はありません");
         AdjustTransitionSectionHeights();
         ApplyMarkerOptionsPanelFixedHeight();
+        AlignCompactFileNumbersCheckBox();
+        UpdateMinimumWindowSize();
         markerOptionsPanel.Bind(_markerSettings);
         markerOptionsPanel.SettingsChanged += (_, _) =>
         {
@@ -303,6 +324,8 @@ public partial class Form1 : Form
         ApplyFixedLogLineSpacing();
         ApplyDarkEditorChrome();
         ApplyDarkScrollableChrome();
+        // 非クライアント枠が確定したあとで縮小限界を再計算する。
+        UpdateMinimumWindowSize();
     }
 
     protected override void OnShown(EventArgs e)
@@ -320,6 +343,7 @@ public partial class Form1 : Form
 
         // Visible かつ透明な状態で全コントロールのレイアウトと初回描画を同期完了させる。
         PerformLayout();
+        AlignProjectBarInputs();
         LayoutActionBarCopyright();
         Refresh();
         Update();
@@ -967,8 +991,6 @@ public partial class Form1 : Form
         ApplyActionBarButtonColors();
         ApplyActionBarTextColors();
         ApplyProjectBarColors();
-        topMostCheckBox.ForeColor = UiColors.ActionOptionFore;
-        compactFileNumbersCheckBox.ForeColor = UiColors.ActionOptionFore;
         detailedLogCheckBox.ForeColor = UiColors.ActionOptionFore;
         waapiStatusBar.ApplyColors();
         transportBar.ApplyColors();
@@ -1082,12 +1104,6 @@ public partial class Form1 : Form
         reloadButton.DisabledBorderColor = UiColors.ForControlBack(UiColors.ActionButtonDisabledBorder);
         reloadButton.BorderSize = 2;
 
-        topMostCheckBox.ForeColor = UiColors.ActionOptionFore;
-        topMostCheckBox.BackColor = actionBar.BackColor;
-        RefreshFlatOptionControl(topMostCheckBox);
-        compactFileNumbersCheckBox.ForeColor = UiColors.ActionOptionFore;
-        compactFileNumbersCheckBox.BackColor = actionBar.BackColor;
-        RefreshFlatOptionControl(compactFileNumbersCheckBox);
         detailedLogCheckBox.ForeColor = UiColors.ActionOptionFore;
         detailedLogCheckBox.BackColor = actionBar.BackColor;
         RefreshFlatOptionControl(detailedLogCheckBox);
@@ -1119,10 +1135,15 @@ public partial class Form1 : Form
         projectNameComboBox.ApplyColors();
         projectOutputPathTextBox.BackColor = inputBack;
         projectOutputPathTextBox.ForeColor = inputFore;
+        // コンボ・スペアナと同じ枠色（ChromeBorder 系）に揃える。
+        projectOutputPathTextBox.BorderColor = UiColors.ProjectBarBorder;
         var iconFore = UiColors.LogButtonFore;
         ApplyProjectIconButtonColors(projectFolderButton, iconFore, barBack);
         ApplyProjectIconButtonColors(projectSaveButton, iconFore, barBack);
         ApplyProjectIconButtonColors(projectDeleteButton, iconFore, barBack);
+        topMostCheckBox.ForeColor = UiColors.ActionOptionFore;
+        topMostCheckBox.BackColor = barBack;
+        RefreshFlatOptionControl(topMostCheckBox);
         projectSpectrumView.Invalidate();
         projectBar.Invalidate();
     }
@@ -1154,6 +1175,58 @@ public partial class Form1 : Form
         projectOutputPathTextBox.GotFocus += ProjectOutputPathTextBox_GotFocus;
         projectOutputPathTextBox.Enter += (_, _) => HideProjectPathCaret();
         projectOutputPathTextBox.Click += (_, _) => HideProjectPathCaret();
+        projectBar.Resize += (_, _) => AlignProjectBarInputs();
+        // EM_SETRECT の整形矩形はリサイズで既定へ戻るため再適用する。
+        projectOutputPathTextBox.Resize += (_, _) => AlignProjectPathTextRect();
+        projectOutputPathTextBox.HandleCreated += (_, _) => AlignProjectPathTextRect();
+    }
+
+    /// <summary>
+    /// プロジェクト名コンボと出力先テキストボックスの高さをバーの内側高さに揃え、
+    /// 双方のテキスト縦位置も一致させる。
+    /// </summary>
+    private void AlignProjectBarInputs()
+    {
+        var targetHeight = projectBar.DisplayRectangle.Height;
+        if (targetHeight <= 0)
+        {
+            return;
+        }
+
+        projectNameComboBox.SetControlHeight(targetHeight);
+        AlignProjectPathTextRect();
+    }
+
+    /// <summary>
+    /// 出力先テキストボックス（Multiline）の整形矩形を EM_SETRECT で調整し、
+    /// テキスト上端をコンボの編集領域上端（スクリーン座標）に合わせる。
+    /// </summary>
+    private void AlignProjectPathTextRect()
+    {
+        if (!projectOutputPathTextBox.IsHandleCreated
+            || !projectNameComboBox.IsHandleCreated
+            || projectNameComboBox.GetEditItemBounds() is not Rectangle editBounds)
+        {
+            return;
+        }
+
+        var comboTextTop = projectNameComboBox.PointToScreen(editBounds.Location).Y;
+        var boxClientTop = projectOutputPathTextBox.PointToScreen(Point.Empty).Y;
+        var topInset = Math.Max(0, comboTextTop - boxClientTop);
+        var client = projectOutputPathTextBox.ClientSize;
+        if (client.Width <= 0 || client.Height <= 0)
+        {
+            return;
+        }
+
+        var rect = new NativeRect
+        {
+            Left = 4,
+            Top = topInset,
+            Right = Math.Max(4, client.Width - 4),
+            Bottom = client.Height,
+        };
+        _ = SendMessage(projectOutputPathTextBox.Handle, EmSetRect, IntPtr.Zero, ref rect);
     }
 
     private void ProjectBar_Paint(object? sender, PaintEventArgs e)
@@ -1616,6 +1689,9 @@ public partial class Form1 : Form
         playlistHeaderLabel.BackColor = back;
         playlistHeaderLabel.BarColor = headerBack;
         playlistHeaderLabel.ForeColor = UiColors.PlaylistDefaultFore;
+        compactFileNumbersCheckBox.ForeColor = UiColors.PlaylistOptionFore;
+        compactFileNumbersCheckBox.BackColor = back;
+        RefreshFlatOptionControl(compactFileNumbersCheckBox);
         playlistSeparator.BackColor = UiColors.ForControlBack(UiColors.PlaylistButtonBorder);
         rightSidePanel.BackColor = back;
         markerOptionsPanel.ApplyColors();
@@ -2078,6 +2154,21 @@ public partial class Form1 : Form
         }
     }
 
+    /// <summary>
+    /// Compact Num. のチェック枠の左端を、プレイリスト行のグループ枠
+    /// （左マージン <see cref="PlaylistItemIndent"/>、非スケール）と揃える。
+    /// チェック枠は Padding.Left から約 3px（DPI スケール）内側に描画されるため差し引く。
+    /// </summary>
+    private void AlignCompactFileNumbersCheckBox()
+    {
+        var glyphInset = (int)Math.Round(3f * DeviceDpi / 96f);
+        compactFileNumbersCheckBox.Padding = new Padding(
+            Math.Max(0, PlaylistItemIndent - glyphInset),
+            0,
+            0,
+            0);
+    }
+
     /// <summary>マーカーオプションの変更をメモリへ反映する（永続化はプロジェクト SAVE）。</summary>
     private void ApplyMarkerSettings()
     {
@@ -2164,7 +2255,8 @@ public partial class Form1 : Form
                     BackColor = UiColors.ForControlBack(UiColors.PlaylistBack),
                     Dock = DockStyle.Fill,
                     Height = 30,
-                    Margin = new Padding(3, 1, 0, 1),
+                    // ヘッダー「Music Playlist」より少し内側へインデントする。
+                    Margin = new Padding(PlaylistItemIndent, 1, 0, 1),
                     Tag = part,
                     Width = PlaylistGroupSwatch.ControlWidth,
                 };
@@ -2295,7 +2387,8 @@ public partial class Form1 : Form
             Dock = DockStyle.Fill,
             Font = new Font("Yu Gothic UI", 9F),
             Height = 30,
-            Margin = new Padding(3, 1, 3, 1),
+            // プレイリスト項目（スウォッチ）のインデントと揃える。
+            Margin = new Padding(PlaylistItemIndent, 1, 3, 1),
             Padding = new Padding(2, 0, 2, 0),
             Text = message,
             TextAlign = ContentAlignment.MiddleLeft,
@@ -3861,16 +3954,32 @@ public partial class Form1 : Form
     }
 
     /// <summary>
-    /// トランスポート全体が収まる幅を、メインフォームの縮小限界にする。
+    /// トランスポート全体が収まる幅と、Exit Source At の Exit Cue が見切れない高さを
+    /// メインフォームの縮小限界にする。
     /// 保存された前回サイズは縮小限界には使用しない。
     /// </summary>
     private void UpdateMinimumWindowSize()
     {
         var nonClientWidth = Math.Max(0, Width - ClientSize.Width);
+        var nonClientHeight = Math.Max(0, Height - ClientSize.Height);
         var safetyMargin = (int)Math.Ceiling(8f * DeviceDpi / 96f);
+
+        // 遷移設定は WrapContents: Fade In/Out の次行に Exit Source At が並ぶ。
+        var transitionRowsHeight =
+            Math.Max(fadeInSectionPanel.Height, fadeOutSectionPanel.Height)
+            + exitSourceAtSectionPanel.Height;
+        var requiredLogAreaHeight =
+            transitionRowsHeight + markerOptionsPanel.RequiredHeight;
+        var fixedChromeHeight =
+            projectBar.Height
+            + waveformHostPanel.Height
+            + transportBar.Height
+            + waapiStatusBar.Height
+            + actionBar.Height;
+
         MinimumSize = new Size(
             transportBar.RequiredWidth + nonClientWidth + safetyMargin,
-            MinimumSize.Height);
+            fixedChromeHeight + requiredLogAreaHeight + nonClientHeight + safetyMargin);
     }
 
     private void ApplyDarkTitleBar()

@@ -68,6 +68,7 @@ internal sealed class WaveformView : Control
     private string _sourcePath = string.Empty;
     private string _sourceDisplayName = string.Empty;
     private TextBox? _sourceNameEditor;
+    private bool _sourceNameHovered;
     private bool _endingSourceNameEdit;
     private bool _interactionLocked;
     private int _infoLaneWidth = 120;
@@ -1374,6 +1375,7 @@ internal sealed class WaveformView : Control
             if (value)
             {
                 EndSourceNameEdit(commit: false);
+                SetSourceNameHovered(false);
                 _isDraggingSeek = false;
                 Capture = false;
             }
@@ -1737,7 +1739,20 @@ internal sealed class WaveformView : Control
 
     private bool IsSourceNamePoint(Point location)
     {
+        // 編集用 TextBox と同じ領域（ファイル名レーン全体）をヒット対象にする。
         return TryGetSourceNameBounds(out var bounds) && bounds.Contains(location);
+    }
+
+    private void SetSourceNameHovered(bool hovered)
+    {
+        if (_sourceNameHovered == hovered)
+        {
+            return;
+        }
+
+        _sourceNameHovered = hovered;
+        Cursor = hovered && !_interactionLocked ? Cursors.IBeam : Cursors.Default;
+        Invalidate();
     }
 
     private bool TryGetSourceNameBounds(out Rectangle bounds)
@@ -1798,8 +1813,27 @@ internal sealed class WaveformView : Control
             height);
     }
 
+    /// <summary>編集用 TextBox と同じ寸法のホバー枠。Paint 中にコントロールを生成しない。</summary>
+    private Rectangle GetSourceNameHoverBounds(Rectangle available)
+    {
+        if (_sourceNameEditor is { } editor)
+        {
+            return GetSourceNameEditorBounds(available, editor);
+        }
+
+        using var font = new Font(Font, FontStyle.Bold);
+        var preferred = TextRenderer.MeasureText("Ag", font).Height + 2;
+        var height = Math.Min(available.Height, Math.Max(22, preferred));
+        return new Rectangle(
+            available.Left,
+            available.Top + Math.Max(0, (available.Height - height) / 2),
+            available.Width,
+            height);
+    }
+
     private TextBox CreateSourceNameEditor()
     {
+        // Digits などのオプション入力と同じ、システム描画の FixedSingle 枠。
         var editor = new TextBox
         {
             AutoSize = false,
@@ -1876,6 +1910,7 @@ internal sealed class WaveformView : Control
         }
 
         UpdateMouseGuide(e.X);
+        SetSourceNameHovered(IsSourceNamePoint(e.Location));
         UpdateTimelineToolTip(e.Location);
 
         if (_markerEditMode is not null)
@@ -1949,6 +1984,7 @@ internal sealed class WaveformView : Control
     {
         base.OnMouseLeave(e);
         UpdateTimelineToolTip(null);
+        SetSourceNameHovered(false);
         SetHoveredPlaylistPart(null);
         if (_isDraggingSeek || _markerEditMode is not null)
         {
@@ -2216,7 +2252,13 @@ internal sealed class WaveformView : Control
     private void UpdateTimelineToolTip(Point? mouseLocation)
     {
         string? text = null;
-        if (mouseLocation is { } location
+        if (mouseLocation is { } sourceLocation
+            && !_interactionLocked
+            && IsSourceNamePoint(sourceLocation))
+        {
+            text = "ダブルクリックでファイル名を編集";
+        }
+        else if (mouseLocation is { } location
             && !_isDraggingSeek
             && _markerEditMode is null
             && _outputParts.Count > 0
@@ -2350,6 +2392,7 @@ internal sealed class WaveformView : Control
         var content = Rectangle.Inflate(bounds, -4, -4);
         var timeline = GetTimelineRect(content);
         DrawSourceLevelMeter(g, content);
+        DrawSourceNameHoverChrome(g);
         DrawPlaylistHoverOutline(g);
         DrawExportPartGlow(g, timeline);
         DrawPlayhead(g, timeline, _playheadProgress, _trailSamples, UiColors.SeekCyan);
@@ -2938,6 +2981,75 @@ internal sealed class WaveformView : Control
             textBrush,
             new RectangleF(info.Left + InfoLanePadX, wave.Top + 2f, nameWidth, nameHeight),
             nameFormat);
+    }
+
+    /// <summary>
+    /// ファイル名ホバー枠。静的レイヤには焼き込まず、毎フレーム最前面に描く
+    /// （編集中 TextBox と同じ矩形・枠色）。
+    /// </summary>
+    private void DrawSourceNameHoverChrome(Graphics g)
+    {
+        if (!_sourceNameHovered
+            || _interactionLocked
+            || _sourceNameEditor is { Visible: true }
+            || !TryGetSourceNameBounds(out var available))
+        {
+            return;
+        }
+
+        var hoverBounds = GetSourceNameHoverBounds(available);
+        if (hoverBounds.Width <= 0 || hoverBounds.Height <= 0)
+        {
+            return;
+        }
+
+        using var fill = new SolidBrush(UiColors.ForControlBack(UiColors.DialogInputBack));
+        g.FillRectangle(fill, hoverBounds);
+
+        using var font = new Font(Font, FontStyle.Bold);
+        using var nameBrush = new SolidBrush(UiColors.DialogFore);
+        using var nameFormat = new StringFormat
+        {
+            Alignment = StringAlignment.Center,
+            LineAlignment = StringAlignment.Center,
+            Trimming = StringTrimming.None,
+            FormatFlags = StringFormatFlags.NoWrap,
+        };
+        g.DrawString(_sourceDisplayName, font, nameBrush, hoverBounds, nameFormat);
+
+        // Digits エディタ（FixedSingle）と同じ枠色で描く。
+        using var hoverPen = new Pen(GetFixedSingleBorderColor());
+        g.DrawRectangle(
+            hoverPen,
+            hoverBounds.Left,
+            hoverBounds.Top,
+            hoverBounds.Width - 1,
+            hoverBounds.Height - 1);
+    }
+
+    private static Color? _fixedSingleBorderColor;
+
+    /// <summary>
+    /// システム描画の FixedSingle TextBox（Digits エディタ等）の実際の枠色。
+    /// テーマにより固定値では合わないため、一度だけ実測してキャッシュする。
+    /// </summary>
+    private static Color GetFixedSingleBorderColor()
+    {
+        if (_fixedSingleBorderColor is Color cached)
+        {
+            return cached;
+        }
+
+        using var probe = new TextBox
+        {
+            BorderStyle = BorderStyle.FixedSingle,
+            Size = new Size(24, 24),
+        };
+        using var bmp = new Bitmap(probe.Width, probe.Height);
+        probe.DrawToBitmap(bmp, new Rectangle(Point.Empty, probe.Size));
+        var color = bmp.GetPixel(0, 0);
+        _fixedSingleBorderColor = color;
+        return color;
     }
 
     private void DrawSourceLevelMeter(Graphics g, Rectangle content)

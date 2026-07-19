@@ -76,12 +76,12 @@ internal sealed class TransportBar : UserControl
         AddGroup(
             "NAVIGATION",
             (TransportCommand.GoToStart, TransportIcon.GoToStart, "先頭へ移動  [Ctrl+Home]"),
+            (TransportCommand.PreviousPage, TransportIcon.PreviousPage, "前の表示ページ  [Page Up]"),
             (TransportCommand.PreviousRegion, TransportIcon.PreviousRegion, "前のリージョン境界  [Ctrl+←]"),
             (TransportCommand.PreviousBar, TransportIcon.PreviousBar, "前の小節  [Home]"),
-            (TransportCommand.PreviousPage, TransportIcon.PreviousPage, "前の表示ページ  [Page Up]"),
-            (TransportCommand.NextPage, TransportIcon.NextPage, "次の表示ページ  [Page Down]"),
             (TransportCommand.NextBar, TransportIcon.NextBar, "次の小節  [End]"),
             (TransportCommand.NextRegion, TransportIcon.NextRegion, "次のリージョン境界  [Ctrl+→]"),
+            (TransportCommand.NextPage, TransportIcon.NextPage, "次の表示ページ  [Page Down]"),
             (TransportCommand.GoToEnd, TransportIcon.GoToEnd, "末尾へ移動  [Ctrl+End]"));
 
         AddGroup(

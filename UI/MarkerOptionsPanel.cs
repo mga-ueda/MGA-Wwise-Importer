@@ -55,7 +55,8 @@ internal sealed class MarkerOptionsPanel : UserControl
         // フォントは DPI に追従して大きく描画されるため、
         // 横方向の配置・幅も DPI に合わせて拡縮する（行高だけはプレイリストと同じ 30px 固定）。
         // 各列は内容に必要な幅だけ確保する。均等幅にはせず、列間も小さく詰める。
-        var sectionGap = S(4);
+        // Fade In / Fade Out 間と同じく、セクション同士を隙間なく並べる。
+        var sectionGap = 0;
         var commentColumnGap = S(4);
         var col1X = 1;
         var col1W = S(92);

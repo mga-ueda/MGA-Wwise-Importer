@@ -14,8 +14,12 @@ internal sealed class DarkProjectComboBox : ComboBox
     private const int WmPaint = 0x000F;
     private const int WmNcPaint = 0x0085;
     private const int EmSetSel = 0x00B1;
+    private const int CbSetItemHeight = 0x0153;
+    private const int CbGetItemHeight = 0x0154;
 
     private bool _hovered;
+    private int? _controlHeightTarget;
+    private DropDownBorderWindow? _dropDownBorderWindow;
 
     [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
     private static extern int SetWindowTheme(IntPtr hWnd, string? pszSubAppName, string? pszSubIdList);
@@ -28,6 +32,15 @@ internal sealed class DarkProjectComboBox : ComboBox
 
     [DllImport("user32.dll")]
     private static extern bool GetComboBoxInfo(IntPtr hWnd, ref ComboBoxInfo info);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindowDC(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern int ReleaseDC(IntPtr hWnd, IntPtr hdc);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out NativeRect rect);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
@@ -115,18 +128,99 @@ internal sealed class DarkProjectComboBox : ComboBox
         base.OnHandleCreated(e);
         // ドロップダウン一覧のスクロールバーへ対応 OS のダークテーマを適用する。
         _ = SetWindowTheme(Handle, "DarkMode_CFD", null);
+        ApplyControlHeightTarget();
+    }
+
+    /// <summary>
+    /// コントロール全体の高さを指定値に合わせる。
+    /// ItemHeight（ドロップダウン項目の高さ）は変えず、選択フィールドの高さ
+    /// （CB_SETITEMHEIGHT の -1）だけを調整する。ハンドル再作成後も維持される。
+    /// </summary>
+    public void SetControlHeight(int targetHeight)
+    {
+        _controlHeightTarget = targetHeight;
+        ApplyControlHeightTarget();
+    }
+
+    private void ApplyControlHeightTarget()
+    {
+        if (_controlHeightTarget is not int target || !IsHandleCreated)
+        {
+            return;
+        }
+
+        var fieldHeight = (int)SendMessage(Handle, CbGetItemHeight, (IntPtr)(-1), IntPtr.Zero);
+        if (fieldHeight <= 0)
+        {
+            return;
+        }
+
+        // コントロール高 = 選択フィールド高 + 固定枠。枠分を実測して差し引く。
+        var chrome = Height - fieldHeight;
+        var desired = Math.Max(8, target - chrome);
+        if (desired != fieldHeight)
+        {
+            _ = SendMessage(Handle, CbSetItemHeight, (IntPtr)(-1), (IntPtr)desired);
+        }
+    }
+
+    /// <summary>
+    /// 選択フィールド内の編集子ウィンドウ（テキスト表示領域）の矩形。
+    /// このコントロールのクライアント座標。取得できないときは null。
+    /// </summary>
+    public Rectangle? GetEditItemBounds()
+    {
+        if (!IsHandleCreated)
+        {
+            return null;
+        }
+
+        var info = new ComboBoxInfo { CbSize = Marshal.SizeOf<ComboBoxInfo>() };
+        if (!GetComboBoxInfo(Handle, ref info))
+        {
+            return null;
+        }
+
+        return info.RcItem.ToRectangle();
     }
 
     protected override void OnDropDown(EventArgs e)
     {
+        AttachDropDownBorder();
         Invalidate();
         base.OnDropDown(e);
     }
 
     protected override void OnDropDownClosed(EventArgs e)
     {
+        _dropDownBorderWindow?.ReleaseHandle();
+        _dropDownBorderWindow = null;
         Invalidate();
         base.OnDropDownClosed(e);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _dropDownBorderWindow?.ReleaseHandle();
+            _dropDownBorderWindow = null;
+        }
+
+        base.Dispose(disposing);
+    }
+
+    private void AttachDropDownBorder()
+    {
+        var info = new ComboBoxInfo { CbSize = Marshal.SizeOf<ComboBoxInfo>() };
+        if (!GetComboBoxInfo(Handle, ref info) || info.HwndList == IntPtr.Zero)
+        {
+            return;
+        }
+
+        _dropDownBorderWindow?.ReleaseHandle();
+        _dropDownBorderWindow = new DropDownBorderWindow(info.HwndList);
+        PaintWindowBorder(info.HwndList);
     }
 
     protected override void OnLostFocus(EventArgs e)
@@ -158,16 +252,10 @@ internal sealed class DarkProjectComboBox : ComboBox
 
         var selected = (e.State & DrawItemState.Selected) != 0;
         var itemText = GetItemText(Items[e.Index]);
-        var isNewItem = string.Equals(
-            itemText,
-            ProjectSettingsStore.NewProjectMenuItem,
-            StringComparison.Ordinal);
         var back = selected
             ? UiColors.ForControlBack(UiColors.TransportHoverBack)
             : UiColors.ForControlBack(UiColors.ProjectBarInputBack);
-        var fore = isNewItem
-            ? UiColors.AccentCyan
-            : UiColors.ProjectBarInputFore;
+        var fore = UiColors.ProjectBarInputFore;
 
         using var backBrush = new SolidBrush(back);
         e.Graphics.FillRectangle(backBrush, e.Bounds);
@@ -187,6 +275,48 @@ internal sealed class DarkProjectComboBox : ComboBox
             | TextFormatFlags.VerticalCenter
             | TextFormatFlags.EndEllipsis
             | TextFormatFlags.NoPrefix);
+    }
+
+    private static void PaintWindowBorder(IntPtr handle)
+    {
+        if (!GetWindowRect(handle, out var rect))
+        {
+            return;
+        }
+
+        var hdc = GetWindowDC(handle);
+        if (hdc == IntPtr.Zero)
+        {
+            return;
+        }
+
+        try
+        {
+            using var g = Graphics.FromHdc(hdc);
+            using var pen = new Pen(UiColors.ProjectBarBorder);
+            g.DrawRectangle(pen, 0, 0, rect.Right - rect.Left - 1, rect.Bottom - rect.Top - 1);
+        }
+        finally
+        {
+            _ = ReleaseDC(handle, hdc);
+        }
+    }
+
+    private sealed class DropDownBorderWindow : NativeWindow
+    {
+        public DropDownBorderWindow(IntPtr handle)
+        {
+            AssignHandle(handle);
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            base.WndProc(ref m);
+            if (m.Msg is WmNcPaint or WmPaint)
+            {
+                PaintWindowBorder(Handle);
+            }
+        }
     }
 
     protected override void WndProc(ref Message m)

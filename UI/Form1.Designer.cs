@@ -62,7 +62,7 @@ partial class Form1
     private Panel projectBar;
     private DarkProjectComboBox projectNameComboBox;
     private Panel projectNameSpacer;
-    private TextBox projectOutputPathTextBox;
+    private DarkBorderTextBox projectOutputPathTextBox;
     private FlowLayoutPanel projectActionPanel;
     private TransportIconButton projectFolderButton;
     private TransportIconButton projectSaveButton;
@@ -147,7 +147,7 @@ partial class Form1
         projectBar = new Panel();
         projectNameComboBox = new DarkProjectComboBox();
         projectNameSpacer = new Panel();
-        projectOutputPathTextBox = new TextBox();
+        projectOutputPathTextBox = new DarkBorderTextBox();
         projectActionPanel = new FlowLayoutPanel();
         projectFolderButton = new TransportIconButton(TransportIcon.Folder);
         projectSaveButton = new TransportIconButton(TransportIcon.Save);
@@ -180,8 +180,8 @@ partial class Form1
         projectBar.Dock = DockStyle.Top;
         projectBar.Height = 30;
         projectBar.Name = "projectBar";
-        // Yu Gothic UI / Win32 ComboBox は幾何学中心より文字が上に見えるため 1px 下げる。
-        projectBar.Padding = new Padding(8, 4, 8, 2);
+        // 上下マージンは対称にする（テキスト縦位置は AlignProjectBarText で実測合わせ）。
+        projectBar.Padding = new Padding(8, 3, 8, 3);
         projectBar.TabIndex = 0;
         projectBar.Controls.Add(projectOutputPathTextBox);
         projectBar.Controls.Add(projectActionPanel);
@@ -217,6 +217,7 @@ partial class Form1
         projectActionPanel.Controls.Add(projectFolderButton);
         projectActionPanel.Controls.Add(projectSaveButton);
         projectActionPanel.Controls.Add(projectDeleteButton);
+        projectActionPanel.Controls.Add(topMostCheckBox);
         projectActionPanel.Controls.Add(projectSpectrumView);
         //
         // projectOutputPathTextBox
@@ -225,6 +226,10 @@ partial class Form1
         projectOutputPathTextBox.Cursor = Cursors.Default;
         projectOutputPathTextBox.Dock = DockStyle.Fill;
         projectOutputPathTextBox.Font = new Font("Yu Gothic UI", 9F);
+        // 単一行 EDIT はテキストが上寄せ描画されるため、Multiline + EM_SETRECT で
+        // コンボボックスの文字と同じ縦位置に合わせる（AlignProjectBarText）。
+        projectOutputPathTextBox.Multiline = true;
+        projectOutputPathTextBox.WordWrap = false;
         projectOutputPathTextBox.Name = "projectOutputPathTextBox";
         projectOutputPathTextBox.ReadOnly = true;
         projectOutputPathTextBox.ShortcutsEnabled = false;
@@ -264,7 +269,7 @@ partial class Form1
         projectSpectrumView.Margin = new Padding(0);
         projectSpectrumView.Name = "projectSpectrumView";
         projectSpectrumView.Size = new Size(126, 24);
-        projectSpectrumView.TabIndex = 3;
+        projectSpectrumView.TabIndex = 4;
         projectSpectrumView.TabStop = false;
         //
         // waveformHostPanel
@@ -438,7 +443,7 @@ partial class Form1
         //
         fadeInSectionPanel.Margin = new Padding(0);
         fadeInSectionPanel.Name = "fadeInSectionPanel";
-        fadeInSectionPanel.Size = new Size(108, 190);
+        fadeInSectionPanel.Size = new Size(100, 190);
         fadeInSectionPanel.TabIndex = 0;
         fadeInSectionPanel.Controls.Add(fadeInChoicesPanel);
         fadeInSectionPanel.Controls.Add(fadeInHeaderLabel);
@@ -450,7 +455,7 @@ partial class Form1
         fadeInHeaderLabel.Margin = new Padding(0);
         fadeInHeaderLabel.Name = "fadeInHeaderLabel";
         fadeInHeaderLabel.Padding = new Padding(10, 0, 4, 0);
-        fadeInHeaderLabel.Size = new Size(108, 26);
+        fadeInHeaderLabel.Size = new Size(100, 26);
         fadeInHeaderLabel.TabIndex = 0;
         fadeInHeaderLabel.Text = "Fade In";
         fadeInHeaderLabel.TextAlign = ContentAlignment.MiddleLeft;
@@ -462,7 +467,7 @@ partial class Form1
         fadeInChoicesPanel.Margin = new Padding(0);
         fadeInChoicesPanel.Name = "fadeInChoicesPanel";
         fadeInChoicesPanel.Padding = new Padding(9, 0, 4, 4);
-        fadeInChoicesPanel.Size = new Size(108, 164);
+        fadeInChoicesPanel.Size = new Size(100, 164);
         fadeInChoicesPanel.TabIndex = 1;
         fadeInChoicesPanel.WrapContents = false;
         fadeInChoicesPanel.Controls.Add(fadeInNoneRadio);
@@ -536,7 +541,7 @@ partial class Form1
         //
         fadeOutSectionPanel.Margin = new Padding(0);
         fadeOutSectionPanel.Name = "fadeOutSectionPanel";
-        fadeOutSectionPanel.Size = new Size(108, 190);
+        fadeOutSectionPanel.Size = new Size(100, 190);
         fadeOutSectionPanel.TabIndex = 1;
         fadeOutSectionPanel.Controls.Add(transitionTimeChoicesPanel);
         fadeOutSectionPanel.Controls.Add(transitionTimeHeaderLabel);
@@ -548,7 +553,7 @@ partial class Form1
         transitionTimeHeaderLabel.Margin = new Padding(0);
         transitionTimeHeaderLabel.Name = "transitionTimeHeaderLabel";
         transitionTimeHeaderLabel.Padding = new Padding(10, 0, 4, 0);
-        transitionTimeHeaderLabel.Size = new Size(108, 26);
+        transitionTimeHeaderLabel.Size = new Size(100, 26);
         transitionTimeHeaderLabel.TabIndex = 0;
         transitionTimeHeaderLabel.Text = "Fade Out";
         transitionTimeHeaderLabel.TextAlign = ContentAlignment.MiddleLeft;
@@ -560,7 +565,7 @@ partial class Form1
         transitionTimeChoicesPanel.Margin = new Padding(0);
         transitionTimeChoicesPanel.Name = "transitionTimeChoicesPanel";
         transitionTimeChoicesPanel.Padding = new Padding(9, 0, 4, 4);
-        transitionTimeChoicesPanel.Size = new Size(108, 164);
+        transitionTimeChoicesPanel.Size = new Size(100, 164);
         transitionTimeChoicesPanel.TabIndex = 1;
         transitionTimeChoicesPanel.WrapContents = false;
         transitionTimeChoicesPanel.Controls.Add(transitionTimeHalfSecondRadio);
@@ -634,7 +639,7 @@ partial class Form1
         //
         exitSourceAtSectionPanel.Margin = new Padding(0);
         exitSourceAtSectionPanel.Name = "exitSourceAtSectionPanel";
-        exitSourceAtSectionPanel.Size = new Size(108, 190);
+        exitSourceAtSectionPanel.Size = new Size(100, 190);
         exitSourceAtSectionPanel.TabIndex = 2;
         exitSourceAtSectionPanel.Controls.Add(exitSourceAtChoicesPanel);
         exitSourceAtSectionPanel.Controls.Add(exitSourceAtHeaderLabel);
@@ -646,7 +651,7 @@ partial class Form1
         exitSourceAtHeaderLabel.Margin = new Padding(0);
         exitSourceAtHeaderLabel.Name = "exitSourceAtHeaderLabel";
         exitSourceAtHeaderLabel.Padding = new Padding(10, 0, 4, 0);
-        exitSourceAtHeaderLabel.Size = new Size(108, 26);
+        exitSourceAtHeaderLabel.Size = new Size(100, 26);
         exitSourceAtHeaderLabel.TabIndex = 2;
         exitSourceAtHeaderLabel.Text = "Exit Source At";
         exitSourceAtHeaderLabel.TextAlign = ContentAlignment.MiddleLeft;
@@ -658,7 +663,7 @@ partial class Form1
         exitSourceAtChoicesPanel.Margin = new Padding(0);
         exitSourceAtChoicesPanel.Name = "exitSourceAtChoicesPanel";
         exitSourceAtChoicesPanel.Padding = new Padding(9, 0, 4, 4);
-        exitSourceAtChoicesPanel.Size = new Size(108, 164);
+        exitSourceAtChoicesPanel.Size = new Size(100, 164);
         exitSourceAtChoicesPanel.TabIndex = 3;
         exitSourceAtChoicesPanel.WrapContents = false;
         exitSourceAtChoicesPanel.Controls.Add(exitSourceImmediateRadio);
@@ -736,6 +741,7 @@ partial class Form1
         playlistSelectorPanel.Size = new Size(240, 100);
         playlistSelectorPanel.TabIndex = 1;
         playlistSelectorPanel.Controls.Add(playlistScrollPanel);
+        playlistSelectorPanel.Controls.Add(compactFileNumbersCheckBox);
         playlistSelectorPanel.Controls.Add(playlistSeparator);
         playlistSelectorPanel.DragEnter += EditorTextBox_DragEnter;
         playlistSelectorPanel.DragDrop += EditorTextBox_DragDrop;
@@ -767,7 +773,8 @@ partial class Form1
         playlistScrollPanel.AllowDrop = true;
         playlistScrollPanel.Dock = DockStyle.Fill;
         playlistScrollPanel.Name = "playlistScrollPanel";
-        playlistScrollPanel.Padding = new Padding(9, 0, 8, 8);
+        // Fade In / Fade Out 間（Margin 0）と同じく、直前列と隙間なく接する。
+        playlistScrollPanel.Padding = new Padding(0, 0, 8, 8);
         playlistScrollPanel.TabIndex = 1;
         playlistScrollPanel.Controls.Add(playlistListLayout);
         playlistScrollPanel.Controls.Add(playlistHeaderLabel);
@@ -826,11 +833,11 @@ partial class Form1
         copyrightLinkLabel.TabIndex = 0;
         copyrightLinkLabel.TabStop = false;
         copyrightLinkLabel.Text =
-            "© 2026 MIYABI GAME AUDIO INC.  Version 1.00 β  GitHub"
+            "© 2026 MIYABI GAME AUDIO INC.  GitHub"
             + "\nWwise® and Audiokinetic® are trademarks of Audiokinetic Inc.";
         copyrightLinkLabel.TextAlign = ContentAlignment.BottomLeft;
-        // "GitHub" は1行目の47文字目から（商標行の追加で変わらない）。
-        copyrightLinkLabel.LinkArea = new LinkArea(47, 6);
+        // "GitHub" は1行目の31文字目から（商標行の追加で変わらない）。
+        copyrightLinkLabel.LinkArea = new LinkArea(31, 6);
         copyrightLinkLabel.LinkClicked += CopyrightLinkLabel_LinkClicked;
         //
         // actionControlsPanel
@@ -845,8 +852,6 @@ partial class Form1
         actionControlsPanel.WrapContents = false;
         actionControlsPanel.Controls.Add(exportButton);
         actionControlsPanel.Controls.Add(reloadButton);
-        actionControlsPanel.Controls.Add(topMostCheckBox);
-        actionControlsPanel.Controls.Add(compactFileNumbersCheckBox);
         actionControlsPanel.Controls.Add(detailedLogCheckBox);
         //
         // detailedLogCheckBox
@@ -864,14 +869,18 @@ partial class Form1
         //
         // compactFileNumbersCheckBox
         //
-        compactFileNumbersCheckBox.AutoSize = true;
+        compactFileNumbersCheckBox.AutoSize = false;
         compactFileNumbersCheckBox.Checked = true;
         compactFileNumbersCheckBox.CheckState = CheckState.Checked;
+        // Music Playlist 一覧（スクロール領域）の外、パネル下端の固定エリアに配置。
+        // 左 Padding は AlignCompactFileNumbersCheckBox がグループ枠と揃うよう再計算する。
+        compactFileNumbersCheckBox.Dock = DockStyle.Bottom;
         compactFileNumbersCheckBox.Font = new Font("Yu Gothic UI", 9F);
-        compactFileNumbersCheckBox.Margin = new Padding(0, 8, 8, 0);
+        compactFileNumbersCheckBox.Height = 28;
         compactFileNumbersCheckBox.Name = "compactFileNumbersCheckBox";
-        compactFileNumbersCheckBox.TabIndex = 1;
-        compactFileNumbersCheckBox.Text = "Compact File Numbers";
+        compactFileNumbersCheckBox.Padding = new Padding(12, 0, 0, 0);
+        compactFileNumbersCheckBox.TabIndex = 2;
+        compactFileNumbersCheckBox.Text = "Compact Num.";
         compactFileNumbersCheckBox.UseVisualStyleBackColor = true;
         compactFileNumbersCheckBox.CheckedChanged += CompactFileNumbersCheckBox_CheckedChanged;
         //
@@ -879,9 +888,10 @@ partial class Form1
         //
         topMostCheckBox.AutoSize = true;
         topMostCheckBox.Font = new Font("Yu Gothic UI", 9F);
-        topMostCheckBox.Margin = new Padding(0, 8, 8, 0);
+        // projectActionPanel 内の 24px ボタンと文字ベースラインを揃えるための上マージン。
+        topMostCheckBox.Margin = new Padding(0, 3, 8, 0);
         topMostCheckBox.Name = "topMostCheckBox";
-        topMostCheckBox.TabIndex = 2;
+        topMostCheckBox.TabIndex = 3;
         topMostCheckBox.Text = "Always on Top";
         topMostCheckBox.UseVisualStyleBackColor = true;
         topMostCheckBox.CheckedChanged += TopMostCheckBox_CheckedChanged;
