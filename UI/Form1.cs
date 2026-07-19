@@ -128,6 +128,7 @@ public partial class Form1 : Form
     private string? _sourceBaseNameOverride;
     private bool _exportBusy;
     private UiInteractionLock _uiInteractionLocks;
+    private ExportGlassOverlay? _exportOverlay;
     private bool _populatingPlaylistChoices;
     private bool _automaticPlaylistPlayback;
     private double _playlistFadeInSeconds;
@@ -552,6 +553,9 @@ public partial class Form1 : Form
         _playlistBlinkTimer.Stop();
         _playlistTransitionGlowTimer.Stop();
         _waveformScrollTimer.Stop();
+        _exportOverlay?.HideOverlay();
+        _exportOverlay?.Dispose();
+        _exportOverlay = null;
         _audioPlayer.Dispose();
         _waapiSelectionTimer.Dispose();
         _playheadTimer.Dispose();
@@ -598,7 +602,7 @@ public partial class Form1 : Form
     /// <summary>ESC からの終了。確認ダイアログで Yes のときだけ閉じる。</summary>
     private void ConfirmAndExit()
     {
-        var confirm = MessageBox.Show(
+        var confirm = OwnerCenteredMessageBox.Show(
             this,
             "アプリケーションを終了しますか？",
             "終了確認",
@@ -1535,7 +1539,7 @@ public partial class Form1 : Form
                 ? _projectOutputDirectory
                 : string.Empty,
         };
-        if (dialog.ShowDialog(this) == DialogResult.OK)
+        if (OwnerCenteredMessageBox.ShowDialog(this, dialog) == DialogResult.OK)
         {
             _projectOutputDirectory = dialog.SelectedPath.Trim();
             projectOutputPathTextBox.Text = _projectOutputDirectory;
@@ -1565,7 +1569,7 @@ public partial class Form1 : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show(
+            OwnerCenteredMessageBox.Show(
                 this,
                 ex.Message,
                 "プロジェクトの保存に失敗",
@@ -1586,7 +1590,7 @@ public partial class Form1 : Form
         }
 
         var name = _loadedProjectName;
-        var confirm = MessageBox.Show(
+        var confirm = OwnerCenteredMessageBox.Show(
             this,
             $"プロジェクト「{name}」を削除しますか？",
             "プロジェクト削除",
@@ -1609,7 +1613,7 @@ public partial class Form1 : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show(
+            OwnerCenteredMessageBox.Show(
                 this,
                 ex.Message,
                 "プロジェクトの削除に失敗",
@@ -3637,57 +3641,26 @@ public partial class Form1 : Form
         EndActiveTransportShortcutFeedback();
         _resumePlaybackAfterBackwardSeek = false;
 
-        ApplyExportInteractiveLock(_uiInteractionLocks.HasFlag(UiInteractionLock.Export));
+        SetExportOverlayVisible(_uiInteractionLocks.HasFlag(UiInteractionLock.Export));
         UpdateExportButtonState();
     }
 
     /// <summary>
-    /// 書き出し中は操作可能な子だけを無効化する。
-    /// 親 Panel の Enabled=false は Label／TextBox が OS 無効色（黒文字）になるため使わない。
+    /// 書き出し中はコントロールを無効化せず、WAAPI ステータスバーを除くフォーム全体を
+    /// すりガラスで覆ってマウス操作を遮断する（ショートカットは <see cref="_uiInteractionLocks"/> 側で抑止）。
+    /// 解除は子ウィンドウの Opacity フェードで行う。
     /// </summary>
-    private void ApplyExportInteractiveLock(bool locked)
+    private void SetExportOverlayVisible(bool visible)
     {
-        waveformView.InteractionLocked = locked;
-        SetInteractiveControlsEnabled(transportBar, !locked);
-        SetInteractiveControlsEnabled(rightSidePanel, !locked);
-        SetInteractiveControlsEnabled(actionControlsPanel, !locked);
-        SetInteractiveControlsEnabled(waveformHostPanel, !locked);
-        SetInteractiveControlsEnabled(projectBar, !locked);
-        projectNameComboBox.Enabled = !locked;
-        if (!locked)
+        if (visible)
         {
-            reloadButton.Enabled = _lastInputFiles.Count > 0;
+            _exportOverlay ??= new ExportGlassOverlay();
+            var coverBounds = new Rectangle(0, 0, ClientSize.Width, waapiStatusBar.Top);
+            _exportOverlay.ShowOverlay(this, coverBounds);
         }
-    }
-
-    private static void SetInteractiveControlsEnabled(Control root, bool enabled)
-    {
-        foreach (Control child in root.Controls)
+        else
         {
-            switch (child)
-            {
-                case MarkerOptionsPanel markerPanel:
-                    markerPanel.SetInteractionLocked(!enabled);
-                    continue;
-                case FlatOptionRadioButton:
-                case FlatOptionCheckBox:
-                case FlatPlaylistButton:
-                case RoundedButton:
-                case TransportIconButton:
-                case PlaylistGroupSwatch:
-                case ThinHorizontalScrollBar:
-                    child.Enabled = enabled;
-                    continue;
-                case WaveformView:
-                case Label: // SectionHeaderLabel / LinkLabel 含む
-                case TextBox:
-                case RichTextBox:
-                    // 見た目用／自前ロック対象。Enabled は触らない。
-                    continue;
-                default:
-                    SetInteractiveControlsEnabled(child, enabled);
-                    break;
-            }
+            _exportOverlay?.BeginFadeOut();
         }
     }
 
@@ -3787,7 +3760,7 @@ public partial class Form1 : Form
             || name.EndsWith('.')
             || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
         {
-            MessageBox.Show(
+            OwnerCenteredMessageBox.Show(
                 this,
                 "ファイル名として使用できる、拡張子なしの名前を入力してください。",
                 "名前を変更できません",
@@ -3866,7 +3839,7 @@ public partial class Form1 : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show(
+            OwnerCenteredMessageBox.Show(
                 this,
                 ex.Message,
                 "Unable to open GitHub",
@@ -3909,7 +3882,7 @@ public partial class Form1 : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "ログのコピーに失敗", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            OwnerCenteredMessageBox.Show(this, ex.Message, "ログのコピーに失敗", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
 
         ReleaseFocusToWaveform();
@@ -3926,7 +3899,7 @@ public partial class Form1 : Form
             OverwritePrompt = true,
             Title = "ログを保存",
         };
-        if (dialog.ShowDialog(this) != DialogResult.OK)
+        if (OwnerCenteredMessageBox.ShowDialog(this, dialog) != DialogResult.OK)
         {
             return;
         }
@@ -3940,7 +3913,7 @@ public partial class Form1 : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "ログの保存に失敗", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            OwnerCenteredMessageBox.Show(this, ex.Message, "ログの保存に失敗", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
 
         ReleaseFocusToWaveform();
@@ -4324,7 +4297,7 @@ public partial class Form1 : Form
             AppendReport(preflight.FormatLogMessage());
             _lastLoggedPreflightKey = $"{preflight.CanExport}|{preflight.Reason}|{preflight.OutputDirectory}"
                 + $"|{preflight.TargetPath}|{preflight.ProjectFilePath}";
-            MessageBox.Show(
+            OwnerCenteredMessageBox.Show(
                 this,
                 preflight.Reason,
                 "EXPORT",
@@ -4348,7 +4321,6 @@ public partial class Form1 : Form
         _exportBusy = true;
         SetUiInteractionLocked(UiInteractionLock.Export, locked: true);
         UpdateExportButtonState();
-        ReleaseFocusToWaveform();
 
         try
         {
@@ -4366,6 +4338,7 @@ public partial class Form1 : Form
                 _exportBusy = false;
                 SetUiInteractionLocked(UiInteractionLock.Export, locked: false);
                 UpdateExportButtonState();
+                ReleaseFocusToWaveform();
             }
         }
     }
@@ -4381,6 +4354,8 @@ public partial class Form1 : Form
         string outputDirectory,
         string targetPath)
     {
+        void ReportProgress(string message) => _exportOverlay?.AppendLog(message);
+
         if (targetPath.Length == 0)
         {
             AppendReport(
@@ -4394,6 +4369,7 @@ public partial class Form1 : Form
         WwiseMusicPlan plan;
         try
         {
+            ReportProgress("Building import plan...");
             plan = WwiseMusicPlanBuilder.Build(
                 BuildNamingSourcePath(preview.SourcePath),
                 preview.WavInfo.SampleRate,
@@ -4404,9 +4380,11 @@ public partial class Form1 : Form
                 snapshot.PartGroupIds,
                 snapshot.PlaylistNameOverrides,
                 outputDirectory);
+            ReportProgress($"Plan ready: {plan.Playlists.Count} playlist(s).");
         }
         catch (Exception ex)
         {
+            ReportProgress($"Error: {ex.Message}");
             AppendReport(
                 $"=== Wwise Import ==={Environment.NewLine}"
                 + $"Message : インポート計画の作成に失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}");
@@ -4420,10 +4398,15 @@ public partial class Form1 : Form
             bool exists;
             try
             {
+                ReportProgress("Checking State Group...");
                 exists = await WaapiObjectUtil.ExistsAsync(_waapiSettings, stateGroupPath);
+                ReportProgress(exists
+                    ? "Existing State Group found."
+                    : "State Group is available.");
             }
             catch (Exception ex)
             {
+                ReportProgress($"Error: {ex.Message}");
                 AppendReport(
                     $"=== Wwise Import ==={Environment.NewLine}"
                     + $"Status  : NG{Environment.NewLine}"
@@ -4438,7 +4421,7 @@ public partial class Form1 : Form
 
             if (exists)
             {
-                var conflict = MessageBox.Show(
+                var conflict = OwnerCenteredMessageBox.Show(
                     this,
                     $"State Group が既に存在します。\n\n"
                     + $"{stateGroupPath}\n\n"
@@ -4451,6 +4434,7 @@ public partial class Form1 : Form
 
                 if (conflict != DialogResult.Yes || exportGeneration != _exportGeneration)
                 {
+                    ReportProgress("Import cancelled.");
                     AppendReport(
                         $"=== Wwise Import ==={Environment.NewLine}"
                         + $"Message : 既存 State Group のためインポートを中断しました。{Environment.NewLine}"
@@ -4469,6 +4453,7 @@ public partial class Form1 : Form
 
         try
         {
+            var progress = new Progress<string>(ReportProgress);
             var log = await Task.Run(() => WaapiMusicImporter.ImportAsync(
                 _waapiSettings,
                 importSettings,
@@ -4479,7 +4464,8 @@ public partial class Form1 : Form
                 snapshot.Parts,
                 preview.WavInfo.SampleRate,
                 preview.WavInfo.BlockAlign,
-                overwriteStateGroup));
+                overwriteStateGroup,
+                progress));
             if (!IsDisposed)
             {
                 AppendReport(log);
@@ -4489,6 +4475,7 @@ public partial class Form1 : Form
         {
             if (!IsDisposed)
             {
+                ReportProgress($"Error: {ex.Message}");
                 AppendReport(
                     $"=== Wwise Import ==={Environment.NewLine}"
                     + $"Status  : NG{Environment.NewLine}"
@@ -5037,7 +5024,8 @@ public partial class Form1 : Form
         editorTextBox.AppendText(line + "\n");
     }
 
-    private static Color ColorForLogLine(string line)
+    /// <summary>通常ログとエクスポートオーバーレイで共有するログ行の色定義。</summary>
+    internal static Color ColorForLogLine(string line)
     {
         var t = line.TrimStart();
         if (t.Length == 0)

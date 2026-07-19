@@ -1,0 +1,356 @@
+using System.Drawing.Drawing2D;
+
+namespace MgaWwiseIMImporter.UI;
+
+/// <summary>
+/// 書き出し中にフォームのクライアント領域（WAAPI ステータスバーを除く）を覆うすりガラスオーバーレイ。
+/// 所有フォーム上に枠なし子ウィンドウとして載せ、解除時は <see cref="Form.Opacity"/> でフェードアウトする。
+/// マウス入力はここで吸収する（ショートカットは Form1 のロックフラグ側で抑止）。
+/// </summary>
+internal sealed class ExportGlassOverlay : Form
+{
+    private const string BaseText = "Exporting";
+    private const int MaxDots = 3;
+    private const int FadeOutDelayMs = 1000;
+    private const int FadeOutDurationMs = 300;
+    private const int LogMargin = 18;
+
+    private readonly System.Windows.Forms.Timer _dotsTimer = new() { Interval = 450 };
+    private readonly System.Windows.Forms.Timer _fadeDelayTimer = new() { Interval = FadeOutDelayMs };
+    private readonly System.Windows.Forms.Timer _fadeTimer = new() { Interval = 16 };
+    private readonly List<string> _logLines = [];
+    private Bitmap? _frostedSnapshot;
+    private Font? _messageFont;
+    private Font? _logFont;
+    private int _dotCount = 1;
+    private bool _fadePending;
+    private bool _fading;
+    private long _fadeStartTickMs;
+    private double _fadeStartOpacity = 1.0;
+
+    public ExportGlassOverlay()
+    {
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = false;
+        StartPosition = FormStartPosition.Manual;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ControlBox = false;
+        AutoScaleMode = AutoScaleMode.None;
+        DoubleBuffered = true;
+        Opacity = 1.0;
+        Visible = false;
+
+        SetStyle(
+            ControlStyles.AllPaintingInWmPaint
+            | ControlStyles.OptimizedDoubleBuffer
+            | ControlStyles.UserPaint,
+            true);
+
+        _dotsTimer.Tick += (_, _) =>
+        {
+            _dotCount = _dotCount % MaxDots + 1;
+            Invalidate();
+        };
+        _fadeDelayTimer.Tick += (_, _) => StartFadeOut();
+        _fadeTimer.Tick += (_, _) => AdvanceFade();
+    }
+
+    /// <summary>所有フォームのアクティベーションを奪わずに表示する。</summary>
+    protected override bool ShowWithoutActivation => true;
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            var cp = base.CreateParams;
+            // タスクバーに出さず、親の上に載せるツールウィンドウ扱いにする。
+            cp.ExStyle |= 0x00000080; // WS_EX_TOOLWINDOW
+            return cp;
+        }
+    }
+
+    /// <param name="coverBounds">覆う範囲（ホストのクライアント座標）。ステータスバーなどは含めない。</param>
+    public void ShowOverlay(Form host, Rectangle coverBounds)
+    {
+        CancelFade();
+        Owner = host;
+        TopMost = host.TopMost;
+        Bounds = new Rectangle(host.PointToScreen(coverBounds.Location), coverBounds.Size);
+        BackColor = UiColors.ForControlBack(UiColors.SurfaceBack);
+
+        _frostedSnapshot?.Dispose();
+        _frostedSnapshot = CaptureFrostedSnapshot(host, coverBounds);
+        _dotCount = 1;
+        _logLines.Clear();
+        Opacity = 1.0;
+
+        if (!Visible)
+        {
+            Show(host);
+        }
+        else
+        {
+            Invalidate();
+        }
+
+        _dotsTimer.Start();
+    }
+
+    /// <summary>書き出し中の進行ログを左下へ追加する。</summary>
+    public void AppendLog(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text) || IsDisposed)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => AppendLog(text));
+            return;
+        }
+
+        var lines = text
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Split('\n');
+        foreach (var line in lines)
+        {
+            if (line.Length > 0)
+            {
+                // セグメント明細など、既存ログのインデントは維持する。
+                _logLines.Add(line.TrimEnd());
+            }
+        }
+
+        Invalidate();
+    }
+
+    /// <summary>完了表示を 1 秒維持してから、Opacity を 0 まで落として非表示にする。</summary>
+    public void BeginFadeOut()
+    {
+        if (!Visible || _fadePending || _fading)
+        {
+            return;
+        }
+
+        _dotsTimer.Stop();
+        _fadePending = true;
+        _fadeDelayTimer.Start();
+    }
+
+    private void StartFadeOut()
+    {
+        _fadeDelayTimer.Stop();
+        _fadePending = false;
+        if (!Visible)
+        {
+            return;
+        }
+
+        // 完了ログは 1 秒間見せたあと消し、すりガラスだけをフェードアウトする。
+        _logLines.Clear();
+        Invalidate();
+        Update();
+        _fading = true;
+        _fadeStartOpacity = Opacity;
+        _fadeStartTickMs = Environment.TickCount64;
+        _fadeTimer.Start();
+    }
+
+    public void HideOverlay()
+    {
+        CancelFade();
+        _dotsTimer.Stop();
+        Opacity = 1.0;
+        Hide();
+        _frostedSnapshot?.Dispose();
+        _frostedSnapshot = null;
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        if (_frostedSnapshot is { } snapshot)
+        {
+            g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+            g.PixelOffsetMode = PixelOffsetMode.Half;
+            g.DrawImage(snapshot, ClientRectangle);
+        }
+        else
+        {
+            using var back = new SolidBrush(UiColors.ForControlBack(UiColors.SurfaceBack));
+            g.FillRectangle(back, ClientRectangle);
+        }
+
+        DrawMessage(g);
+        DrawLog(g);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _dotsTimer.Dispose();
+            _fadeDelayTimer.Dispose();
+            _fadeTimer.Dispose();
+            _frostedSnapshot?.Dispose();
+            _frostedSnapshot = null;
+            _messageFont?.Dispose();
+            _messageFont = null;
+            _logFont?.Dispose();
+            _logFont = null;
+        }
+
+        base.Dispose(disposing);
+    }
+
+    private float FadeProgress() =>
+        Math.Clamp((Environment.TickCount64 - _fadeStartTickMs) / (float)FadeOutDurationMs, 0f, 1f);
+
+    private void AdvanceFade()
+    {
+        var progress = FadeProgress();
+        Opacity = _fadeStartOpacity * (1.0 - progress);
+        if (progress >= 1f)
+        {
+            HideOverlay();
+        }
+    }
+
+    private void CancelFade()
+    {
+        _fadeDelayTimer.Stop();
+        _fadeTimer.Stop();
+        _fadePending = false;
+        _fading = false;
+    }
+
+    private void DrawMessage(Graphics g)
+    {
+        _messageFont ??= new Font(Font.FontFamily, 15f, FontStyle.Bold, GraphicsUnit.Point);
+        const TextFormatFlags flags = TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix;
+
+        // ドット数が変わっても本文位置が動かないよう、最大幅基準でセンタリングする。
+        var baseSize = TextRenderer.MeasureText(g, BaseText, _messageFont, Size.Empty, flags);
+        var maxDotsText = " " + new string('.', MaxDots);
+        var maxDotsSize = TextRenderer.MeasureText(g, maxDotsText, _messageFont, Size.Empty, flags);
+        var x = (Width - (baseSize.Width + maxDotsSize.Width)) / 2;
+        var y = (Height - baseSize.Height) / 2;
+        var dotsText = " " + new string('.', _dotCount);
+
+        DrawTextWithShadow(g, BaseText, new Point(x, y), flags);
+        DrawTextWithShadow(g, dotsText, new Point(x + baseSize.Width, y), flags);
+    }
+
+    private void DrawLog(Graphics g)
+    {
+        if (_logLines.Count == 0)
+        {
+            return;
+        }
+
+        _logFont ??= AppFonts.CreateLogFont(9f);
+        const TextFormatFlags flags =
+            TextFormatFlags.NoPadding
+            | TextFormatFlags.NoPrefix
+            | TextFormatFlags.EndEllipsis
+            | TextFormatFlags.SingleLine;
+        var lineHeight = TextRenderer.MeasureText(g, "Ag", _logFont, Size.Empty, flags).Height + 3;
+        var maximumBottom = Height - LogMargin;
+        var maximumWidth = Math.Max(1, Width - LogMargin * 2);
+        // 行数を固定せず、画面内に入るだけ下端から上へ表示する。
+        var availableHeight = Math.Max(0, maximumBottom - LogMargin);
+        var visibleCount = Math.Min(_logLines.Count, availableHeight / lineHeight);
+        var first = _logLines.Count - visibleCount;
+        var y = maximumBottom - visibleCount * lineHeight;
+
+        for (var i = first; i < _logLines.Count; i++, y += lineHeight)
+        {
+            var bounds = new Rectangle(LogMargin, y, maximumWidth, lineHeight);
+            TextRenderer.DrawText(
+                g,
+                _logLines[i],
+                _logFont,
+                new Rectangle(bounds.X + 1, bounds.Y + 1, bounds.Width, bounds.Height),
+                Color.FromArgb(210, Color.Black),
+                flags);
+            TextRenderer.DrawText(
+                g,
+                _logLines[i],
+                _logFont,
+                bounds,
+                Form1.ColorForLogLine(_logLines[i]),
+                flags);
+        }
+    }
+
+    private void DrawTextWithShadow(Graphics g, string text, Point location, TextFormatFlags flags)
+    {
+        TextRenderer.DrawText(
+            g,
+            text,
+            _messageFont,
+            new Point(location.X + 1, location.Y + 1),
+            Color.Black,
+            flags);
+        TextRenderer.DrawText(g, text, _messageFont, location, UiColors.PrimaryFore, flags);
+    }
+
+    /// <summary>
+    /// 覆う範囲の現在の見た目をキャプチャし、縮小→拡大の 2 段階でぼかした画像を作る。
+    /// キャプチャできない場合は null（単色背景で代替）。
+    /// </summary>
+    private static Bitmap? CaptureFrostedSnapshot(Form host, Rectangle coverBounds)
+    {
+        var size = coverBounds.Size;
+        if (size.Width <= 0 || size.Height <= 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var capture = new Bitmap(size.Width, size.Height);
+            using (var g = Graphics.FromImage(capture))
+            {
+                g.CopyFromScreen(host.PointToScreen(coverBounds.Location), Point.Empty, size);
+            }
+
+            return BuildFrosted(capture, size);
+        }
+        catch (Exception)
+        {
+            // 画面ロックなどでキャプチャ不可のときは OnPaint 側の単色塗りへフォールバック。
+            return null;
+        }
+    }
+
+    private static Bitmap BuildFrosted(Bitmap source, Size size)
+    {
+        using var half = ScaleTo(source, size.Width / 4, size.Height / 4);
+        using var tiny = ScaleTo(half, size.Width / 12, size.Height / 12);
+
+        var frosted = new Bitmap(size.Width, size.Height);
+        using var g = Graphics.FromImage(frosted);
+        g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+        g.PixelOffsetMode = PixelOffsetMode.Half;
+        g.DrawImage(tiny, new Rectangle(Point.Empty, size));
+
+        var tintBase = UiColors.SurfaceBack;
+        using var tint = new SolidBrush(Color.FromArgb(140, tintBase.R, tintBase.G, tintBase.B));
+        g.FillRectangle(tint, new Rectangle(Point.Empty, size));
+        return frosted;
+    }
+
+    private static Bitmap ScaleTo(Bitmap source, int width, int height)
+    {
+        var scaled = new Bitmap(Math.Max(1, width), Math.Max(1, height));
+        using var g = Graphics.FromImage(scaled);
+        g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+        g.PixelOffsetMode = PixelOffsetMode.Half;
+        g.DrawImage(source, new Rectangle(0, 0, scaled.Width, scaled.Height));
+        return scaled;
+    }
+}

@@ -227,7 +227,8 @@ internal sealed class ColorDevPanelForm : Form
             Color = Color.FromArgb(current.R, current.G, current.B),
         };
 
-        if (dialog.ShowDialog(this) != DialogResult.OK)
+        // アプリ本体（Owner）の中央に表示する。単体表示時はパネル中央。
+        if (OwnerCenteredMessageBox.ShowDialog(Owner ?? (IWin32Window)this, dialog) != DialogResult.OK)
         {
             return;
         }

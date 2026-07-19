@@ -23,6 +23,7 @@ internal static class WaapiMusicImporter
         uint sampleRate,
         ushort blockAlign,
         bool overwriteExistingStateGroup = false,
+        IProgress<string>? progress = null,
         CancellationToken cancellationToken = default)
     {
         if (sampleRate == 0 || blockAlign == 0)
@@ -31,25 +32,32 @@ internal static class WaapiMusicImporter
         }
 
         var sb = new StringBuilder();
-        sb.AppendLine("=== Wwise Import ===");
-        sb.AppendLine($"Target  : {parentPath}");
-        sb.AppendLine($"Mode    : {(plan.IsMultiPart ? "Music Switch Container" : "Music Playlist Container")}");
-        sb.AppendLine($"Name    : {plan.ContainerName}");
+        void Log(string line = "")
+        {
+            sb.AppendLine(line);
+            progress?.Report(line);
+        }
+
+        Log("=== Wwise Import ===");
+        Log($"Target  : {parentPath}");
+        Log($"Mode    : {(plan.IsMultiPart ? "Music Switch Container" : "Music Playlist Container")}");
+        Log($"Name    : {plan.ContainerName}");
 
         string? stateGroupPath = null;
         if (plan.IsMultiPart)
         {
             stateGroupPath = importSettings.ResolveStateGroupPath(plan.ContainerName);
-            sb.AppendLine($"StateGrp : {stateGroupPath}");
+            Log($"StateGrp : {stateGroupPath}");
             if (overwriteExistingStateGroup)
             {
+                progress?.Report("StateGrp : 既存を削除中...");
                 await WaapiObjectUtil.DeleteAsync(waapiSettings, stateGroupPath, cancellationToken)
                     .ConfigureAwait(false);
-                sb.AppendLine("StateGrp : 既存を削除して新規作成");
+                Log("StateGrp : 既存を削除して新規作成");
             }
             else
             {
-                sb.AppendLine("StateGrp : 新規作成");
+                Log("StateGrp : 新規作成");
             }
         }
 
@@ -61,7 +69,8 @@ internal static class WaapiMusicImporter
             outputParts,
             sampleRate,
             blockAlign,
-            sb);
+            Log,
+            progress);
 
         // タイムアウトは import を含むので長めに取る
         var timeout = TimeSpan.FromMilliseconds(Math.Max(waapiSettings.TimeoutMs, 30000));
@@ -74,24 +83,26 @@ internal static class WaapiMusicImporter
             segmentWavs,
             importSettings,
             stateGroupPath);
+        progress?.Report("Creating Wwise objects...");
         _ = await client.CallAsync(
                 "ak.wwise.core.object.set",
                 setArgs,
                 new Dictionary<string, object> { ["return"] = new[] { "id", "name", "type", "path" } },
                 cancellationToken)
             .ConfigureAwait(false);
+        progress?.Report("Wwise objects created.");
 
         if (plan.IsMultiPart)
         {
-            sb.AppendLine(
+            Log(
                 "Transition : any→any / Exit Source at=Immediate"
                 + " / Destination Sync To=Entry Cue / Fade-out ON");
-            sb.AppendLine("Transition : Fade Time/Offset/Curve は WAAPI 非対応のため未設定（Wwise 上で手動設定）");
+            Log("Transition : Fade Time/Offset/Curve は WAAPI 非対応のため未設定（Wwise 上で手動設定）");
         }
 
         foreach (var playlist in plan.Playlists)
         {
-            sb.AppendLine($"--- Playlist: {playlist.Name} ({playlist.Segments.Count} segments) ---");
+            Log($"--- Playlist: {playlist.Name} ({playlist.Segments.Count} segments) ---");
             foreach (var segment in playlist.Segments)
             {
                 var flags = new List<string>();
@@ -122,7 +133,7 @@ internal static class WaapiMusicImporter
 
                 var durationMs = Math.Max(0.0, segment.ClipEndMs - segment.ClipStartMs);
                 var entryLocal = Math.Max(0.0, segment.EntryCueMs - segment.ClipStartMs);
-                sb.AppendLine(
+                Log(
                     $"  {segment.Name}"
                     + $"  len={durationMs:0}ms"
                     + (entryLocal > 0.5 ? $"  entry=+{entryLocal:0}ms" : string.Empty)
@@ -131,9 +142,9 @@ internal static class WaapiMusicImporter
             }
         }
 
-        sb.AppendLine($"Slices  : {segmentWavs.Count}");
-        sb.AppendLine("=== Wwise Import complete ===");
-        sb.AppendLine();
+        Log($"Slices  : {segmentWavs.Count}");
+        Log("=== Wwise Import complete ===");
+        Log();
         return sb.ToString();
     }
 
@@ -148,10 +159,11 @@ internal static class WaapiMusicImporter
         IReadOnlyList<WaveformOutputPart> outputParts,
         uint sampleRate,
         ushort blockAlign,
-        StringBuilder log)
+        Action<string> log,
+        IProgress<string>? progress)
     {
         Directory.CreateDirectory(outputDirectory);
-        log.AppendLine($"Output  : {outputDirectory}");
+        log($"Output  : {outputDirectory}");
 
         var partStarts = outputParts.ToDictionary(
             part => Path.GetFullPath(Path.Combine(outputDirectory, part.FileName)),
@@ -202,6 +214,7 @@ internal static class WaapiMusicImporter
                         endSample,
                         blockAlign);
                     map[TrackSliceKey(segment.Name, track.Name)] = dest;
+                    progress?.Report($"WAV: {fileName}");
                 }
             }
         }
