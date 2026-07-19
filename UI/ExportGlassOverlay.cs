@@ -1,19 +1,25 @@
 using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
 
 namespace MgaWwiseIMImporter.UI;
 
 /// <summary>
-/// 書き出し中にフォームのクライアント領域（WAAPI ステータスバーを除く）を覆うすりガラスオーバーレイ。
+/// 書き出し／読み込み中にフォームのクライアント領域（WAAPI ステータスバーを除く）を覆うすりガラスオーバーレイ。
 /// 所有フォーム上に枠なし子ウィンドウとして載せ、解除時は <see cref="Form.Opacity"/> でフェードアウトする。
 /// マウス入力はここで吸収する（ショートカットは Form1 のロックフラグ側で抑止）。
 /// </summary>
 internal sealed class ExportGlassOverlay : Form
 {
-    private const string BaseText = "Exporting";
     private const int MaxDots = 3;
     private const int FadeOutDelayMs = 1000;
     private const int FadeOutDurationMs = 300;
     private const int LogMargin = 18;
+    private const int WmMouseActivate = 0x0021;
+    private const int WmNcActivate = 0x0086;
+    private const int MaNoActivate = 3;
+    private const int SwShowNoActivate = 4;
+    private const int WsExToolwindow = 0x00000080;
+    private const int WsExNoActivate = 0x08000000;
 
     private readonly System.Windows.Forms.Timer _dotsTimer = new() { Interval = 450 };
     private readonly System.Windows.Forms.Timer _fadeDelayTimer = new() { Interval = FadeOutDelayMs };
@@ -22,6 +28,7 @@ internal sealed class ExportGlassOverlay : Form
     private Bitmap? _frostedSnapshot;
     private Font? _messageFont;
     private Font? _logFont;
+    private string _baseText = "Exporting";
     private int _dotCount = 1;
     private bool _fadePending;
     private bool _fading;
@@ -59,19 +66,42 @@ internal sealed class ExportGlassOverlay : Form
     /// <summary>所有フォームのアクティベーションを奪わずに表示する。</summary>
     protected override bool ShowWithoutActivation => true;
 
+    /// <summary>フェード中でなく、忙しい表示として前面に出ているとき。</summary>
+    public bool IsShowingBusy => Visible && !_fading && !_fadePending;
+
     protected override CreateParams CreateParams
     {
         get
         {
             var cp = base.CreateParams;
-            // タスクバーに出さず、親の上に載せるツールウィンドウ扱いにする。
-            cp.ExStyle |= 0x00000080; // WS_EX_TOOLWINDOW
+            // タスクバーに出さず、親のアクティブ状態も奪わない。
+            cp.ExStyle |= WsExToolwindow | WsExNoActivate;
             return cp;
         }
     }
 
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WmMouseActivate)
+        {
+            m.Result = MaNoActivate;
+            return;
+        }
+
+        // このウィンドウが前面に来ても、親のタイトルバーはアクティブ見た目のままにする。
+        if (m.Msg == WmNcActivate && m.WParam != IntPtr.Zero && Owner is { IsHandleCreated: true } owner)
+        {
+            base.WndProc(ref m);
+            KeepOwnerLookingActive(owner);
+            return;
+        }
+
+        base.WndProc(ref m);
+    }
+
     /// <param name="coverBounds">覆う範囲（ホストのクライアント座標）。ステータスバーなどは含めない。</param>
-    public void ShowOverlay(Form host, Rectangle coverBounds)
+    /// <param name="baseText">中央メッセージ本文（末尾ドットはアニメーションで付与）。</param>
+    public void ShowOverlay(Form host, Rectangle coverBounds, string baseText)
     {
         CancelFade();
         Owner = host;
@@ -81,21 +111,65 @@ internal sealed class ExportGlassOverlay : Form
 
         _frostedSnapshot?.Dispose();
         _frostedSnapshot = CaptureFrostedSnapshot(host, coverBounds);
+        _baseText = NormalizeMessage(baseText);
         _dotCount = 1;
         _logLines.Clear();
         Opacity = 1.0;
 
         if (!Visible)
         {
-            Show(host);
+            ShowWithoutActivating(host);
         }
         else
         {
             Invalidate();
         }
 
+        Refresh();
+        Update();
+        KeepOwnerLookingActive(host);
         _dotsTimer.Start();
     }
+
+    /// <summary>Show() は所有フォームを一瞬非アクティブにするため、SW_SHOWNOACTIVATE で出す。</summary>
+    private void ShowWithoutActivating(Form host)
+    {
+        Owner = host;
+        if (!IsHandleCreated)
+        {
+            CreateHandle();
+        }
+
+        ShowWindow(Handle, SwShowNoActivate);
+        Visible = true;
+    }
+
+    /// <summary>表示を維持したまま中央メッセージだけ差し替える（起動→Last Session 継続用）。</summary>
+    public void SetMessage(string baseText)
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => SetMessage(baseText));
+            return;
+        }
+
+        var next = NormalizeMessage(baseText);
+        if (string.Equals(_baseText, next, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _baseText = next;
+        Invalidate();
+    }
+
+    private static string NormalizeMessage(string baseText) =>
+        string.IsNullOrWhiteSpace(baseText) ? "Loading" : baseText.Trim();
 
     /// <summary>書き出し中の進行ログを左下へ追加する。</summary>
     public void AppendLog(string text)
@@ -150,6 +224,7 @@ internal sealed class ExportGlassOverlay : Form
         }
 
         // 完了ログは 1 秒間見せたあと消し、すりガラスだけをフェードアウトする。
+        // Form.Opacity なら下の実 UI がそのまま透けるので、終了時の点滅が起きない。
         _logLines.Clear();
         Invalidate();
         Update();
@@ -161,12 +236,17 @@ internal sealed class ExportGlassOverlay : Form
 
     public void HideOverlay()
     {
+        var owner = Owner as Form;
         CancelFade();
         _dotsTimer.Stop();
         Opacity = 1.0;
         Hide();
         _frostedSnapshot?.Dispose();
         _frostedSnapshot = null;
+        if (owner is { IsHandleCreated: true, IsDisposed: false })
+        {
+            KeepOwnerLookingActive(owner);
+        }
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -233,14 +313,14 @@ internal sealed class ExportGlassOverlay : Form
         const TextFormatFlags flags = TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix;
 
         // ドット数が変わっても本文位置が動かないよう、最大幅基準でセンタリングする。
-        var baseSize = TextRenderer.MeasureText(g, BaseText, _messageFont, Size.Empty, flags);
+        var baseSize = TextRenderer.MeasureText(g, _baseText, _messageFont, Size.Empty, flags);
         var maxDotsText = " " + new string('.', MaxDots);
         var maxDotsSize = TextRenderer.MeasureText(g, maxDotsText, _messageFont, Size.Empty, flags);
         var x = (Width - (baseSize.Width + maxDotsSize.Width)) / 2;
         var y = (Height - baseSize.Height) / 2;
         var dotsText = " " + new string('.', _dotCount);
 
-        DrawTextWithShadow(g, BaseText, new Point(x, y), flags);
+        DrawTextWithShadow(g, _baseText, new Point(x, y), flags);
         DrawTextWithShadow(g, dotsText, new Point(x + baseSize.Width, y), flags);
     }
 
@@ -299,7 +379,7 @@ internal sealed class ExportGlassOverlay : Form
     }
 
     /// <summary>
-    /// 覆う範囲の現在の見た目をキャプチャし、縮小→拡大の 2 段階でぼかした画像を作る。
+    /// 覆う範囲だけをキャプチャし、縮小→拡大の 2 段階でぼかした画像を作る。
     /// キャプチャできない場合は null（単色背景で代替）。
     /// </summary>
     private static Bitmap? CaptureFrostedSnapshot(Form host, Rectangle coverBounds)
@@ -312,25 +392,78 @@ internal sealed class ExportGlassOverlay : Form
 
         try
         {
-            using var capture = new Bitmap(size.Width, size.Height);
-            using (var g = Graphics.FromImage(capture))
+            // Form.DrawToBitmap はタイトルバー込みのウィンドウ全体を描くため使わない。
+            using var capture = host.Opacity >= 1d
+                ? CaptureViaScreen(host, coverBounds) ?? CaptureViaClientControls(host, coverBounds)
+                : CaptureViaClientControls(host, coverBounds) ?? CaptureViaScreen(host, coverBounds);
+            if (capture is null)
             {
-                g.CopyFromScreen(host.PointToScreen(coverBounds.Location), Point.Empty, size);
+                return null;
             }
 
             return BuildFrosted(capture, size);
         }
         catch (Exception)
         {
-            // 画面ロックなどでキャプチャ不可のときは OnPaint 側の単色塗りへフォールバック。
             return null;
         }
     }
 
+    private static Bitmap? CaptureViaScreen(Form host, Rectangle coverBounds)
+    {
+        var size = coverBounds.Size;
+        if (size.Width <= 0 || size.Height <= 0 || host.Opacity < 1d)
+        {
+            return null;
+        }
+
+        var capture = new Bitmap(size.Width, size.Height);
+        using var g = Graphics.FromImage(capture);
+        g.CopyFromScreen(host.PointToScreen(coverBounds.Location), Point.Empty, size);
+        return capture;
+    }
+
+    private static Bitmap? CaptureViaClientControls(Form host, Rectangle coverBounds)
+    {
+        var clientSize = host.ClientSize;
+        var clip = Rectangle.Intersect(coverBounds, new Rectangle(Point.Empty, clientSize));
+        if (clip.Width <= 0 || clip.Height <= 0)
+        {
+            return null;
+        }
+
+        var capture = new Bitmap(clip.Width, clip.Height);
+        using var g = Graphics.FromImage(capture);
+        g.Clear(host.BackColor);
+        g.TranslateTransform(-clip.X, -clip.Y);
+
+        var children = new Control[host.Controls.Count];
+        host.Controls.CopyTo(children, 0);
+        Array.Reverse(children);
+        foreach (var child in children)
+        {
+            if (!child.Visible || child.Width <= 0 || child.Height <= 0)
+            {
+                continue;
+            }
+
+            if (!child.Bounds.IntersectsWith(clip))
+            {
+                continue;
+            }
+
+            using var childBmp = new Bitmap(child.Width, child.Height);
+            child.DrawToBitmap(childBmp, new Rectangle(0, 0, child.Width, child.Height));
+            g.DrawImageUnscaled(childBmp, child.Left, child.Top);
+        }
+
+        return capture;
+    }
+
     private static Bitmap BuildFrosted(Bitmap source, Size size)
     {
-        using var half = ScaleTo(source, size.Width / 4, size.Height / 4);
-        using var tiny = ScaleTo(half, size.Width / 12, size.Height / 12);
+        using var half = ScaleTo(source, size.Width / 6, size.Height / 6);
+        using var tiny = ScaleTo(half, size.Width / 20, size.Height / 20);
 
         var frosted = new Bitmap(size.Width, size.Height);
         using var g = Graphics.FromImage(frosted);
@@ -353,4 +486,24 @@ internal sealed class ExportGlassOverlay : Form
         g.DrawImage(source, new Rectangle(0, 0, scaled.Width, scaled.Height));
         return scaled;
     }
+
+    private static void KeepOwnerLookingActive(Form owner)
+    {
+        if (!owner.IsHandleCreated || owner.IsDisposed)
+        {
+            return;
+        }
+
+        SetActiveWindow(owner.Handle);
+        SendMessage(owner.Handle, WmNcActivate, (IntPtr)1, IntPtr.Zero);
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetActiveWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 }

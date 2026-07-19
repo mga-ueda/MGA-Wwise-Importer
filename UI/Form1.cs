@@ -62,6 +62,7 @@ internal enum UiInteractionLock
     None = 0,
     SourceNameEdit = 1,
     Export = 2,
+    Load = 4,
 }
 
 public partial class Form1 : Form
@@ -130,6 +131,7 @@ public partial class Form1 : Form
     private bool _exportBusy;
     private UiInteractionLock _uiInteractionLocks;
     private ExportGlassOverlay? _exportOverlay;
+    private string _busyOverlayMessage = "Exporting";
     private bool _populatingPlaylistChoices;
     private bool _automaticPlaylistPlayback;
     private double _playlistFadeInSeconds;
@@ -353,6 +355,9 @@ public partial class Form1 : Form
         LayoutActionBarCopyright();
         Refresh();
         Update();
+
+        // フォームを不透明化する前にすりガラスを載せ、素の UI が一瞬見えるのを防ぐ。
+        SetUiInteractionLocked(UiInteractionLock.Load, locked: true, "Starting");
         Opacity = 1d;
         Activate();
 
@@ -366,41 +371,53 @@ public partial class Form1 : Form
     /// <summary>起動直後: WAAPI 接続確認 → 自動波形読み込み。</summary>
     private async void RunStartupSequenceAsync()
     {
-        if (_waapiSettings.ProbeOnStartup)
+        var lastSessionLoadStarted = false;
+        try
         {
-            waapiStatusBar.SetPending();
-            try
+            if (_waapiSettings.ProbeOnStartup)
             {
-                var result = await WaapiStartupProbe.RunAsync(_waapiSettings);
-                if (!IsDisposed)
+                waapiStatusBar.SetPending();
+                try
                 {
-                    ApplyWaapiProbeResult(result, logReport: true);
+                    var result = await WaapiStartupProbe.RunAsync(_waapiSettings);
+                    if (!IsDisposed)
+                    {
+                        ApplyWaapiProbeResult(result, logReport: true);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (!IsDisposed)
+                    {
+                        ApplyWaapiProbeResult(
+                            new WaapiProbeResult
+                            {
+                                Ok = false,
+                                Url = _waapiSettings.Url,
+                                Message = ex.Message,
+                            },
+                            logReport: true);
+                    }
                 }
             }
-            catch (Exception ex)
+            else
             {
-                if (!IsDisposed)
-                {
-                    ApplyWaapiProbeResult(
-                        new WaapiProbeResult
-                        {
-                            Ok = false,
-                            Url = _waapiSettings.Url,
-                            Message = ex.Message,
-                        },
-                        logReport: true);
-                }
+                waapiStatusBar.SetSkipped();
+                _waapiSelectionTimer.Stop();
             }
-        }
-        else
-        {
-            waapiStatusBar.SetSkipped();
-            _waapiSelectionTimer.Stop();
-        }
 
-        if (!IsDisposed)
+            if (!IsDisposed)
+            {
+                lastSessionLoadStarted = LoadLastWaveAsDropped();
+            }
+        }
+        finally
         {
-            LoadLastWaveAsDropped();
+            // Last Session 読み込みへ続く場合は、そちらがすりガラス解除を引き継ぐ。
+            if (!IsDisposed && !lastSessionLoadStarted)
+            {
+                SetUiInteractionLocked(UiInteractionLock.Load, locked: false);
+            }
         }
     }
 
@@ -3637,16 +3654,38 @@ public partial class Form1 : Form
     }
 
     /// <summary>
-    /// 編集や書き出し中の操作ロックを理由別に管理する。
+    /// 編集・書き出し・読み込み中の操作ロックを理由別に管理する。
     /// 複数の理由が重なっても、最後のロックが解除されるまでショートカットは再開しない。
     /// </summary>
-    private void SetUiInteractionLocked(UiInteractionLock reason, bool locked)
+    private void SetUiInteractionLocked(
+        UiInteractionLock reason,
+        bool locked,
+        string? overlayMessage = null)
     {
+        var messageChanged = false;
+        if (locked
+            && reason is UiInteractionLock.Export or UiInteractionLock.Load
+            && !string.IsNullOrWhiteSpace(overlayMessage))
+        {
+            var trimmed = overlayMessage.Trim();
+            if (!string.Equals(_busyOverlayMessage, trimmed, StringComparison.Ordinal))
+            {
+                _busyOverlayMessage = trimmed;
+                messageChanged = true;
+            }
+        }
+
         var next = locked
             ? _uiInteractionLocks | reason
             : _uiInteractionLocks & ~reason;
         if (next == _uiInteractionLocks)
         {
+            // ロック継続中のメッセージ差し替え（Starting → Loading Last Session など）。
+            if (messageChanged && next.HasFlag(reason))
+            {
+                UpdateBusyGlassOverlay();
+            }
+
             return;
         }
 
@@ -3654,27 +3693,44 @@ public partial class Form1 : Form
         EndActiveTransportShortcutFeedback();
         _resumePlaybackAfterBackwardSeek = false;
 
-        SetExportOverlayVisible(_uiInteractionLocks.HasFlag(UiInteractionLock.Export));
+        UpdateBusyGlassOverlay();
         UpdateExportButtonState();
     }
 
     /// <summary>
-    /// 書き出し中はコントロールを無効化せず、WAAPI ステータスバーを除くフォーム全体を
+    /// 書き出し／読み込み中はコントロールを無効化せず、WAAPI ステータスバーを除くフォーム全体を
     /// すりガラスで覆ってマウス操作を遮断する（ショートカットは <see cref="_uiInteractionLocks"/> 側で抑止）。
-    /// 解除は子ウィンドウの Opacity フェードで行う。
+    /// 解除は完了ログを短く見せたあと、子ウィンドウの Opacity フェードで行う。
     /// </summary>
-    private void SetExportOverlayVisible(bool visible)
+    private void UpdateBusyGlassOverlay()
     {
-        if (visible)
+        string? message = null;
+        if (_uiInteractionLocks.HasFlag(UiInteractionLock.Export))
+        {
+            message = "Exporting";
+        }
+        else if (_uiInteractionLocks.HasFlag(UiInteractionLock.Load))
+        {
+            message = _busyOverlayMessage;
+        }
+
+        if (message is not null)
         {
             _exportOverlay ??= new ExportGlassOverlay();
-            var coverBounds = new Rectangle(0, 0, ClientSize.Width, waapiStatusBar.Top);
-            _exportOverlay.ShowOverlay(this, coverBounds);
+            if (_exportOverlay.IsShowingBusy)
+            {
+                _exportOverlay.SetMessage(message);
+            }
+            else
+            {
+                var coverBounds = new Rectangle(0, 0, ClientSize.Width, waapiStatusBar.Top);
+                _exportOverlay.ShowOverlay(this, coverBounds, message);
+            }
+
+            return;
         }
-        else
-        {
-            _exportOverlay?.BeginFadeOut();
-        }
+
+        _exportOverlay?.BeginFadeOut();
     }
 
     private void UpdateExportButtonState()
@@ -3682,6 +3738,7 @@ public partial class Form1 : Form
         var preflight = EvaluateExportPreflight();
         exportButton.Enabled = !_exportBusy
             && !_uiInteractionLocks.HasFlag(UiInteractionLock.Export)
+            && !_uiInteractionLocks.HasFlag(UiInteractionLock.Load)
             && preflight.CanExport;
 
         // 読み込み済みのときだけ事前検証の変化をログ（起動直後の空状態は黙る）
@@ -4080,7 +4137,8 @@ public partial class Form1 : Form
 
     private void EditorTextBox_DragEnter(object? sender, DragEventArgs e)
     {
-        if (_uiInteractionLocks.HasFlag(UiInteractionLock.Export))
+        if (_uiInteractionLocks.HasFlag(UiInteractionLock.Export)
+            || _uiInteractionLocks.HasFlag(UiInteractionLock.Load))
         {
             e.Effect = DragDropEffects.None;
             return;
@@ -4097,7 +4155,8 @@ public partial class Form1 : Form
 
     private void EditorTextBox_DragDrop(object? sender, DragEventArgs e)
     {
-        if (_uiInteractionLocks.HasFlag(UiInteractionLock.Export))
+        if (_uiInteractionLocks.HasFlag(UiInteractionLock.Export)
+            || _uiInteractionLocks.HasFlag(UiInteractionLock.Load))
         {
             return;
         }
@@ -4110,11 +4169,12 @@ public partial class Form1 : Form
         ProcessDroppedFiles(files);
     }
 
-    private void LoadLastWaveAsDropped()
+    /// <returns>読み込み処理を開始したら true（すりガラス解除は呼び出し側ではなく読み込み側が担当）。</returns>
+    private bool LoadLastWaveAsDropped()
     {
         if (!loadLastWaveCheckBox.Checked || string.IsNullOrWhiteSpace(_lastWavePath))
         {
-            return;
+            return false;
         }
 
         string wavPath;
@@ -4125,26 +4185,35 @@ public partial class Form1 : Form
         catch (Exception ex)
         {
             AppendReport($"前回読み込んだ波形のパスが不正です: {ex.Message}" + Environment.NewLine);
-            return;
+            return false;
         }
 
         if (!File.Exists(wavPath))
         {
             AppendReport($"前回読み込んだ波形が見つかりません: {wavPath}" + Environment.NewLine);
-            return;
+            return false;
         }
 
-        ProcessDroppedFiles([wavPath]);
+        ProcessDroppedFiles([wavPath], isLastSessionLoad: true);
+        return true;
     }
 
     private async void ProcessDroppedFiles(
         IEnumerable<string> files,
-        bool rememberInputFiles = true)
+        bool rememberInputFiles = true,
+        bool isLastSessionLoad = false)
     {
         var fileList = files
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .ToArray();
         if (fileList.Length == 0)
+        {
+            return;
+        }
+
+        var loadAlreadyActive = _uiInteractionLocks.HasFlag(UiInteractionLock.Load);
+        if (_uiInteractionLocks.HasFlag(UiInteractionLock.Export)
+            || (loadAlreadyActive && !isLastSessionLoad))
         {
             return;
         }
@@ -4156,71 +4225,90 @@ public partial class Form1 : Form
         }
 
         var exportGeneration = ++_exportGeneration;
-        _sourceBaseNameOverride = null;
-        _loadedPreview = null;
-        _previewSession = null;
-        _exportBusy = false;
-        UpdateTransportPosition();
-        ClearPendingPlaylistUiTransition();
-        ClearPlaylistChoices("読み込み中…");
-        UpdateExportButtonState();
-        waveformView.ClearExportHighlight();
-        _playheadTimer.Stop();
-        // 再読込前に再生ハンドル／一時コピーを解放し、元 WAV の上書きや再解析を妨げない。
-        _audioPlayer.Clear();
-        UpdateTransportPlaybackState();
+        var loadMessage = isLastSessionLoad ? "Loading Last Session" : "Loading";
+        // 起動中すりガラスが既にあればスナップショットは維持し、メッセージだけ差し替える。
+        SetUiInteractionLocked(UiInteractionLock.Load, locked: true, loadMessage);
 
-        // 解析中に OS が白消ししないよう、先に暗いフレームを確定する
-        waveformView.CommitDarkFrame();
-
-        // 巨大 WAV のピーク走査で UI を止めないよう、解析は背景スレッドで行う
-        var (report, preview) = await Task.Run(() =>
-        {
-            var text = DroppedFilesProcessor.Process(fileList, out var previewData);
-            return (text, previewData);
-        });
-
-        if (IsDisposed || exportGeneration != _exportGeneration)
-        {
-            return;
-        }
-
-        AppendReport(report);
-
-        if (preview is null)
-        {
-            _audioPlayer.Clear();
-            waveformView.ClearPreview();
-            _loadedPreview = null;
-            _previewSession = null;
-            UpdateTransportPosition();
-            ClearPlaylistChoices("Playlist を取得できませんでした");
-            UpdateExportButtonState();
-            return;
-        }
-
-        _previewSession = new WaveformPreviewSession(preview);
-        _previewSession.SetCommentRule(_markerSettings.ToCommentRule());
-
-        // 再生用一時コピーは大きな WAV だと数秒かかる。
-        // SetPreview（演出開始）のあと UI スレッドを塞ぐと WinForms.Timer が動けず、
-        // 最初の Tick 時点ですでに RevealTotalMs を超えて一瞬表示になる。
+        WaveformPreviewData? preview = null;
         try
         {
-            await Task.Run(() =>
+            _sourceBaseNameOverride = null;
+            _loadedPreview = null;
+            _previewSession = null;
+            _exportBusy = false;
+            UpdateTransportPosition();
+            ClearPendingPlaylistUiTransition();
+            ClearPlaylistChoices("読み込み中…");
+            UpdateExportButtonState();
+            waveformView.ClearExportHighlight();
+            _playheadTimer.Stop();
+            // 再読込前に再生ハンドル／一時コピーを解放し、元 WAV の上書きや再解析を妨げない。
+            _audioPlayer.Clear();
+            UpdateTransportPlaybackState();
+
+            // 解析中に OS が白消ししないよう、先に暗いフレームを確定する
+            waveformView.CommitDarkFrame();
+
+            // 巨大 WAV のピーク走査で UI を止めないよう、解析は背景スレッドで行う
+            var (report, previewData) = await Task.Run(() =>
             {
-                _audioPlayer.Load(preview.SourcePath);
-                _audioPlayer.SetLoopPlans(WaveAudioPlayer.BuildLoopPlans(preview.Regions));
+                var text = DroppedFilesProcessor.Process(fileList, out var processed);
+                return (text, processed);
             });
+            preview = previewData;
+
+            if (IsDisposed || exportGeneration != _exportGeneration)
+            {
+                return;
+            }
+
+            AppendReport(report);
+
+            if (preview is null)
+            {
+                _audioPlayer.Clear();
+                waveformView.ClearPreview();
+                _loadedPreview = null;
+                _previewSession = null;
+                UpdateTransportPosition();
+                ClearPlaylistChoices("Playlist を取得できませんでした");
+                UpdateExportButtonState();
+                return;
+            }
+
+            _previewSession = new WaveformPreviewSession(preview);
+            _previewSession.SetCommentRule(_markerSettings.ToCommentRule());
+
+            // 再生用一時コピーは大きな WAV だと数秒かかる。
+            try
+            {
+                await Task.Run(() =>
+                {
+                    _audioPlayer.Load(preview.SourcePath);
+                    _audioPlayer.SetLoopPlans(WaveAudioPlayer.BuildLoopPlans(preview.Regions));
+                });
+            }
+            catch (Exception ex)
+            {
+                AppendReport(
+                    $"=== エラー ==={Environment.NewLine}"
+                    + $"Message : 再生の準備に失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}");
+            }
+
+            if (IsDisposed || exportGeneration != _exportGeneration)
+            {
+                return;
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            AppendReport(
-                $"=== エラー ==={Environment.NewLine}"
-                + $"Message : 再生の準備に失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}");
+            if (!IsDisposed)
+            {
+                SetUiInteractionLocked(UiInteractionLock.Load, locked: false);
+            }
         }
 
-        if (IsDisposed || exportGeneration != _exportGeneration)
+        if (IsDisposed || exportGeneration != _exportGeneration || preview is null)
         {
             return;
         }
@@ -4244,14 +4332,6 @@ public partial class Form1 : Form
         }
 
         UpdateTransportPosition();
-
-        // プレイリスト UI 構築も重いので、演出が終わってから行う
-        await waveformView.WaitForRevealAsync();
-        if (IsDisposed || exportGeneration != _exportGeneration)
-        {
-            return;
-        }
-
         PopulatePlaylistChoices(preview.OutputParts);
         WritePlaybackDiagnostic(
             "source.loaded",
@@ -4355,7 +4435,7 @@ public partial class Form1 : Form
         }
 
         _exportBusy = true;
-        SetUiInteractionLocked(UiInteractionLock.Export, locked: true);
+        SetUiInteractionLocked(UiInteractionLock.Export, locked: true, "Exporting");
         UpdateExportButtonState();
 
         try
@@ -5026,6 +5106,13 @@ public partial class Form1 : Form
 
         editorTextBox.SelectionStart = editorTextBox.TextLength;
         editorTextBox.ScrollToCaret();
+
+        // すりガラス表示中は同じ内容をオーバーレイ左下にも出す（読み込み／書き出し共通）。
+        if (_uiInteractionLocks.HasFlag(UiInteractionLock.Export)
+            || _uiInteractionLocks.HasFlag(UiInteractionLock.Load))
+        {
+            _exportOverlay?.AppendLog(text);
+        }
     }
 
     private void AppendColoredLine(string line)

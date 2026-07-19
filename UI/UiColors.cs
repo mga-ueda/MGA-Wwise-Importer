@@ -28,7 +28,6 @@ internal static class UiColors
     // --- 波形ビュー（画面上部） ---
     public static Color WaveformBack { get; set; } = Color.FromArgb(38, 38, 38);
     public static Color EmptyHint { get; set; } = Color.FromArgb(140, 140, 140);
-    public static Color WaveRevealEdge { get; set; } = Color.FromArgb(180, 240, 255);
     public static Color BarNumberBg => ChromeMid;
     public static Color TempoBg { get; set; } = Color.FromArgb(53, 55, 70);
     public static Color SignatureBg { get; set; } = Color.FromArgb(44, 46, 58);
@@ -224,7 +223,6 @@ internal static class UiColors
 
         new("WaveformBack", "波形エリア背景", () => WaveformBack, c => WaveformBack = c),
         new("EmptyHint", "空状態ヒント", () => EmptyHint, c => EmptyHint = c),
-        new("WaveRevealEdge", "波形・初回表示エッジ", () => WaveRevealEdge, c => WaveRevealEdge = c),
         new("TempoBg", "テンポ・背景", () => TempoBg, c => TempoBg = c),
         new("SignatureBg", "拍子・背景", () => SignatureBg, c => SignatureBg = c),
         new("MarkerRowBg", "マーカー行・背景", () => MarkerRowBg, c => MarkerRowBg = c),

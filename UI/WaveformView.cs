@@ -51,18 +51,6 @@ internal sealed class WaveformView : Control
     private const int TrailMaxSamples = 900;
     private const double TrailDiscontinuitySec = 1.25;
 
-    // プレビュー初回表示の段階演出（オーバーラップ・フェード／ワイプ）
-    private const int RevealTickMs = 16;
-    private const int RevealTotalMs = 1000;
-    private static readonly (int StartMs, int DurationMs)[] RevealLayerWindows =
-    [
-        (0, 260),    // labels
-        (60, 540),   // wave wipe（長め＋緩い ease で視認しやすく）
-        (320, 280),  // bars
-        (460, 260),  // markers
-        (560, 320),  // captions
-    ];
-
     private WavPeakData? _peaks;
     private WavFileInfo? _wavInfo;
     private string _sourcePath = string.Empty;
@@ -146,18 +134,8 @@ internal sealed class WaveformView : Control
     private float? _mouseGuideX;
     private Bitmap? _staticLayer;
     private bool _staticLayerDirty = true;
-    private bool _revealActive;
     private bool _holdScaffold;
-    private TaskCompletionSource? _revealCompleted;
-    private long _revealStartTickMs;
-    private readonly System.Windows.Forms.Timer _revealTimer;
-    private readonly Bitmap?[] _revealLayers = new Bitmap?[4];
-    private Size _revealLayerSize;
-    private bool _revealLayersDirty = true;
-    private Rectangle _revealWaveRect;
-    private bool _revealRebuildQueued;
-    private bool _pendingPresentationRebuild;
-    private bool _pendingClearDetailPeaks;
+    private bool _staticRebuildQueued;
 
     private const int WmEraseBkgnd = 0x0014;
 
@@ -175,8 +153,6 @@ internal sealed class WaveformView : Control
         Height = 210;
         TabStop = false;
         Cursor = Cursors.Default;
-        _revealTimer = new System.Windows.Forms.Timer { Interval = RevealTickMs };
-        _revealTimer.Tick += OnRevealTick;
         _exportGlowTimer = new System.Windows.Forms.Timer { Interval = 16 };
         _exportGlowTimer.Tick += (_, _) => Invalidate();
     }
@@ -191,7 +167,6 @@ internal sealed class WaveformView : Control
         IReadOnlyList<WaveformRegionMark>? regions = null,
         IReadOnlyList<WaveformOutputPart>? outputParts = null)
     {
-        StopRevealAnimation();
         _peaks = peaks;
         _wavInfo = wavInfo;
         _sourcePath = sourcePath ?? string.Empty;
@@ -221,7 +196,6 @@ internal sealed class WaveformView : Control
 
         // 重いレイヤ生成の前にダークな足場だけ先に出す（白フラッシュ防止）
         DisposeStaticLayer();
-        InvalidateRevealLayers();
         _holdScaffold = true;
         Invalidate();
         Update();
@@ -229,11 +203,11 @@ internal sealed class WaveformView : Control
         var bounds = ClientRectangle;
         if (bounds.Width > 2 && bounds.Height > 2)
         {
-            EnsureRevealLayers(bounds);
+            BuildStaticLayer(bounds);
         }
 
         _holdScaffold = false;
-        StartRevealAnimation();
+        Invalidate();
         TimeViewChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -328,7 +302,6 @@ internal sealed class WaveformView : Control
     {
         BackColor = UiColors.ForControlBack(UiColors.WaveformBack);
         DisposeStaticLayer();
-        InvalidateRevealLayers();
 
         if (!IsHandleCreated || IsDisposed)
         {
@@ -342,11 +315,7 @@ internal sealed class WaveformView : Control
             return;
         }
 
-        if (_revealActive)
-        {
-            EnsureRevealLayers(bounds);
-        }
-        else if (_peaks is not null && !_peaks.IsEmpty)
+        if (_peaks is not null && !_peaks.IsEmpty)
         {
             BuildStaticLayer(bounds);
         }
@@ -356,7 +325,6 @@ internal sealed class WaveformView : Control
 
     public void ClearPreview()
     {
-        StopRevealAnimation();
         _holdScaffold = false;
         _peaks = null;
         _wavInfo = null;
@@ -391,7 +359,6 @@ internal sealed class WaveformView : Control
         ClearPlayhead();
         Cursor = Cursors.Default;
         DisposeStaticLayer();
-        InvalidateRevealLayers();
         Invalidate();
         Update();
         TimeViewChanged?.Invoke(this, EventArgs.Empty);
@@ -1288,21 +1255,8 @@ internal sealed class WaveformView : Control
             ClearDetailPeaks();
         }
 
-        // 演出中にレイヤを壊して再生成するとワイプが止まる／飛ぶので、終了後にまとめる。
-        // （プレイリスト名反映・ピーク階層完成などが SetPreview 直後に来る）
-        if (_revealActive)
-        {
-            _pendingPresentationRebuild = true;
-            _pendingClearDetailPeaks |= clearDetailPeaks;
-            return;
-        }
-
-        _pendingPresentationRebuild = false;
-        _pendingClearDetailPeaks = false;
-
         // Bitmap は破棄せずダーティ化のみ（直後の BuildStaticLayer で同サイズなら再利用）
         _staticLayerDirty = true;
-        InvalidateRevealLayers();
 
         if (!IsHandleCreated || IsDisposed)
         {
@@ -1456,21 +1410,10 @@ internal sealed class WaveformView : Control
         _staticLayer = null;
     }
 
-    private void InvalidateRevealLayers()
-    {
-        _revealLayersDirty = true;
-        for (var i = 0; i < _revealLayers.Length; i++)
-        {
-            _revealLayers[i]?.Dispose();
-            _revealLayers[i] = null;
-        }
-    }
-
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
         DisposeStaticLayer();
-        InvalidateRevealLayers();
         if (_sourceNameEditor is { Visible: true } editor
             && TryGetSourceNameBounds(out var editorBounds))
         {
@@ -1482,43 +1425,17 @@ internal sealed class WaveformView : Control
             return;
         }
 
-        if (_revealActive && !_revealRebuildQueued)
+        if (_peaks is not null && !_peaks.IsEmpty && !_staticRebuildQueued)
         {
-            _revealRebuildQueued = true;
-            BeginInvoke(RebuildRevealLayersAfterResize);
-            return;
-        }
-
-        if (!_revealActive && _peaks is not null && !_peaks.IsEmpty && !_revealRebuildQueued)
-        {
-            _revealRebuildQueued = true;
+            _staticRebuildQueued = true;
             BeginInvoke(RebuildStaticLayerAfterResize);
         }
     }
 
-    private void RebuildRevealLayersAfterResize()
-    {
-        _revealRebuildQueued = false;
-        if (!_revealActive || IsDisposed)
-        {
-            return;
-        }
-
-        var bounds = ClientRectangle;
-        if (bounds.Width > 2 && bounds.Height > 2)
-        {
-            var rebuildStarted = Environment.TickCount64;
-            EnsureRevealLayers(bounds);
-            _revealStartTickMs += Environment.TickCount64 - rebuildStarted;
-        }
-
-        Invalidate();
-    }
-
     private void RebuildStaticLayerAfterResize()
     {
-        _revealRebuildQueued = false;
-        if (_revealActive || IsDisposed || _peaks is null || _peaks.IsEmpty)
+        _staticRebuildQueued = false;
+        if (IsDisposed || _peaks is null || _peaks.IsEmpty)
         {
             return;
         }
@@ -1559,131 +1476,13 @@ internal sealed class WaveformView : Control
     {
         if (disposing)
         {
-            StopRevealAnimation();
             _exportGlowTimer.Stop();
             _exportGlowTimer.Dispose();
-            _revealTimer.Dispose();
             _timelineToolTip.Dispose();
             DisposeStaticLayer();
-            InvalidateRevealLayers();
         }
 
         base.Dispose(disposing);
-    }
-
-    private void StartRevealAnimation()
-    {
-        DisposeStaticLayer();
-        _pendingPresentationRebuild = false;
-        _pendingClearDetailPeaks = false;
-        _revealActive = true;
-        _revealStartTickMs = Environment.TickCount64;
-        _revealCompleted?.TrySetCanceled();
-        _revealCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _revealTimer.Start();
-        Invalidate();
-    }
-
-    private void StopRevealAnimation()
-    {
-        _revealTimer.Stop();
-        _revealActive = false;
-        _pendingPresentationRebuild = false;
-        _pendingClearDetailPeaks = false;
-        _revealCompleted?.TrySetCanceled();
-        _revealCompleted = null;
-    }
-
-    private void FinishRevealAnimation()
-    {
-        _revealTimer.Stop();
-        _revealActive = false;
-
-        InvalidateRevealLayers();
-
-        if (_pendingPresentationRebuild)
-        {
-            var clearDetail = _pendingClearDetailPeaks;
-            _pendingPresentationRebuild = false;
-            _pendingClearDetailPeaks = false;
-            // 演出中に溜めた名前／ピーク階層などの差分を静的レイヤへ反映
-            RebuildPresentationLayers(clearDetailPeaks: clearDetail);
-        }
-        else
-        {
-            // OnPaint 外で静的レイヤを焼き、次フレームを即座に出せるようにする
-            var bounds = ClientRectangle;
-            if (bounds.Width > 2 && bounds.Height > 2)
-            {
-                BuildStaticLayer(bounds);
-            }
-
-            Invalidate();
-        }
-
-        _revealCompleted?.TrySetResult();
-    }
-
-    /// <summary>
-    /// 読み込み演出が終わるまで待つ。演出中でなければ即座に完了する。
-    /// </summary>
-    public async Task WaitForRevealAsync()
-    {
-        var tcs = _revealCompleted;
-        if (!_revealActive || tcs is null)
-        {
-            return;
-        }
-
-        try
-        {
-            await tcs.Task.ConfigureAwait(true);
-        }
-        catch (TaskCanceledException)
-        {
-            // キャンセル（再読み込みなど）は待ち解除のみ
-        }
-    }
-
-    private void OnRevealTick(object? sender, EventArgs e)
-    {
-        if (!_revealActive)
-        {
-            return;
-        }
-
-        if (Environment.TickCount64 - _revealStartTickMs >= RevealTotalMs)
-        {
-            FinishRevealAnimation();
-            return;
-        }
-
-        Invalidate();
-    }
-
-    private static float EaseOutCubic(float t)
-    {
-        t = Math.Clamp(t, 0f, 1f);
-        var u = 1f - t;
-        return 1f - u * u * u;
-    }
-
-    private static float EaseOutQuad(float t)
-    {
-        t = Math.Clamp(t, 0f, 1f);
-        var u = 1f - t;
-        return 1f - u * u;
-    }
-
-    private static float LayerLocalT(int layerIndex, long elapsedMs)
-    {
-        var (startMs, durationMs) = RevealLayerWindows[layerIndex];
-        if (elapsedMs < startMs)
-        {
-            return 0f;
-        }
-
-        return Math.Clamp((elapsedMs - startMs) / (float)durationMs, 0f, 1f);
     }
 
     protected override void OnMouseDown(MouseEventArgs e)
@@ -2383,28 +2182,13 @@ internal sealed class WaveformView : Control
             return;
         }
 
-        if (_revealActive)
+        if (_staticLayerDirty || _staticLayer is null)
         {
-            // レイヤ未準備なら足場だけ（OnPaint 内で重い生成をしない）
-            if (_revealLayersDirty || _revealLayers[0] is null)
-            {
-                DrawEmptyScaffold(g, bounds);
-            }
-            else
-            {
-                DrawRevealFrame(g, bounds);
-            }
+            DrawEmptyScaffold(g, bounds);
         }
         else
         {
-            if (_staticLayerDirty || _staticLayer is null)
-            {
-                DrawEmptyScaffold(g, bounds);
-            }
-            else
-            {
-                g.DrawImageUnscaled(_staticLayer, 0, 0);
-            }
+            g.DrawImageUnscaled(_staticLayer, 0, 0);
         }
 
         // 静的内容を先に暗くし、再生ヘッドやホバー枠は手前に残す。
@@ -2577,176 +2361,6 @@ internal sealed class WaveformView : Control
             ? wave.Top + (wave.Height - size.Height) / 2f
             : (bounds.Height - size.Height) / 2f;
         g.DrawString(message, Font, brush, centerX, centerY);
-    }
-
-    /// <summary>
-    /// レイヤを時間軸上でオーバーラップさせ、フェード／ワイプ／スライドで出現。
-    /// </summary>
-    private void DrawRevealFrame(Graphics g, Rectangle bounds)
-    {
-        var elapsed = Environment.TickCount64 - _revealStartTickMs;
-
-        // 0: ラベル行（カスケード）
-        var labelsT = LayerLocalT(0, elapsed);
-        if (labelsT > 0f)
-        {
-            var rows = Math.Clamp((int)Math.Floor(EaseOutCubic(labelsT) * LabelRowCount) + 1, 1, LabelRowCount);
-            var content = Rectangle.Inflate(bounds, -4, -4);
-            var (info, labels, wave, playlistLane, segmentLane, rowHeight) = GetLayout(content, g);
-            DrawInfoLane(g, info, labels, wave, playlistLane, segmentLane, rowHeight, rows);
-            DrawLabelRows(g, labels, rowHeight, rows);
-        }
-
-        // 1: 波形（左→右ソフトワイプ。Quint だと序盤でほぼ全面になり視認しづらい）
-        var waveT = LayerLocalT(1, elapsed);
-        if (waveT > 0f)
-        {
-            DrawWaveLayerWiped(g, _revealLayers[0], EaseOutQuad(waveT), bounds);
-        }
-
-        // 2: 小節（フェード）
-        DrawLayerFaded(g, _revealLayers[1], EaseOutCubic(LayerLocalT(2, elapsed)));
-
-        // 3: マーカー（フェード＋わずかに上から落下）
-        var markersT = LayerLocalT(3, elapsed);
-        if (markersT > 0f)
-        {
-            var eased = EaseOutCubic(markersT);
-            DrawLayerFaded(g, _revealLayers[2], eased, offsetY: (1f - eased) * -10f);
-        }
-
-        // 4: キャプション（フェード＋下からスライド）
-        var captionsT = LayerLocalT(4, elapsed);
-        if (captionsT > 0f)
-        {
-            var eased = EaseOutCubic(captionsT);
-            DrawLayerFaded(g, _revealLayers[3], eased, offsetY: (1f - eased) * 12f);
-        }
-    }
-
-    private void EnsureRevealLayers(Rectangle bounds)
-    {
-        var size = bounds.Size;
-        if (!_revealLayersDirty
-            && _revealLayerSize == size
-            && _revealLayers[0] is not null)
-        {
-            return;
-        }
-
-        InvalidateRevealLayers();
-        _revealLayerSize = size;
-        _revealLayersDirty = false;
-
-        var content = Rectangle.Inflate(bounds, -4, -4);
-        using var probeBmp = new Bitmap(1, 1);
-        using var probe = Graphics.FromImage(probeBmp);
-        var (_, labels, wave, playlistLane, segmentLane, rowHeight) = GetLayout(content, probe);
-        _revealWaveRect = wave;
-
-        _revealLayers[0] = CreateTransparentLayer(size, g => DrawWaveform(g, wave));
-        _revealLayers[1] = CreateTransparentLayer(size, g => DrawBars(g, labels, wave, rowHeight));
-        _revealLayers[2] = CreateTransparentLayer(size, g => DrawMarkers(g, labels, rowHeight));
-        _revealLayers[3] = CreateTransparentLayer(size, g =>
-        {
-            DrawPlaylistNameLabels(g, wave, playlistLane);
-            DrawSegmentNameLabels(g, wave, segmentLane);
-            DrawExcludedRegionOverlaysOnNameLanes(g, wave, segmentLane, playlistLane);
-        });
-    }
-
-    private Bitmap CreateTransparentLayer(Size size, Action<Graphics> paint)
-    {
-        var bmp = new Bitmap(size.Width, size.Height, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
-        using var g = Graphics.FromImage(bmp);
-        g.Clear(Color.Transparent);
-        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-        g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceOver;
-        paint(g);
-        return bmp;
-    }
-
-    private static void DrawLayerFaded(Graphics g, Bitmap? layer, float alpha, float offsetY = 0f)
-    {
-        if (layer is null || alpha <= 0.01f)
-        {
-            return;
-        }
-
-        var clamped = Math.Clamp(alpha, 0f, 1f);
-        if (clamped >= 0.995f && Math.Abs(offsetY) < 0.5f)
-        {
-            g.DrawImageUnscaled(layer, 0, 0);
-            return;
-        }
-
-        var matrix = new System.Drawing.Imaging.ColorMatrix
-        {
-            Matrix33 = clamped,
-        };
-        using var attrs = new System.Drawing.Imaging.ImageAttributes();
-        attrs.SetColorMatrix(matrix);
-        var dest = new Rectangle(0, (int)MathF.Round(offsetY), layer.Width, layer.Height);
-        g.DrawImage(
-            layer,
-            dest,
-            0,
-            0,
-            layer.Width,
-            layer.Height,
-            GraphicsUnit.Pixel,
-            attrs);
-    }
-
-    private void DrawWaveLayerWiped(Graphics g, Bitmap? layer, float wipeT, Rectangle bounds)
-    {
-        if (layer is null || wipeT <= 0.01f)
-        {
-            return;
-        }
-
-        var wave = _revealWaveRect;
-        if (wave.Width <= 0 || wave.Height <= 0)
-        {
-            DrawLayerFaded(g, layer, wipeT);
-            return;
-        }
-
-        var wipeWidth = Math.Max(1, (int)MathF.Round(wave.Width * wipeT));
-        var clipRight = wave.Left + wipeWidth;
-        var state = g.Save();
-        g.SetClip(new Rectangle(0, 0, clipRight, bounds.Height));
-        // ワイプ前半はわずかにフェードイン
-        var alpha = Math.Clamp(wipeT * 2.2f, 0f, 1f);
-        DrawLayerFaded(g, layer, alpha);
-        g.Restore(state);
-
-        if (wipeT < 0.995f)
-        {
-            DrawWipeEdge(g, clipRight, wave);
-        }
-    }
-
-    private static void DrawWipeEdge(Graphics g, int edgeX, Rectangle wave)
-    {
-        const int soft = 18;
-        var left = Math.Max(wave.Left, edgeX - soft);
-        if (left >= edgeX || wave.Height <= 0)
-        {
-            return;
-        }
-
-        var rect = new Rectangle(left, wave.Top, edgeX - left, wave.Height);
-        using var brush = new System.Drawing.Drawing2D.LinearGradientBrush(
-            new Rectangle(rect.Left - 1, rect.Top, rect.Width + 2, rect.Height),
-            Color.FromArgb(0, UiColors.WaveRevealEdge),
-            Color.FromArgb(90, UiColors.WaveRevealEdge),
-            0f);
-        g.FillRectangle(brush, rect);
-
-        using var pen = new Pen(Color.FromArgb(160, UiColors.WaveRevealEdge), 1.5f);
-        g.DrawLine(pen, edgeX, wave.Top, edgeX, wave.Bottom);
     }
 
     /// <summary>
