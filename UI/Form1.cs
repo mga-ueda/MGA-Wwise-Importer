@@ -190,6 +190,7 @@ public partial class Form1 : Form
         UiColors.LoadFromIni();
         AppFonts.EnsureRegistered();
         InitializeComponent();
+        transportBar.CommandHoldEnded += TransportBar_CommandHoldEnded;
         ApplyActionBarToolTips();
         DpiChanged += (_, _) =>
         {
@@ -869,8 +870,18 @@ public partial class Form1 : Form
         TryProcessWaveformShortcut(keyData, showUiFeedback: false);
         ReleaseFocusToWaveform();
 
-        // キーボードではキーを離すまで一時停止する「戻る」操作も、
-        // ボタンではクリック完了時点をキーアップ相当として直ちに再開する。
+        // 通常クリックは完了時点をキーアップ相当とする。リピート対象ボタンは
+        // MouseUp / MouseLeave まで一時停止を維持し、CommandHoldEnded で再開する。
+        if (_resumePlaybackAfterBackwardSeek && !transportBar.IsCommandHeld)
+        {
+            ResumePlaybackAfterBackwardSeek();
+        }
+
+        UpdateTransportPlaybackState();
+    }
+
+    private void TransportBar_CommandHoldEnded(object? sender, EventArgs e)
+    {
         if (_resumePlaybackAfterBackwardSeek)
         {
             ResumePlaybackAfterBackwardSeek();

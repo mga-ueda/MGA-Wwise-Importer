@@ -40,7 +40,11 @@ internal sealed class TransportBar : UserControl
     private readonly DarkToolTip _toolTip = new();
     private readonly TransportPositionDisplay _positionDisplay = new();
     private readonly Dictionary<TransportCommand, TransportIconButton> _commandButtons = [];
+    private readonly System.Windows.Forms.Timer _commandRepeatTimer = new();
     private readonly TransportIconButton _playButton;
+    private TransportCommand? _heldCommand;
+    private TransportIconButton? _heldButton;
+    private bool _repeatStarted;
 
     public TransportBar()
     {
@@ -70,11 +74,13 @@ internal sealed class TransportBar : UserControl
 
         _playButton = AddGroup(
             "TRANSPORT",
+            repeatOnHold: false,
             (TransportCommand.TogglePlayback, TransportIcon.PlayPause, "再生 / 一時停止  [Space]"),
             (TransportCommand.JumpToBar, TransportIcon.JumpToBar, "小節番号を指定して移動  [G]"));
 
         AddGroup(
             "NAVIGATION",
+            repeatOnHold: true,
             (TransportCommand.GoToStart, TransportIcon.GoToStart, "先頭へ移動  [Ctrl+Home]"),
             (TransportCommand.PreviousPage, TransportIcon.PreviousPage, "前の表示ページ  [Page Up]"),
             (TransportCommand.PreviousRegion, TransportIcon.PreviousRegion, "前のリージョン境界  [Ctrl+←]"),
@@ -86,6 +92,7 @@ internal sealed class TransportBar : UserControl
 
         AddGroup(
             "TIME ZOOM",
+            repeatOnHold: true,
             (TransportCommand.TimeZoomIn, TransportIcon.TimeZoomIn, "時間軸を拡大  [↑]"),
             (TransportCommand.TimeZoomOut, TransportIcon.TimeZoomOut, "時間軸を縮小  [↓]"),
             (TransportCommand.TimeZoomMax, TransportIcon.TimeZoomMax, "時間軸を最大拡大  [Ctrl+↑]"),
@@ -93,15 +100,21 @@ internal sealed class TransportBar : UserControl
 
         AddGroup(
             "AMP ZOOM",
+            repeatOnHold: true,
             (TransportCommand.AmpZoomIn, TransportIcon.AmpZoomIn, "振幅を拡大  [Shift+↑]"),
             (TransportCommand.AmpZoomOut, TransportIcon.AmpZoomOut, "振幅を縮小  [Shift+↓]"),
             (TransportCommand.AmpZoomMax, TransportIcon.AmpZoomMax, "振幅を最大拡大  [Ctrl+Shift+↑]"),
             (TransportCommand.AmpZoomReset, TransportIcon.AmpZoomReset, "振幅を既定に戻す  [Ctrl+Shift+↓]"));
 
+        _commandRepeatTimer.Tick += (_, _) => RepeatHeldCommand();
         ApplyColors();
     }
 
     public event EventHandler<TransportCommand>? CommandInvoked;
+    public event EventHandler? CommandHoldEnded;
+
+    /// <summary>NAVIGATION / ZOOM ボタンがマウスで押下中か。</summary>
+    public bool IsCommandHeld => _heldCommand.HasValue;
 
     /// <summary>
     /// 全グループを横スクロールなしで表示するために必要な幅。
@@ -195,6 +208,7 @@ internal sealed class TransportBar : UserControl
 
     private TransportIconButton AddGroup(
         string title,
+        bool repeatOnHold,
         params (TransportCommand Command, TransportIcon Icon, string ToolTip)[] definitions)
     {
         const int buttonHeight = 30;
@@ -246,7 +260,36 @@ internal sealed class TransportBar : UserControl
                 Margin = new Padding(0, 0, 1, 0),
                 Tag = definition.Command,
             };
-            button.Click += (_, _) => CommandInvoked?.Invoke(this, definition.Command);
+            if (repeatOnHold)
+            {
+                button.MouseDown += (_, e) =>
+                {
+                    if (e.Button == MouseButtons.Left)
+                    {
+                        BeginCommandHold(definition.Command, button);
+                    }
+                };
+                button.MouseUp += (_, e) =>
+                {
+                    if (e.Button == MouseButtons.Left)
+                    {
+                        EndCommandHold();
+                    }
+                };
+                button.MouseLeave += (_, _) => EndCommandHold();
+                button.MouseCaptureChanged += (_, _) =>
+                {
+                    if (!button.Capture)
+                    {
+                        EndCommandHold();
+                    }
+                };
+            }
+            else
+            {
+                button.Click += (_, _) => CommandInvoked?.Invoke(this, definition.Command);
+            }
+
             _toolTip.SetToolTip(button, definition.ToolTip);
             buttons.Controls.Add(button);
             _commandButtons[definition.Command] = button;
@@ -257,6 +300,66 @@ internal sealed class TransportBar : UserControl
         group.Controls.Add(label);
         _groups.Controls.Add(group);
         return first!;
+    }
+
+    private void BeginCommandHold(TransportCommand command, TransportIconButton button)
+    {
+        EndCommandHold();
+        _heldCommand = command;
+        _heldButton = button;
+        _repeatStarted = false;
+        _commandRepeatTimer.Interval = (SystemInformation.KeyboardDelay + 1) * 250;
+        _commandRepeatTimer.Start();
+        CommandInvoked?.Invoke(this, command);
+    }
+
+    private void RepeatHeldCommand()
+    {
+        if (_heldCommand is not { } command
+            || _heldButton is not { Enabled: true }
+            || (MouseButtons & MouseButtons.Left) == 0)
+        {
+            EndCommandHold();
+            return;
+        }
+
+        if (!_repeatStarted)
+        {
+            _repeatStarted = true;
+            // Windows の KeyboardSpeed: 0=約2.5回/秒、31=約30回/秒。
+            var repeatsPerSecond =
+                2.5d + SystemInformation.KeyboardSpeed * (30d - 2.5d) / 31d;
+            _commandRepeatTimer.Interval = Math.Max(
+                20,
+                (int)Math.Round(1000d / repeatsPerSecond));
+        }
+
+        CommandInvoked?.Invoke(this, command);
+    }
+
+    private void EndCommandHold()
+    {
+        if (_heldCommand is null)
+        {
+            return;
+        }
+
+        _commandRepeatTimer.Stop();
+        _heldCommand = null;
+        _heldButton = null;
+        _repeatStarted = false;
+        CommandHoldEnded?.Invoke(this, EventArgs.Empty);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _commandRepeatTimer.Dispose();
+            _toolTip.Dispose();
+        }
+
+        base.Dispose(disposing);
     }
 }
 
