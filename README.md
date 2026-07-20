@@ -35,8 +35,10 @@ Nuendo の tracklist XML と Wave を読み、波形プレビュー、分割 WAV
 | 波形ファイル名をダブルクリック | 表示位置に直接現れる入力欄で、拡張子なしの基底名を編集。Enter またはフォーカス移動で確定、Esc でキャンセル。変更は直ちに Playlist／Segment 表示へ反映され、書き出す WAV ファイル名と Wwise の Container／Playlist／Segment／Track 名にも使用 |
 | Fade In | Playlist左側のラジオボタンから遷移先のフェードイン時間を `None / 1.0 / 3.0 / 6.0 / 9.0 Sec.` で選択（既定はNone）。Playlist をクリックしてから選択するとパート（グループ）単位で記憶。再生中のPlaylist遷移だけに適用し、停止中からの開始には適用しない。遷移先が `-A` なら先行再生開始からフェードインし、Entry Cue後も同じ包絡線を継続。変更時点ですでに待機中の遷移には影響せず、次の遷移予約から適用 |
 | Fade Out | Playlist左側のラジオボタンから遷移元のフェードアウト時間を `None / 1.0 / 3.0 / 6.0 / 9.0 Sec.` で選択（既定はNone）。Playlist をクリックしてから選択するとパート（グループ）単位で記憶。変更時点ですでに待機中の遷移には影響せず、次の遷移予約から適用 |
-| Stream | Marker Grid 左の列。`Stream` チェック（既定オン）と `LookAhead`／`Prefetch`（ms、0〜9999、既定 500）。`[Project.*] StreamEnabled`／`LookAheadMs`／`PrefetchLengthMs` に自動保存。Stream オフ時は LookAhead／Prefetch は無効で、Wwise へもストリーミングなしで作成 |
-| Marker Grid / Marker Comment | 右側パネル。スナップ単位（Bar／Beat／Timeline）とコメント桁・0埋め・接頭／接尾／区切り・Reset Per Part。変更は選択中プロジェクトの `[Project.*]` へ自動保存（旧グローバル `[Markers]` は起動時に除去） |
+| More Options | 右側パネル下部の折りたたみ（既定開き）。開くと Stream／Loudness Normalize／Marker Grid／Marker Comment を表示。開閉状態は `[Project.*] MoreOptionsExpanded` に自動保存。開閉時はウィンドウ高さを調整し Music Playlist の高さは維持 |
+| Stream | More Options 内・上段左。`Stream` チェック（既定オン）と `Look-ahead Time`／`Prefetch Length`（ms、0〜9999、既定 500）。`[Project.*] StreamEnabled`／`LookAheadMs`／`PrefetchLengthMs` に自動保存。Stream オフ時は Look-ahead Time／Prefetch Length は無効で、Wwise へもストリーミングなしで作成 |
+| Loudness Normalize | More Options 内・上段右。`Normalize`（既定オフ）／`Target` LKFS（既定 −24）／`Preserve Group Balance`（既定オン）。Wwise の非破壊 Loudness Normalize とは別の、このアプリ独自機能。EXPORT 時に分割 WAV へ破壊編集でゲインを焼き込む。`[Project.*] LoudnessNormalizeEnabled`／`LoudnessTargetLkfs`／`LoudnessPreserveGroupBalance` に自動保存 |
+| Marker Grid / Marker Comment | More Options 内・下段。スナップ単位（Bar／Beat／Timeline）とコメント桁・0埋め・接頭／接尾／区切り・Reset Per Part。変更は選択中プロジェクトの `[Project.*]` へ自動保存（旧グローバル `[Markers]` は起動時に除去） |
 | Exit Source At | Fade Out 右のラジオボタン。Playlist をクリックしてから選択すると、その Playlist（パート）ごとに Fade In／Fade Out／Group Fade／Exit Source At を記憶する。Fade In／Out 内は通常候補の下に `Group` 見出しでグループ用候補を区分。通常 Fade・Exit Source・Group Fade はいずれも同一グループ ID で共通同期。同一グループ内遷移は Group Fade のみ（通常 Fade は無効）。グループ外からの遷移は通常の Fade In/Out を使用。Last Wave サイドカーへオートセーブ／復元。Wwise へは Exit Source At のみ渡し、Group Fade は未使用 |
 | 遷移先同期（自動） | 同一グループ内の遷移は `Same Time`、異なるグループ間または未グループとの遷移は `Entry Cue` を自動選択する。`Same Time` は実際の退出時点における現在 Playlist 先頭からの経過時間を遷移先へ引き継ぐ。引継ぎ位置が遷移先の長さ以上なら予約しない |
 | Music Playlist 一覧 | ログ右側の `Music Playlist` 一覧から遷移先を選択。一覧幅はファイル名が改行されない必要幅へ自動可変（表示領域を超える場合だけ省略表示）。停止／一時停止中は対象の頭から即再生し、再生中は `Exit Source At` の位置で遷移。同一グループ内の `Same Time` では相対位置から直接開始し、それ以外の `Entry Cue` で遷移先冒頭が `-A` の場合は、その長さだけ先行して重ねる。Next Bar／Next Beatでは境界に `-A` 終端を揃え、Next Cue／Exit Cueまでの時間が足りない場合は `-A` を即開始して退出だけを指定 Cue に揃える。Immediateでは旧曲フェードと `-A` を同時に即開始する。先行再生中の位置と残像は緑色、フェードアウト中は白、`-E` 到達後は赤で表示する。通常時は枠なし、再生中は背景を塗り、遷移完了時は枠をフェード発光する。遷移待機中は予約先の枠がテンポ／拍子に同期して点滅する |
@@ -68,7 +70,7 @@ Nuendo の tracklist XML と Wave を読み、波形プレビュー、分割 WAV
 - **Music Playlist 名** … その下の Music Playlist Name レーン（同高さ）に、エクスポートファイル名（拡張子除く）＋` (.wav)`（例: `元名_1 (.wav)`）を太字で表示。無効項目の仮名 `Excluded Region n` はこのレーンには表示しない。複数パート時は Wwise Playlist 名と一致するが、単一パート時に作る Wwise Playlist Container 名は元ファイル名
 - **名前レーンの文字** … Segment／Playlist とも各時間範囲の内側に収まるまで縮小。極端に狭い場合は最小 0.5 px とし、それでも収まらなければ横方向を縮めるため、拡大すると全文を確認できる
 - **Music Playlist 一覧（遷移シミュレーター）** … ログ右側に出力パート由来の Playlist 名を縦表示。件数が多い場合はスクロールし、長い名前は省略表示してホバーで全文を表示する。項目クリックでその Playlist の Fade／Exit Source At をラジオへ反映。再生中の選択は遷移先 Playlist の Exit Source At（Immediate／Next Bar／Next Beat／Next Cue／Exit Cue）と Fade へクオンタイズし、同一グループ内は Same Time、それ以外は Entry Cue で遷移先位置を自動決定する。Same Timeはボタン押下時ではなく実際の退出時点の相対時間を使う。`-L` ループ中でも到達可能な境界では Playlist 遷移を優先し、Next Cueは現在周回のループ終端までに次の単発マーカーがなければ予約しない。遷移待ち中の再選択は最後に選んだ Playlist を採用する。波形側でシークすると自動状態と予約を解除し、現在位置の Playlist を手動再生色へ切り替える
-- **右側パネルの高さ** … Stream／Marker Grid／Marker Comment は全項目が収まる固定高。ウィンドウの高さを変更したときは Music Playlist 一覧が残り領域に合わせて伸縮する
+- **右側パネルの高さ** … Music Playlist（Compact Num. 含む）の下端は Fade In セクション下端に揃える。その下に More Options（折りたたみ。Stream／Loudness／Marker Grid／Marker Comment を内包）。開閉時はウィンドウ高さを増減して Playlist 高さを維持する。ウィンドウを高くしても Playlist は Fade In 高のまま（余剰はログ側）
 - **TimeReference** … iXML（`BWF_TIME_REFERENCE_*`）のみ。無い／0 のときは波形先頭＝PPQ 0 扱い
 - **読み込み演出** … ラベル → 波形ワイプ → 小節 → マーカー → Playlist／Segment 名の順で重ね表示
 
@@ -107,6 +109,7 @@ Nuendo の tracklist XML と Wave を読み、波形プレビュー、分割 WAV
 - 各セグメントにはリージョンのテンポ・拍子を設定（Override）。単発マーカーは Custom Cue として付与（WAV メタデータは参照しない）
 - トラックは `[Project.*] StreamEnabled`（既定オン）に従いストリーミングを設定。オン時は、各 Playlist の先頭セグメントかつ先頭トラックに Prefetch Length（`[Project.*] PrefetchLengthMs`、既定 500）と Zero latency オン＋Look-ahead 0 を設定。2 番目以降のセグメント／トラックは Look-ahead を `[Project.*] LookAheadMs`（既定 500）に設定。オフ時はストリーミング無効で作成し LookAhead／Prefetch／Zero latency は付けない
 - 元 WAV から各 Music Segment／Track の範囲を直接切り出し、書き出し先直下の最終 WAV を取り込む
+- **Loudness Normalize（任意・既定オフ）** … Wwise 側にも非破壊の Loudness Normalize があるが、本アプリの機能とは無関係。こちらは分割後のセパレート WAV に対する破壊編集（ゲイン焼き込み）である。Wwise 標準の正規化は、レイヤーミュージック（同一 Segment 内の複数 Track）でレイヤー間バランスが崩れるほか、ストリーミングの Prefetch 区間で音量が暴発する恐れがある。LookAhead Time を設定することで暴発を防ぐことが出来るが、ゼロレイテンシーの意味が無くなってしまう。そのため、書き出し時点で ITU-R BS.1770 相当の Integrated Loudness（LKFS）に揃える独自処理を用意した。`Preserve Group Balance`（既定オン）時は、グループ内で最も大きい音量のパートを Target に合わせ、他メンバーへ同じゲインを適用して相対バランスを保つ。オフ時はパートごとに個別正規化する
 
 ---
 
@@ -191,6 +194,10 @@ DetailedPlaybackLog=1
 | `StreamEnabled` | Music Track のストリーミング有効（`1`/`0`。Stream 列のチェック） | `1` |
 | `LookAheadMs` | 2 番目以降のセグメントの Look-ahead time（ms、0〜9999。Stream オン時） | `500` |
 | `PrefetchLengthMs` | Playlist 先頭セグメント先頭トラックの Prefetch Length（ms、0〜9999。Stream オン時） | `500` |
+| `LoudnessNormalizeEnabled` | EXPORT 時に分割 WAV へラウドネス正規化（破壊編集）を行う（`1`/`0`。Normalize チェック） | `0` |
+| `LoudnessTargetLkfs` | 正規化ターゲット（LKFS、−70〜0） | `-24` |
+| `LoudnessPreserveGroupBalance` | グループ内の相対バランスを保って正規化する（`1`/`0`） | `1` |
+| `MoreOptionsExpanded` | More Options パネルを開いた状態にする（`1`/`0`） | `1` |
 | `GridOverride` | マーカー付与のスナップ単位（`Default`／`Bar`／`Beat`。Marker Grid） | `Default` |
 | `CommentDigits` | マーカーコメント連番の桁数（0〜6。0 で連番なし） | `3` |
 | `CommentZeroPad` | 連番を桁数まで 0 埋めする（`1`/`0`） | `1` |

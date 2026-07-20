@@ -1,7 +1,8 @@
 namespace MgaWwiseIMImporter.UI;
 
 /// <summary>
-/// マーカー付与オプション（Stream／Marker Grid／Marker Comment）を表示する下部パネル。
+/// 右ペイン下部の More Options パネル。
+/// 折りたたみ内に Stream／Loudness Normalize／Marker Grid／Marker Comment をまとめる。
 /// 行高はプレイリスト項目（30px）に合わせ、DPI スケールの影響を受けないよう
 /// 子コントロールは固定ピクセルで配置する。
 /// </summary>
@@ -13,6 +14,9 @@ internal sealed class MarkerOptionsPanel : UserControl
     private const int StreamMsMin = 0;
     private const int StreamMsMax = 9999;
     private const int StreamMsDefault = 500;
+    private const double LoudnessTargetDefault = -24.0;
+    private const double LoudnessTargetMin = -70.0;
+    private const double LoudnessTargetMax = 0.0;
 
     private readonly Panel _leftSeparator = new() { Dock = DockStyle.Left, Width = 1, TabStop = false };
     private readonly DarkToolTip _toolTip = new()
@@ -30,6 +34,14 @@ internal sealed class MarkerOptionsPanel : UserControl
     private readonly Label _prefetchLabel;
     private readonly TextBox _prefetchTextBox;
 
+    private readonly SectionHeaderLabel _loudnessHeaderLabel;
+    private readonly FlatOptionCheckBox _loudnessEnabledCheckBox;
+    private readonly Label _loudnessTargetLabel;
+    private readonly TextBox _loudnessTargetTextBox;
+    private readonly Label _loudnessUnitLabel;
+    private readonly FlatOptionCheckBox _loudnessGroupBalanceCheckBox;
+
+    private readonly SectionHeaderLabel _moreOptionsHeaderLabel;
     private readonly SectionHeaderLabel _gridHeaderLabel;
     private readonly FlatOptionRadioButton _gridDefaultRadio;
     private readonly FlatOptionRadioButton _gridBarRadio;
@@ -49,12 +61,20 @@ internal sealed class MarkerOptionsPanel : UserControl
     private readonly Label _joinerLabel;
     private readonly TextBox _joinerTextBox;
 
+    private readonly Control[] _moreOptionsBodyControls;
+    private readonly int _collapsedHeight;
+    private readonly int _expandedHeight;
+
     private MarkerSettings? _settings;
     private bool _updating;
     private bool _interactionLocked;
     private bool _streamEnabled = true;
     private int _lookAheadMs = StreamMsDefault;
     private int _prefetchLengthMs = StreamMsDefault;
+    private bool _loudnessNormalizeEnabled;
+    private double _loudnessTargetLkfs = LoudnessTargetDefault;
+    private bool _loudnessPreserveGroupBalance = true;
+    private bool _moreOptionsExpanded = true;
 
     /// <summary>設定値が UI 操作で変更された（保存・適用は購読側で行う）。</summary>
     public event EventHandler? SettingsChanged;
@@ -62,35 +82,49 @@ internal sealed class MarkerOptionsPanel : UserControl
     /// <summary>TextBox 編集の開始／終了（ショートカット抑止用）。</summary>
     public event EventHandler<bool>? TextEditingChanged;
 
+    /// <summary>More Options の開閉などで必要高さが変わった。</summary>
+    public event EventHandler? RequiredHeightChanged;
+
     public MarkerOptionsPanel()
     {
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
         var baseFont = new Font("Yu Gothic UI", 8.5F);
         var headerFont = new Font("Yu Gothic UI", 8.5F, FontStyle.Bold);
 
-        // フォントは DPI に追従して大きく描画されるため、
-        // 横方向の配置・幅も DPI に合わせて拡縮する（行高だけはプレイリストと同じ 30px 固定）。
-        // 各列は内容に必要な幅だけ確保する。均等幅にはせず、列間も小さく詰める。
-        // Fade In / Fade Out 間と同じく、セクション同士を隙間なく並べる。
-        var sectionGap = 0;
+        // 折りたたみ見出しの下に
+        // 上段: Stream | Loudness Normalize
+        // 下段: Marker Grid | Marker Comment
         var commentColumnGap = S(4);
         var streamPadL = S(12);
         var streamGap = S(6);
         var streamPadR = S(8);
-        // Label と同じ GDI 計測で幅を取る（Typographic だと短く見積もられ見切れる）。
         var streamLabelW = Math.Max(
-            MeasureLabelWidth("LookAhead", baseFont),
-            MeasureLabelWidth("Prefetch", baseFont));
-        // 4 桁（〜9999）が収まる入力幅。
+            MeasureLabelWidth("Look-ahead Time", baseFont),
+            MeasureLabelWidth("Prefetch Length", baseFont));
         var streamMsBoxW = Math.Max(S(36), MeasureLabelWidth("9999", baseFont) + S(14));
-        var streamX = 1;
-        var streamW = streamPadL + streamLabelW + streamGap + streamMsBoxW + streamPadR;
-        var col1X = streamX + streamW + sectionGap;
-        var col1ContentW = Math.Max(
+        var streamNeededW = streamPadL + streamLabelW + streamGap + streamMsBoxW + streamPadR;
+
+        var gridContentW = Math.Max(
             MeasureLabelWidth("Timeline", baseFont),
             MeasureLabelWidth("Marker Grid", headerFont));
-        var col1W = S(12) + col1ContentW + S(8);
-        var col2X = col1X + col1W + sectionGap;
+        var gridNeededW = S(12) + gridContentW + S(8);
+        var leftColW = Math.Max(streamNeededW, gridNeededW);
+
+        var loudnessPadL = S(12);
+        var loudnessGap = S(6);
+        var loudnessPadR = S(8);
+        var loudnessTargetLabelW = MeasureLabelWidth("Target", baseFont);
+        var loudnessTargetBoxW = Math.Max(S(44), MeasureLabelWidth("-24.0", baseFont) + S(14));
+        var loudnessUnitW = MeasureLabelWidth("LKFS", baseFont);
+        var loudnessCheckW = Math.Max(
+            MeasureLabelWidth("Normalize", baseFont),
+            MeasureLabelWidth("Preserve Group Balance", baseFont));
+        var loudnessW = loudnessPadL
+            + Math.Max(
+                loudnessCheckW,
+                loudnessTargetLabelW + loudnessGap + loudnessTargetBoxW + loudnessGap + loudnessUnitW)
+            + loudnessPadR;
+
         var col2W = S(114);
         var col3PadL = S(12);
         var col3Gap = S(6);
@@ -101,62 +135,146 @@ internal sealed class MarkerOptionsPanel : UserControl
                 MeasureLabelWidth("Suffix", baseFont),
                 MeasureLabelWidth("Separator", baseFont)));
         var col3EditorW = S(44);
-        var col3X = col2X + col2W + commentColumnGap;
-        var col3W = col3PadL + col3LabelW + col3Gap + col3EditorW + col3PadR;
-        // Fade In などの遷移セクションと同じ「ヘッダー（26px 相当）＋1px」で行を開始する。
-        var contentTop = 1 + S(HeaderHeight) + 1;
-        RequiredWidth = col3X + col3W + S(8);
+        var commentW = col2W + commentColumnGap + col3PadL + col3LabelW + col3Gap + col3EditorW + col3PadR;
 
-        _streamHeaderLabel = CreateHeader("Stream", headerFont, streamX, streamW);
+        var leftX = 1;
+        var rightX = leftX + leftColW;
+        var rightW = Math.Max(loudnessW, commentW);
+        RequiredWidth = rightX + rightW + S(8);
+
+        // 閉じた状態は More Options 見出しのみ。開くと直後に各セクションが続く。
+        var moreOptionsHeaderY = 1;
+        var row1HeaderY = moreOptionsHeaderY + S(HeaderHeight) + 1;
+        var row1ContentTop = row1HeaderY + S(HeaderHeight) + 1;
+        var primaryBottom = row1ContentTop + RowPitch * 2 + RowHeight;
+        // 見出し帯の下マージン（SectionHeaderLabel）と同程度の間隔を空ける。
+        var row2HeaderY = primaryBottom + S(8);
+        var row2ContentTop = row2HeaderY + S(HeaderHeight) + 1;
+        _collapsedHeight = moreOptionsHeaderY + S(HeaderHeight) + 2;
+        _expandedHeight = row2ContentTop + RowPitch * 3 + RowHeight + 2;
+        Height = _expandedHeight;
+
+        _moreOptionsHeaderLabel = CreateHeader(
+            FormatMoreOptionsHeader(expanded: true),
+            headerFont,
+            leftX,
+            Math.Max(1, RequiredWidth - leftX),
+            y: moreOptionsHeaderY);
+        _moreOptionsHeaderLabel.Cursor = Cursors.Hand;
+        _moreOptionsHeaderLabel.Click += (_, _) => ToggleMoreOptions();
+        // 初期幅は RequiredWidth 基準。親が広いときは OnResize で右端まで伸ばす。
+
+        _streamHeaderLabel = CreateHeader("Stream", headerFont, leftX, leftColW, y: row1HeaderY);
         _streamEnabledCheckBox = new FlatOptionCheckBox
         {
             AutoSize = false,
             Checked = true,
             Font = baseFont,
-            Location = new Point(streamX + streamPadL, contentTop),
-            Size = new Size(streamW - streamPadL - streamPadR, RowHeight),
+            Location = new Point(leftX + streamPadL, row1ContentTop),
+            Size = new Size(leftColW - streamPadL - streamPadR, RowHeight),
             Text = "Stream",
         };
         _streamEnabledCheckBox.CheckedChanged += (_, _) => OnStreamUiChanged();
         _prefetchLabel = new Label
         {
             Font = baseFont,
-            Location = new Point(streamX + streamPadL, contentTop + RowPitch),
+            Location = new Point(leftX + streamPadL, row1ContentTop + RowPitch),
             Size = new Size(streamLabelW, RowHeight),
-            Text = "Prefetch",
+            Text = "Prefetch Length",
             TextAlign = ContentAlignment.MiddleLeft,
         };
         _prefetchTextBox = CreateStreamMsTextBox(
             baseFont,
-            streamX + streamPadL + streamLabelW + streamGap,
-            contentTop + RowPitch,
+            leftX + streamPadL + streamLabelW + streamGap,
+            row1ContentTop + RowPitch,
             streamMsBoxW);
         _lookAheadLabel = new Label
         {
             Font = baseFont,
-            Location = new Point(streamX + streamPadL, contentTop + RowPitch * 2),
+            Location = new Point(leftX + streamPadL, row1ContentTop + RowPitch * 2),
             Size = new Size(streamLabelW, RowHeight),
-            Text = "LookAhead",
+            Text = "Look-ahead Time",
             TextAlign = ContentAlignment.MiddleLeft,
         };
         _lookAheadTextBox = CreateStreamMsTextBox(
             baseFont,
-            streamX + streamPadL + streamLabelW + streamGap,
-            contentTop + RowPitch * 2,
+            leftX + streamPadL + streamLabelW + streamGap,
+            row1ContentTop + RowPitch * 2,
             streamMsBoxW);
 
-        _gridHeaderLabel = CreateHeader("Marker Grid", headerFont, col1X, col1W);
-        _gridBarRadio = CreateGridRadio("Bar", MarkerGridOverrideMode.Bar, col1X, col1W, contentTop);
-        _gridBeatRadio = CreateGridRadio("Beat", MarkerGridOverrideMode.Beat, col1X, col1W, contentTop + RowPitch);
-        _gridDefaultRadio = CreateGridRadio("Timeline", MarkerGridOverrideMode.Default, col1X, col1W, contentTop + RowPitch * 2);
+        _loudnessHeaderLabel = CreateHeader("Loudness Normalize", headerFont, rightX, rightW, y: row1HeaderY);
+        _loudnessEnabledCheckBox = new FlatOptionCheckBox
+        {
+            AutoSize = false,
+            Font = baseFont,
+            Location = new Point(rightX + loudnessPadL, row1ContentTop),
+            Size = new Size(rightW - loudnessPadL - loudnessPadR, RowHeight),
+            Text = "Normalize",
+        };
+        _loudnessEnabledCheckBox.CheckedChanged += (_, _) => OnLoudnessUiChanged();
+        _loudnessTargetLabel = new Label
+        {
+            Font = baseFont,
+            Location = new Point(rightX + loudnessPadL, row1ContentTop + RowPitch),
+            Size = new Size(loudnessTargetLabelW, RowHeight),
+            Text = "Target",
+            TextAlign = ContentAlignment.MiddleLeft,
+        };
+        _loudnessTargetTextBox = new TextBox
+        {
+            BorderStyle = BorderStyle.FixedSingle,
+            Font = baseFont,
+            Size = new Size(loudnessTargetBoxW, 25),
+            TextAlign = HorizontalAlignment.Center,
+            MaxLength = 6,
+            Text = LoudnessTargetDefault.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture),
+        };
+        _loudnessTargetTextBox.Location = new Point(
+            rightX + loudnessPadL + loudnessTargetLabelW + loudnessGap,
+            CenterInRow(row1ContentTop + RowPitch, _loudnessTargetTextBox.PreferredHeight));
+        _loudnessTargetTextBox.KeyPress += LoudnessTargetTextBox_KeyPress;
+        _loudnessTargetTextBox.Leave += LoudnessTargetTextBox_Leave;
+        _loudnessTargetTextBox.TextChanged += (_, _) => OnLoudnessUiChanged();
+        WireTextEditingFocus(_loudnessTargetTextBox);
+        _loudnessUnitLabel = new Label
+        {
+            Font = baseFont,
+            Location = new Point(
+                _loudnessTargetTextBox.Right + loudnessGap,
+                row1ContentTop + RowPitch),
+            Size = new Size(loudnessUnitW, RowHeight),
+            Text = "LKFS",
+            TextAlign = ContentAlignment.MiddleLeft,
+        };
+        _loudnessGroupBalanceCheckBox = new FlatOptionCheckBox
+        {
+            AutoSize = false,
+            Checked = true,
+            Font = baseFont,
+            Location = new Point(rightX + loudnessPadL, row1ContentTop + RowPitch * 2),
+            Size = new Size(rightW - loudnessPadL - loudnessPadR, RowHeight),
+            Text = "Preserve Group Balance",
+        };
+        _loudnessGroupBalanceCheckBox.CheckedChanged += (_, _) => OnLoudnessUiChanged();
 
-        // 見出し背景がコメント設定の全列（col2＋col3）を覆うよう幅を広げる。
-        _commentHeaderLabel = CreateHeader("Marker Comment", headerFont, col2X, col3X + col3W - col2X);
+        _gridHeaderLabel = CreateHeader("Marker Grid", headerFont, leftX, leftColW, y: row2HeaderY);
+        _gridBarRadio = CreateGridRadio("Bar", MarkerGridOverrideMode.Bar, leftX, leftColW, row2ContentTop);
+        _gridBeatRadio = CreateGridRadio("Beat", MarkerGridOverrideMode.Beat, leftX, leftColW, row2ContentTop + RowPitch);
+        _gridDefaultRadio = CreateGridRadio(
+            "Timeline",
+            MarkerGridOverrideMode.Default,
+            leftX,
+            leftColW,
+            row2ContentTop + RowPitch * 2);
+
+        var commentDigitsX = rightX;
+        var commentFieldsX = rightX + col2W + commentColumnGap;
+        _commentHeaderLabel = CreateHeader("Marker Comment", headerFont, rightX, rightW, y: row2HeaderY);
 
         _digitsLabel = new Label
         {
             Font = baseFont,
-            Location = new Point(col2X + S(12), contentTop),
+            Location = new Point(commentDigitsX + S(12), row2ContentTop),
             Size = new Size(S(48), RowHeight),
             Text = "Digits",
             TextAlign = ContentAlignment.MiddleLeft,
@@ -171,62 +289,85 @@ internal sealed class MarkerOptionsPanel : UserControl
             Text = "3",
         };
         _digitsTextBox.Location = new Point(
-            col2X + S(12) + S(50),
-            CenterInRow(contentTop, _digitsTextBox.PreferredHeight));
+            commentDigitsX + S(12) + S(50),
+            CenterInRow(row2ContentTop, _digitsTextBox.PreferredHeight));
         _digitsTextBox.KeyPress += DigitsTextBox_KeyPress;
         _digitsTextBox.TextChanged += (_, _) => OnUiChanged();
         WireTextEditingFocus(_digitsTextBox);
 
-        _zeroPadCheckBox = CreateCheckBox("Zero Pad", baseFont, col2X + S(12), contentTop + RowPitch, col2W - S(16));
-        _resetPerPartCheckBox = CreateCheckBox("Reset Per Part", baseFont, col2X + S(12), contentTop + RowPitch * 2, col2W - S(12));
+        _zeroPadCheckBox = CreateCheckBox(
+            "Zero Pad",
+            baseFont,
+            commentDigitsX + S(12),
+            row2ContentTop + RowPitch,
+            col2W - S(16));
+        _resetPerPartCheckBox = CreateCheckBox(
+            "Reset Per Part",
+            baseFont,
+            commentDigitsX + S(12),
+            row2ContentTop + RowPitch * 2,
+            col2W - S(12));
 
         _previewLabel = new Label
         {
             AutoEllipsis = true,
             Font = baseFont,
-            Location = new Point(col2X + S(12), contentTop + RowPitch * 3),
-            Size = new Size(col3X + col3W - (col2X + S(12)), RowHeight),
+            Location = new Point(commentDigitsX + S(12), row2ContentTop + RowPitch * 3),
+            Size = new Size(rightW - S(12), RowHeight),
             Text = string.Empty,
             TextAlign = ContentAlignment.MiddleLeft,
         };
 
-        // Prefix／Suffix／Separator はラベル＋入力欄。入力があれば有効。
-        var commentFieldX = col3X + col3PadL;
+        var commentFieldX = commentFieldsX + col3PadL;
         var commentEditorX = commentFieldX + col3LabelW + col3Gap;
-        _prefixLabel = CreateFieldLabel("Prefix", baseFont, commentFieldX, contentTop, col3LabelW);
-        _prefixTextBox = CreateTextBox(baseFont, commentEditorX, contentTop, col3EditorW);
-        _suffixLabel = CreateFieldLabel("Suffix", baseFont, commentFieldX, contentTop + RowPitch, col3LabelW);
-        _suffixTextBox = CreateTextBox(baseFont, commentEditorX, contentTop + RowPitch, col3EditorW);
-        _joinerLabel = CreateFieldLabel("Separator", baseFont, commentFieldX, contentTop + RowPitch * 2, col3LabelW);
-        _joinerTextBox = CreateTextBox(baseFont, commentEditorX, contentTop + RowPitch * 2, col3EditorW);
+        _prefixLabel = CreateFieldLabel("Prefix", baseFont, commentFieldX, row2ContentTop, col3LabelW);
+        _prefixTextBox = CreateTextBox(baseFont, commentEditorX, row2ContentTop, col3EditorW);
+        _suffixLabel = CreateFieldLabel("Suffix", baseFont, commentFieldX, row2ContentTop + RowPitch, col3LabelW);
+        _suffixTextBox = CreateTextBox(baseFont, commentEditorX, row2ContentTop + RowPitch, col3EditorW);
+        _joinerLabel = CreateFieldLabel("Separator", baseFont, commentFieldX, row2ContentTop + RowPitch * 2, col3LabelW);
+        _joinerTextBox = CreateTextBox(baseFont, commentEditorX, row2ContentTop + RowPitch * 2, col3EditorW);
 
-        RequiredHeight = contentTop + RowPitch * 3 + RowHeight + 2;
-        Height = RequiredHeight;
+        _moreOptionsBodyControls =
+        [
+            _streamHeaderLabel,
+            _streamEnabledCheckBox,
+            _prefetchLabel,
+            _prefetchTextBox,
+            _lookAheadLabel,
+            _lookAheadTextBox,
+            _loudnessHeaderLabel,
+            _loudnessEnabledCheckBox,
+            _loudnessTargetLabel,
+            _loudnessTargetTextBox,
+            _loudnessUnitLabel,
+            _loudnessGroupBalanceCheckBox,
+            _gridHeaderLabel,
+            _gridBarRadio,
+            _gridBeatRadio,
+            _gridDefaultRadio,
+            _commentHeaderLabel,
+            _digitsLabel,
+            _digitsTextBox,
+            _zeroPadCheckBox,
+            _resetPerPartCheckBox,
+            _previewLabel,
+            _prefixLabel,
+            _prefixTextBox,
+            _suffixLabel,
+            _suffixTextBox,
+            _joinerLabel,
+            _joinerTextBox,
+        ];
 
-        Controls.Add(_streamHeaderLabel);
-        Controls.Add(_streamEnabledCheckBox);
-        Controls.Add(_prefetchLabel);
-        Controls.Add(_prefetchTextBox);
-        Controls.Add(_lookAheadLabel);
-        Controls.Add(_lookAheadTextBox);
-        Controls.Add(_gridHeaderLabel);
-        Controls.Add(_gridBarRadio);
-        Controls.Add(_gridBeatRadio);
-        Controls.Add(_gridDefaultRadio);
-        Controls.Add(_commentHeaderLabel);
-        Controls.Add(_digitsLabel);
-        Controls.Add(_digitsTextBox);
-        Controls.Add(_zeroPadCheckBox);
-        Controls.Add(_resetPerPartCheckBox);
-        Controls.Add(_previewLabel);
-        Controls.Add(_prefixLabel);
-        Controls.Add(_prefixTextBox);
-        Controls.Add(_suffixLabel);
-        Controls.Add(_suffixTextBox);
-        Controls.Add(_joinerLabel);
-        Controls.Add(_joinerTextBox);
+        Controls.Add(_moreOptionsHeaderLabel);
+        foreach (var control in _moreOptionsBodyControls)
+        {
+            Controls.Add(control);
+        }
+
         Controls.Add(_leftSeparator);
 
+        ApplyMoreOptionsVisibility();
         ApplyToolTips();
     }
 
@@ -236,8 +377,33 @@ internal sealed class MarkerOptionsPanel : UserControl
     /// <summary>全カラムが収まるために必要な幅（DPI 反映済み）。</summary>
     public int RequiredWidth { get; }
 
-    /// <summary>全項目が収まる固定高さ（DPI 反映済み）。</summary>
-    public int RequiredHeight { get; }
+    /// <summary>現在の開閉状態で必要な固定高さ（DPI 反映済み）。</summary>
+    public int RequiredHeight => _moreOptionsExpanded ? _expandedHeight : _collapsedHeight;
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        SyncMoreOptionsHeaderWidth();
+    }
+
+    /// <summary>
+    /// More Options 見出し帯をパネル右端（Music Playlist 列の右端）まで伸ばす。
+    /// </summary>
+    private void SyncMoreOptionsHeaderWidth()
+    {
+        // ctor 中に Height 設定で OnResize が走るため、生成前は無視する。
+        if (_moreOptionsHeaderLabel is null)
+        {
+            return;
+        }
+
+        var left = _moreOptionsHeaderLabel.Left;
+        var width = Math.Max(1, ClientSize.Width - left);
+        if (_moreOptionsHeaderLabel.Width != width)
+        {
+            _moreOptionsHeaderLabel.Width = width;
+        }
+    }
 
     /// <summary>Music Track のストリーミング有効。</summary>
     public bool StreamEnabled => _streamEnabled;
@@ -247,6 +413,18 @@ internal sealed class MarkerOptionsPanel : UserControl
 
     /// <summary>Prefetch Length（ms）。</summary>
     public int PrefetchLengthMs => _prefetchLengthMs;
+
+    /// <summary>EXPORT 時にラウドネス正規化するか。</summary>
+    public bool LoudnessNormalizeEnabled => _loudnessNormalizeEnabled;
+
+    /// <summary>正規化ターゲット（LKFS）。</summary>
+    public double LoudnessTargetLkfs => _loudnessTargetLkfs;
+
+    /// <summary>グループ内の相対バランスを保って正規化するか。</summary>
+    public bool LoudnessPreserveGroupBalance => _loudnessPreserveGroupBalance;
+
+    /// <summary>More Options が開いているか。</summary>
+    public bool MoreOptionsExpanded => _moreOptionsExpanded;
 
     /// <summary>DPI スケール（96dpi 基準）を適用する。</summary>
     private int S(int value) => (int)Math.Round(value * DeviceDpi / 96f);
@@ -311,6 +489,43 @@ internal sealed class MarkerOptionsPanel : UserControl
         UpdateDependentStates();
     }
 
+    /// <summary>Loudness Normalize を UI へ反映する。</summary>
+    public void BindLoudness(
+        bool enabled,
+        double targetLkfs,
+        bool preserveGroupBalance)
+    {
+        _updating = true;
+        try
+        {
+            _loudnessNormalizeEnabled = enabled;
+            _loudnessEnabledCheckBox.Checked = enabled;
+            _loudnessTargetLkfs = Math.Clamp(targetLkfs, LoudnessTargetMin, LoudnessTargetMax);
+            _loudnessTargetTextBox.Text = FormatLoudnessTarget(_loudnessTargetLkfs);
+            _loudnessPreserveGroupBalance = preserveGroupBalance;
+            _loudnessGroupBalanceCheckBox.Checked = preserveGroupBalance;
+        }
+        finally
+        {
+            _updating = false;
+        }
+
+        UpdateDependentStates();
+    }
+
+    /// <summary>More Options の開閉を UI へ反映する。</summary>
+    public void BindMoreOptions(bool expanded)
+    {
+        if (_moreOptionsExpanded == expanded)
+        {
+            return;
+        }
+
+        _moreOptionsExpanded = expanded;
+        ApplyMoreOptionsVisibility();
+        RequiredHeightChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     public void ApplyColors()
     {
         var back = UiColors.ForControlBack(UiColors.PlaylistBack);
@@ -321,19 +536,28 @@ internal sealed class MarkerOptionsPanel : UserControl
 
         BackColor = back;
         _leftSeparator.BackColor = separator;
-        _streamHeaderLabel.BackColor = back;
-        _streamHeaderLabel.BarColor = headerBack;
-        _streamHeaderLabel.ForeColor = headerFore;
+        foreach (var header in new[]
+        {
+            _streamHeaderLabel,
+            _loudnessHeaderLabel,
+            _moreOptionsHeaderLabel,
+            _gridHeaderLabel,
+            _commentHeaderLabel,
+        })
+        {
+            header.BackColor = back;
+            header.BarColor = headerBack;
+            header.ForeColor = headerFore;
+        }
+
         _lookAheadLabel.BackColor = back;
         _lookAheadLabel.ForeColor = optionFore;
         _prefetchLabel.BackColor = back;
         _prefetchLabel.ForeColor = optionFore;
-        _gridHeaderLabel.BackColor = back;
-        _gridHeaderLabel.BarColor = headerBack;
-        _gridHeaderLabel.ForeColor = headerFore;
-        _commentHeaderLabel.BackColor = back;
-        _commentHeaderLabel.BarColor = headerBack;
-        _commentHeaderLabel.ForeColor = headerFore;
+        _loudnessTargetLabel.BackColor = back;
+        _loudnessTargetLabel.ForeColor = optionFore;
+        _loudnessUnitLabel.BackColor = back;
+        _loudnessUnitLabel.ForeColor = optionFore;
         _digitsLabel.BackColor = back;
         _digitsLabel.ForeColor = optionFore;
         _prefixLabel.BackColor = back;
@@ -354,6 +578,8 @@ internal sealed class MarkerOptionsPanel : UserControl
         foreach (var checkBox in new[]
         {
             _streamEnabledCheckBox,
+            _loudnessEnabledCheckBox,
+            _loudnessGroupBalanceCheckBox,
             _zeroPadCheckBox,
             _resetPerPartCheckBox,
         })
@@ -368,6 +594,7 @@ internal sealed class MarkerOptionsPanel : UserControl
         {
             _lookAheadTextBox,
             _prefetchTextBox,
+            _loudnessTargetTextBox,
             _digitsTextBox,
             _prefixTextBox,
             _suffixTextBox,
@@ -400,6 +627,8 @@ internal sealed class MarkerOptionsPanel : UserControl
         foreach (var checkBox in new[]
         {
             _streamEnabledCheckBox,
+            _loudnessEnabledCheckBox,
+            _loudnessGroupBalanceCheckBox,
             _zeroPadCheckBox,
             _resetPerPartCheckBox,
         })
@@ -424,11 +653,30 @@ internal sealed class MarkerOptionsPanel : UserControl
         UpdateDependentStates();
     }
 
-    private SectionHeaderLabel CreateHeader(string text, Font font, int x, int width) => new()
+    private void ToggleMoreOptions()
+    {
+        _moreOptionsExpanded = !_moreOptionsExpanded;
+        ApplyMoreOptionsVisibility();
+        RequiredHeightChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void ApplyMoreOptionsVisibility()
+    {
+        _moreOptionsHeaderLabel.Text = FormatMoreOptionsHeader(_moreOptionsExpanded);
+        foreach (var control in _moreOptionsBodyControls)
+        {
+            control.Visible = _moreOptionsExpanded;
+        }
+    }
+
+    private static string FormatMoreOptionsHeader(bool expanded) =>
+        expanded ? "▾ More Options" : "▸ More Options";
+
+    private SectionHeaderLabel CreateHeader(string text, Font font, int x, int width, int y) => new()
     {
         AutoEllipsis = true,
         Font = font,
-        Location = new Point(x, 1),
+        Location = new Point(x, y),
         Padding = new Padding(S(10), 0, S(4), 0),
         Size = new Size(width, S(HeaderHeight)),
         Text = text,
@@ -566,6 +814,7 @@ internal sealed class MarkerOptionsPanel : UserControl
     {
         yield return _lookAheadTextBox;
         yield return _prefetchTextBox;
+        yield return _loudnessTargetTextBox;
         yield return _digitsTextBox;
         yield return _prefixTextBox;
         yield return _suffixTextBox;
@@ -612,6 +861,8 @@ internal sealed class MarkerOptionsPanel : UserControl
         _digitsTextBox.ReadOnly = false;
         _lookAheadTextBox.ReadOnly = !_streamEnabled;
         _prefetchTextBox.ReadOnly = !_streamEnabled;
+        _loudnessTargetTextBox.ReadOnly = !_loudnessNormalizeEnabled;
+        _loudnessGroupBalanceCheckBox.Enabled = _loudnessNormalizeEnabled;
         _prefixTextBox.ReadOnly = false;
         _suffixTextBox.ReadOnly = false;
         _joinerTextBox.ReadOnly = false;
@@ -627,11 +878,21 @@ internal sealed class MarkerOptionsPanel : UserControl
         _digitsLabel.ForeColor = optionFore;
         _lookAheadLabel.ForeColor = _streamEnabled ? optionFore : disabledFore;
         _prefetchLabel.ForeColor = _streamEnabled ? optionFore : disabledFore;
+        _loudnessTargetLabel.ForeColor = _loudnessNormalizeEnabled ? optionFore : disabledFore;
+        _loudnessUnitLabel.ForeColor = _loudnessNormalizeEnabled ? optionFore : disabledFore;
+        _loudnessGroupBalanceCheckBox.ForeColor = _loudnessNormalizeEnabled ? optionFore : disabledFore;
+        _loudnessGroupBalanceCheckBox.ApplyColors();
         _prefixLabel.ForeColor = optionFore;
         _suffixLabel.ForeColor = optionFore;
         _joinerLabel.ForeColor = optionFore;
         ApplyInputAppearance(_lookAheadTextBox, enabled: _streamEnabled, optionFore, disabledFore, inputBack);
         ApplyInputAppearance(_prefetchTextBox, enabled: _streamEnabled, optionFore, disabledFore, inputBack);
+        ApplyInputAppearance(
+            _loudnessTargetTextBox,
+            enabled: _loudnessNormalizeEnabled,
+            optionFore,
+            disabledFore,
+            inputBack);
         ApplyInputAppearance(_digitsTextBox, enabled: true, optionFore, disabledFore, inputBack);
         ApplyInputAppearance(_prefixTextBox, enabled: true, optionFore, disabledFore, inputBack);
         ApplyInputAppearance(_suffixTextBox, enabled: true, optionFore, disabledFore, inputBack);
@@ -676,6 +937,34 @@ internal sealed class MarkerOptionsPanel : UserControl
         }
     }
 
+    private void LoudnessTargetTextBox_KeyPress(object? sender, KeyPressEventArgs e)
+    {
+        if (char.IsControl(e.KeyChar))
+        {
+            return;
+        }
+
+        if (e.KeyChar is '-' or '.' or ',')
+        {
+            return;
+        }
+
+        if (e.KeyChar < '0' || e.KeyChar > '9')
+        {
+            e.Handled = true;
+        }
+    }
+
+    private void LoudnessTargetTextBox_Leave(object? sender, EventArgs e)
+    {
+        if (_updating)
+        {
+            return;
+        }
+
+        _loudnessTargetTextBox.Text = FormatLoudnessTarget(_loudnessTargetLkfs);
+    }
+
     private void OnStreamUiChanged()
     {
         if (_updating || _interactionLocked)
@@ -714,6 +1003,45 @@ internal sealed class MarkerOptionsPanel : UserControl
         SettingsChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    private void OnLoudnessUiChanged()
+    {
+        if (_updating || _interactionLocked)
+        {
+            return;
+        }
+
+        var enabled = _loudnessEnabledCheckBox.Checked;
+        var groupBalance = _loudnessGroupBalanceCheckBox.Checked;
+        var targetOk = TryParseLoudnessTarget(_loudnessTargetTextBox.Text, out var target);
+        if (!targetOk)
+        {
+            if (enabled == _loudnessNormalizeEnabled
+                && groupBalance == _loudnessPreserveGroupBalance)
+            {
+                return;
+            }
+
+            _loudnessNormalizeEnabled = enabled;
+            _loudnessPreserveGroupBalance = groupBalance;
+            UpdateDependentStates();
+            SettingsChanged?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        if (enabled == _loudnessNormalizeEnabled
+            && Math.Abs(target - _loudnessTargetLkfs) < 0.0001
+            && groupBalance == _loudnessPreserveGroupBalance)
+        {
+            return;
+        }
+
+        _loudnessNormalizeEnabled = enabled;
+        _loudnessTargetLkfs = target;
+        _loudnessPreserveGroupBalance = groupBalance;
+        UpdateDependentStates();
+        SettingsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     private static bool TryParseStreamMs(string text, out int milliseconds)
     {
         if (int.TryParse(text.Trim(), out milliseconds)
@@ -726,6 +1054,27 @@ internal sealed class MarkerOptionsPanel : UserControl
         milliseconds = 0;
         return false;
     }
+
+    private static bool TryParseLoudnessTarget(string text, out double targetLkfs)
+    {
+        var trimmed = text.Trim().Replace(',', '.');
+        if (double.TryParse(
+                trimmed,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out targetLkfs)
+            && targetLkfs >= LoudnessTargetMin
+            && targetLkfs <= LoudnessTargetMax)
+        {
+            return true;
+        }
+
+        targetLkfs = LoudnessTargetDefault;
+        return false;
+    }
+
+    private static string FormatLoudnessTarget(double value) =>
+        value.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
 
     private void DigitsTextBox_KeyPress(object? sender, KeyPressEventArgs e)
     {
@@ -755,17 +1104,38 @@ internal sealed class MarkerOptionsPanel : UserControl
             "Wwise Music Track のストリーミング関連設定です。");
         SetToolTip(_streamEnabledCheckBox,
             "オンの場合、Music Track をストリーミング有効で作成します（既定オン）。"
-            + " オフのときは LookAhead／Prefetch は適用されません。");
+            + " オフのときは Look-ahead Time／Prefetch Length は適用されません。");
         SetToolTip(_lookAheadLabel,
-            "2 番目以降のセグメントの Look-ahead time（ms、0〜9999。既定 500）。"
+            "2 番目以降のセグメントの Look-ahead Time（ms、0〜9999。既定 500）。"
             + " Stream オン時のみ有効。先頭セグメントは Zero latency のため 0 固定です。");
         SetToolTip(_lookAheadTextBox,
-            "Look-ahead time（ms）。0〜9999。既定は 500 です。Stream オン時のみ有効。");
+            "Look-ahead Time（ms）。0〜9999。既定は 500 です。Stream オン時のみ有効。");
         SetToolTip(_prefetchLabel,
             "Playlist 先頭セグメント先頭トラックの Prefetch Length（ms、0〜9999。既定 500）。Stream オン時のみ有効。");
         SetToolTip(_prefetchTextBox,
             "Prefetch Length（ms）。0〜9999。既定は 500 です。"
             + " Playlist 先頭セグメント先頭トラックにだけ反映されます。Stream オン時のみ有効。");
+        SetToolTip(_loudnessHeaderLabel,
+            "このアプリ独自のラウドネス正規化です（Wwise の非破壊 Loudness Normalize とは無関係）。"
+            + " EXPORT 時に分割 WAV へ破壊編集でゲインを焼き込みます。");
+        SetToolTip(_loudnessEnabledCheckBox,
+            "オンの場合、EXPORT で分割した各 WAV の音量を Target LKFS へ破壊的に正規化します"
+            + "（既定オフ。Wwise 標準機能ではなく、このアプリ独自の処理です）。"
+            + " 元の連続波形は変更せず、書き出すセパレート WAV のみを書き換えます。");
+        SetToolTip(_loudnessTargetLabel,
+            "正規化の目標ラウドネス（LKFS、−70〜0。既定 −24）。Normalize オン時のみ有効。");
+        SetToolTip(_loudnessTargetTextBox,
+            "目標ラウドネス（LKFS）。−70〜0。既定は −24 です。Normalize オン時のみ有効。");
+        SetToolTip(_loudnessUnitLabel,
+            "単位は LKFS（ITU-R BS.1770 / LUFS と同値）です。");
+        SetToolTip(_loudnessGroupBalanceCheckBox,
+            "オンの場合、グループ内で最も大きい音量のファイルを Target に合わせ、"
+            + "他メンバーは相対バランスを保ったまま同じゲインを破壊編集で適用します（既定オン）。"
+            + " オフでは各ファイルを個別に Target へ正規化します。");
+        SetToolTip(_moreOptionsHeaderLabel,
+            "Stream／Loudness Normalize／Marker Grid／Marker Comment を開閉します（既定は開いた状態）。"
+            + " 開閉状態はプロジェクト設定へ自動保存されます。"
+            + " 開閉しても Music Playlist の高さは変わりません。");
         SetToolTip(_gridHeaderLabel,
             "マーカーをドラッグで付与するときのスナップ間隔を指定します。縦線の描画には影響しません。");
         SetToolTip(_gridDefaultRadio,

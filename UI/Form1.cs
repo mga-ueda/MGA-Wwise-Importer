@@ -220,16 +220,30 @@ public partial class Form1 : Form
     private long _diagnosticSequence;
 #endif
 
+    /// <summary>
+    /// Fade／Playlist と More Options をまとめる固定高ホスト。
+    /// 親（rightSidePanel）がログ領域いっぱいに伸びても、Playlist 高さが Fade In と揃うようにする。
+    /// </summary>
+    private readonly Panel _rightSideContentHost = new()
+    {
+        Dock = DockStyle.Top,
+        Name = "rightSideContentHost",
+        TabStop = false,
+    };
+
     public Form1()
     {
         UiColors.LoadFromIni();
         AppFonts.EnsureRegistered();
         InitializeComponent();
+        WireRightSideContentHost();
         transportBar.CommandHoldEnded += TransportBar_CommandHoldEnded;
         ApplyActionBarToolTips();
         DpiChanged += (_, _) =>
         {
             AdjustTransitionSectionHeights();
+            ApplyMarkerOptionsPanelFixedHeight();
+            SyncRightSideContentHostHeight();
             AlignCompactFileNumbersCheckBox();
             AlignProjectBarInputs();
             UpdateMinimumWindowSize();
@@ -252,6 +266,7 @@ public partial class Form1 : Form
         AdjustTransitionSectionHeights();
         UpdateGroupFadeRadioEnabled();
         ApplyMarkerOptionsPanelFixedHeight();
+        SyncRightSideContentHostHeight();
         AlignCompactFileNumbersCheckBox();
         UpdateMinimumWindowSize();
         markerOptionsPanel.Bind(_markerSettings);
@@ -260,10 +275,46 @@ public partial class Form1 : Form
             ApplyMarkerSettings();
             PersistMarkersToProject();
             PersistStreamingToProject();
+            PersistLoudnessToProject();
             ReleaseFocusToWaveform();
         };
         markerOptionsPanel.TextEditingChanged += (_, editing) =>
             SetUiInteractionLocked(UiInteractionLock.MarkerOptionsEdit, editing);
+        markerOptionsPanel.RequiredHeightChanged += (_, _) =>
+        {
+            // More Options 開閉分はウィンドウ高さへ転嫁し、Music Playlist の高さを保つ。
+            var previousPanelHeight = markerOptionsPanel.Height;
+            var desiredPanelHeight = markerOptionsPanel.RequiredHeight;
+            var delta = desiredPanelHeight - previousPanelHeight;
+            markerOptionsPanel.Height = desiredPanelHeight;
+            SyncRightSideContentHostHeight();
+
+            if (delta != 0 && WindowState == FormWindowState.Normal)
+            {
+                if (delta < 0)
+                {
+                    UpdateMinimumWindowSize();
+                }
+
+                var targetFormHeight = Height + delta;
+                if (delta > 0)
+                {
+                    Height = targetFormHeight;
+                    UpdateMinimumWindowSize();
+                }
+                else
+                {
+                    Height = Math.Max(MinimumSize.Height, targetFormHeight);
+                }
+            }
+            else
+            {
+                UpdateMinimumWindowSize();
+            }
+
+            UpdatePlaylistSelectorWidth();
+            PersistMoreOptionsToProject();
+        };
         waveformView.MarkerGridOverride = _markerSettings.GridOverride;
         ApplyPlaylistSelectorColors();
         waapiStatusBar.ApplyColors();
@@ -593,6 +644,36 @@ public partial class Form1 : Form
             markerOptionsPanel.StreamEnabled,
             markerOptionsPanel.LookAheadMs,
             markerOptionsPanel.PrefetchLengthMs);
+    }
+
+    private void PersistLoudnessToProject()
+    {
+        if (_suppressProjectUiEvents
+            || _creatingNewProject
+            || !_projectStore.ContainsName(_loadedProjectName))
+        {
+            return;
+        }
+
+        _projectStore.SaveLoudness(
+            _loadedProjectName,
+            markerOptionsPanel.LoudnessNormalizeEnabled,
+            markerOptionsPanel.LoudnessTargetLkfs,
+            markerOptionsPanel.LoudnessPreserveGroupBalance);
+    }
+
+    private void PersistMoreOptionsToProject()
+    {
+        if (_suppressProjectUiEvents
+            || _creatingNewProject
+            || !_projectStore.ContainsName(_loadedProjectName))
+        {
+            return;
+        }
+
+        _projectStore.SaveMoreOptionsExpanded(
+            _loadedProjectName,
+            markerOptionsPanel.MoreOptionsExpanded);
     }
 
     private string GetDisplayTargetPath()
@@ -1716,6 +1797,11 @@ public partial class Form1 : Form
                 profile.StreamEnabled,
                 profile.LookAheadMs,
                 profile.PrefetchLengthMs);
+            markerOptionsPanel.BindLoudness(
+                profile.LoudnessNormalizeEnabled,
+                profile.LoudnessTargetLkfs,
+                profile.LoudnessPreserveGroupBalance);
+            markerOptionsPanel.BindMoreOptions(profile.MoreOptionsExpanded);
             waveformView.MarkerGridOverride = _markerSettings.GridOverride;
             if (_previewSession is { } session)
             {
@@ -2096,6 +2182,10 @@ public partial class Form1 : Form
         profile.LookAheadMs = markerOptionsPanel.LookAheadMs;
         profile.PrefetchLengthMs = markerOptionsPanel.PrefetchLengthMs;
         profile.StreamEnabled = markerOptionsPanel.StreamEnabled;
+        profile.LoudnessNormalizeEnabled = markerOptionsPanel.LoudnessNormalizeEnabled;
+        profile.LoudnessTargetLkfs = markerOptionsPanel.LoudnessTargetLkfs;
+        profile.LoudnessPreserveGroupBalance = markerOptionsPanel.LoudnessPreserveGroupBalance;
+        profile.MoreOptionsExpanded = markerOptionsPanel.MoreOptionsExpanded;
         return profile;
     }
 
@@ -2406,6 +2496,7 @@ public partial class Form1 : Form
         RefreshFlatOptionControl(compactFileNumbersCheckBox);
         playlistSeparator.BackColor = UiColors.ForControlBack(UiColors.PlaylistButtonBorder);
         rightSidePanel.BackColor = back;
+        _rightSideContentHost.BackColor = back;
         markerOptionsPanel.ApplyColors();
         transitionTimePanel.BackColor = back;
         transitionSettingsPanel.BackColor = back;
@@ -2966,8 +3057,40 @@ public partial class Form1 : Form
     }
 
     /// <summary>
-    /// Marker Grid / Marker Comment は内容が収まる高さへ固定し、
-    /// 右ペインの残り高さを Playlist に割り当てる。
+    /// rightSidePanel 直下の子を固定高ホストへ移し、ログ領域が縦に伸びても
+    /// Music Playlist が Fade In 下端より下へ広がらないようにする。
+    /// </summary>
+    private void WireRightSideContentHost()
+    {
+        var children = rightSidePanel.Controls.Cast<Control>().ToArray();
+        rightSidePanel.Controls.Clear();
+        foreach (var child in children)
+        {
+            _rightSideContentHost.Controls.Add(child);
+        }
+
+        rightSidePanel.Controls.Add(_rightSideContentHost);
+    }
+
+    /// <summary>
+    /// ホスト高さを「Fade 行高＋ More Options 高」に固定する。
+    /// Playlist（Compact Num. 含む）の下端が Fade In セクション下端と一致する。
+    /// </summary>
+    private void SyncRightSideContentHostHeight()
+    {
+        var transitionRowsHeight = Math.Max(
+            Math.Max(fadeInSectionPanel.Height, fadeOutSectionPanel.Height),
+            exitSourceAtSectionPanel.Height);
+        var desired = transitionRowsHeight + markerOptionsPanel.Height;
+        if (_rightSideContentHost.Height != desired)
+        {
+            _rightSideContentHost.Height = desired;
+        }
+    }
+
+    /// <summary>
+    /// More Options は内容が収まる高さへ固定する。
+    /// 開閉時の高さ差分はウィンドウ側で吸収し、Music Playlist の高さを保つ。
     /// </summary>
     private void ApplyMarkerOptionsPanelFixedHeight()
     {
@@ -5679,8 +5802,11 @@ public partial class Form1 : Form
                 preview.SourcePath,
                 outputDirectory,
                 snapshot.Parts,
-                preview.WavInfo.SampleRate,
-                preview.WavInfo.BlockAlign,
+                preview.WavInfo,
+                snapshot.PartGroupIds,
+                markerOptionsPanel.LoudnessNormalizeEnabled,
+                markerOptionsPanel.LoudnessTargetLkfs,
+                markerOptionsPanel.LoudnessPreserveGroupBalance,
                 updateExistingStateGroup,
                 progress));
         }

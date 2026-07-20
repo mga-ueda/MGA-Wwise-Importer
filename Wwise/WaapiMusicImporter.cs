@@ -20,16 +20,22 @@ internal static class WaapiMusicImporter
         string sourceWavPath,
         string outputDirectory,
         IReadOnlyList<WaveformOutputPart> outputParts,
-        uint sampleRate,
-        ushort blockAlign,
+        WavFileInfo wavInfo,
+        IReadOnlyDictionary<int, int>? partGroupIds = null,
+        bool loudnessNormalizeEnabled = false,
+        double loudnessTargetLkfs = -24.0,
+        bool loudnessPreserveGroupBalance = true,
         bool updateExistingStateGroup = false,
         IProgress<string>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        if (sampleRate == 0 || blockAlign == 0)
+        if (wavInfo.SampleRate == 0 || wavInfo.BlockAlign == 0)
         {
             throw new ArgumentException("サンプルレートまたは BlockAlign が不正です。");
         }
+
+        var sampleRate = wavInfo.SampleRate;
+        var blockAlign = wavInfo.BlockAlign;
 
         var sb = new StringBuilder();
         void Log(string line = "")
@@ -60,6 +66,22 @@ internal static class WaapiMusicImporter
             }
         }
 
+        Dictionary<int, float>? partGains = null;
+        if (loudnessNormalizeEnabled)
+        {
+            Log(
+                $"Loudness: Normalize ON → target {loudnessTargetLkfs:0.##} LKFS"
+                + (loudnessPreserveGroupBalance ? " (Preserve Group Balance)" : string.Empty));
+            partGains = LoudnessMeter.ComputePartGains(
+                sourceWavPath,
+                wavInfo,
+                outputParts,
+                partGroupIds,
+                loudnessTargetLkfs,
+                loudnessPreserveGroupBalance,
+                Log);
+        }
+
         // 中間パート WAV は作らず、元 WAV から最終セグメント WAV を直接切り出す。
         var segmentWavs = SliceSegmentWavs(
             plan,
@@ -68,6 +90,8 @@ internal static class WaapiMusicImporter
             outputParts,
             sampleRate,
             blockAlign,
+            wavInfo,
+            partGains,
             Log);
 
         // タイムアウトは import を含むので長めに取る
@@ -220,14 +244,16 @@ internal static class WaapiMusicImporter
         IReadOnlyList<WaveformOutputPart> outputParts,
         uint sampleRate,
         ushort blockAlign,
+        WavFileInfo wavInfo,
+        IReadOnlyDictionary<int, float>? partGains,
         Action<string> log)
     {
         Directory.CreateDirectory(outputDirectory);
         log($"Output  : {outputDirectory}");
 
-        var partStarts = outputParts.ToDictionary(
+        var partByPath = outputParts.ToDictionary(
             part => Path.GetFullPath(Path.Combine(outputDirectory, part.FileName)),
-            part => part.StartSampleOffset,
+            part => part,
             StringComparer.OrdinalIgnoreCase);
 
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -244,21 +270,28 @@ internal static class WaapiMusicImporter
                 foreach (var track in segment.Tracks)
                 {
                     var partPath = Path.GetFullPath(track.SourceWavPath);
-                    if (!partStarts.TryGetValue(partPath, out var partStartSample))
+                    if (!partByPath.TryGetValue(partPath, out var part))
                     {
                         throw new InvalidOperationException(
                             $"出力パートを特定できません: {track.SourceWavPath}");
                     }
 
                     var startSample = checked(
-                        partStartSample + MsToSample(track.ClipStartMs, sampleRate));
+                        part.StartSampleOffset + MsToSample(track.ClipStartMs, sampleRate));
                     var endSample = checked(
-                        partStartSample + MsToSample(track.ClipEndMs, sampleRate));
+                        part.StartSampleOffset + MsToSample(track.ClipEndMs, sampleRate));
                     if (endSample <= startSample)
                     {
                         throw new InvalidOperationException(
                             $"トラック範囲が空です: {segment.Name}/{track.Name}"
                             + $" ({track.ClipStartMs}..{track.ClipEndMs} ms)");
+                    }
+
+                    var gain = 1f;
+                    if (partGains is not null
+                        && partGains.TryGetValue(part.Number, out var partGain))
+                    {
+                        gain = partGain;
                     }
 
                     // Track 名は Segment 名＋レイヤー番号で一意に付けているため、
@@ -272,9 +305,13 @@ internal static class WaapiMusicImporter
                         dest,
                         startSample,
                         endSample,
-                        blockAlign);
+                        blockAlign,
+                        gain,
+                        wavInfo);
                     map[TrackSliceKey(segment.Name, track.Name)] = dest;
-                    log($"WAV: {fileName}");
+                    log(Math.Abs(gain - 1f) < 0.000001f
+                        ? $"WAV: {fileName}"
+                        : $"WAV: {fileName} (gain {gain:0.000})");
                 }
             }
         }
@@ -287,7 +324,9 @@ internal static class WaapiMusicImporter
         string destinationPath,
         long startSample,
         long endSample,
-        ushort blockAlign)
+        ushort blockAlign,
+        float gain,
+        WavFileInfo wavInfo)
     {
         if (!string.Equals(
                 Path.GetFullPath(sourcePath),
@@ -299,7 +338,9 @@ internal static class WaapiMusicImporter
                 destinationPath,
                 startSample,
                 endSample,
-                blockAlign);
+                blockAlign,
+                gain,
+                wavInfo);
             return;
         }
 
@@ -311,7 +352,9 @@ internal static class WaapiMusicImporter
                 temporaryPath,
                 startSample,
                 endSample,
-                blockAlign);
+                blockAlign,
+                gain,
+                wavInfo);
             File.Move(temporaryPath, destinationPath, overwrite: true);
         }
         finally

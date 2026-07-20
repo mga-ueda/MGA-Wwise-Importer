@@ -4,6 +4,7 @@ namespace MgaWwiseIMImporter.Wave;
 
 /// <summary>
 /// ソース WAV の指定サンプル範囲だけを切り出して書き出す（メタデータ埋め込みなし）。
+/// 任意の線形ゲインを適用できる。
 /// </summary>
 internal static class WavSegmentWriter
 {
@@ -15,7 +16,9 @@ internal static class WavSegmentWriter
         string destinationPath,
         long startSample,
         long endSample,
-        ushort blockAlign)
+        ushort blockAlign,
+        float gain = 1f,
+        WavFileInfo? formatInfo = null)
     {
         if (blockAlign == 0)
         {
@@ -106,10 +109,59 @@ internal static class WavSegmentWriter
         writer.Write(Encoding.ASCII.GetBytes("data"));
         writer.Write(segmentByteLength);
         source.Position = dataStart + startByte;
-        CopyExact(source, dest, segmentByteLength);
+        if (Math.Abs(gain - 1f) < 0.000001f)
+        {
+            CopyExact(source, dest, segmentByteLength);
+        }
+        else
+        {
+            var info = formatInfo ?? WavFileInfo.Read(sourcePath);
+            CopyWithGain(source, dest, segmentByteLength, info, gain);
+        }
+
         if ((segmentByteLength & 1) == 1)
         {
             writer.Write((byte)0);
+        }
+    }
+
+    private static void CopyWithGain(
+        Stream source,
+        Stream destination,
+        int byteCount,
+        WavFileInfo info,
+        float gain)
+    {
+        var format = LoudnessMeter.ResolvePcmFormat(info);
+        var bytesPerSample = info.BitsPerSample / 8;
+        var channels = info.Channels;
+        if (bytesPerSample <= 0 || info.BlockAlign != channels * bytesPerSample)
+        {
+            throw new InvalidDataException("WAV のサンプル形式が不正です。");
+        }
+
+        if (byteCount % info.BlockAlign != 0)
+        {
+            throw new InvalidDataException("書き出しバイト数が BlockAlign の倍数ではありません。");
+        }
+
+        var frame = new byte[info.BlockAlign];
+        var frames = byteCount / info.BlockAlign;
+        for (var i = 0; i < frames; i++)
+        {
+            var read = source.Read(frame, 0, frame.Length);
+            if (read != frame.Length)
+            {
+                throw new EndOfStreamException("data チャンクの読み取りが途中で終わりました。");
+            }
+
+            for (var c = 0; c < channels; c++)
+            {
+                var sample = LoudnessMeter.DecodeSample(frame, c * bytesPerSample, format) * gain;
+                LoudnessMeter.EncodeSample(sample, frame, c * bytesPerSample, format);
+            }
+
+            destination.Write(frame, 0, frame.Length);
         }
     }
 

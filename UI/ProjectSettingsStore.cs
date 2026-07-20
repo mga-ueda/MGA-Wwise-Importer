@@ -64,6 +64,18 @@ internal sealed class ProjectProfile
     /// <summary>Playlist 先頭セグメント先頭トラックの Prefetch Length（ms）。</summary>
     public int PrefetchLengthMs { get; set; } = 500;
 
+    /// <summary>EXPORT 時のラウドネス正規化（既定オフ）。</summary>
+    public bool LoudnessNormalizeEnabled { get; set; }
+
+    /// <summary>正規化ターゲット（LKFS。既定 −24）。</summary>
+    public double LoudnessTargetLkfs { get; set; } = -24.0;
+
+    /// <summary>グループ内の相対バランスを保って正規化するか（既定オン）。</summary>
+    public bool LoudnessPreserveGroupBalance { get; set; } = true;
+
+    /// <summary>More Options パネルを開いた状態にするか（既定オン）。</summary>
+    public bool MoreOptionsExpanded { get; set; } = true;
+
     public ProjectProfile Clone() => new()
     {
         Name = Name,
@@ -91,6 +103,10 @@ internal sealed class ProjectProfile
         StreamEnabled = StreamEnabled,
         LookAheadMs = LookAheadMs,
         PrefetchLengthMs = PrefetchLengthMs,
+        LoudnessNormalizeEnabled = LoudnessNormalizeEnabled,
+        LoudnessTargetLkfs = LoudnessTargetLkfs,
+        LoudnessPreserveGroupBalance = LoudnessPreserveGroupBalance,
+        MoreOptionsExpanded = MoreOptionsExpanded,
     };
 
     public void CopyMarkerInto(MarkerSettings markers)
@@ -168,6 +184,10 @@ internal sealed class ProjectSettingsStore
         StreamEnabled = true,
         LookAheadMs = 500,
         PrefetchLengthMs = 500,
+        LoudnessNormalizeEnabled = false,
+        LoudnessTargetLkfs = -24.0,
+        LoudnessPreserveGroupBalance = true,
+        MoreOptionsExpanded = true,
     };
 
     public static ProjectSettingsStore Load()
@@ -307,6 +327,34 @@ internal sealed class ProjectSettingsStore
         profile.StreamEnabled = streamEnabled;
         profile.LookAheadMs = Math.Clamp(lookAheadMs, 0, 9999);
         profile.PrefetchLengthMs = Math.Clamp(prefetchLengthMs, 0, 9999);
+        WriteProfile(name, profile);
+    }
+
+    public void SaveLoudness(
+        string name,
+        bool enabled,
+        double targetLkfs,
+        bool preserveGroupBalance)
+    {
+        if (!_profiles.TryGetValue(name.Trim(), out var profile))
+        {
+            return;
+        }
+
+        profile.LoudnessNormalizeEnabled = enabled;
+        profile.LoudnessTargetLkfs = Math.Clamp(targetLkfs, -70.0, 0.0);
+        profile.LoudnessPreserveGroupBalance = preserveGroupBalance;
+        WriteProfile(name, profile);
+    }
+
+    public void SaveMoreOptionsExpanded(string name, bool expanded)
+    {
+        if (!_profiles.TryGetValue(name.Trim(), out var profile))
+        {
+            return;
+        }
+
+        profile.MoreOptionsExpanded = expanded;
         WriteProfile(name, profile);
     }
 
@@ -614,6 +662,11 @@ internal sealed class ProjectSettingsStore
                 .ToString(CultureInfo.InvariantCulture),
             ["PrefetchLengthMs"] = Math.Clamp(profile.PrefetchLengthMs, 0, 9999)
                 .ToString(CultureInfo.InvariantCulture),
+            ["LoudnessNormalizeEnabled"] = profile.LoudnessNormalizeEnabled ? "1" : "0",
+            ["LoudnessTargetLkfs"] = Math.Clamp(profile.LoudnessTargetLkfs, -70.0, 0.0)
+                .ToString("0.###", CultureInfo.InvariantCulture),
+            ["LoudnessPreserveGroupBalance"] = profile.LoudnessPreserveGroupBalance ? "1" : "0",
+            ["MoreOptionsExpanded"] = profile.MoreOptionsExpanded ? "1" : "0",
         });
     }
 
@@ -764,6 +817,30 @@ internal sealed class ProjectSettingsStore
 
             migratedStreaming = true;
         }
+
+        profile.LoudnessNormalizeEnabled = ReadBool(
+            values,
+            "LoudnessNormalizeEnabled",
+            defaultValue: false);
+        if (values.TryGetValue("LoudnessTargetLkfs", out var loudnessTargetText)
+            && double.TryParse(
+                loudnessTargetText,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var loudnessTarget))
+        {
+            profile.LoudnessTargetLkfs = Math.Clamp(loudnessTarget, -70.0, 0.0);
+        }
+
+        profile.LoudnessPreserveGroupBalance = ReadBool(
+            values,
+            "LoudnessPreserveGroupBalance",
+            defaultValue: true);
+
+        profile.MoreOptionsExpanded = ReadBool(
+            values,
+            "MoreOptionsExpanded",
+            defaultValue: true);
 
         return profile;
     }
