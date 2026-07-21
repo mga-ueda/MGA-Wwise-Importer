@@ -59,7 +59,7 @@ internal sealed class ProjectProfile
     public bool LoudnessPreserveGroupBalance { get; set; } = true;
 
     /// <summary>正規化ゲインの逆を Music Playlist へ戻すか（既定オン）。</summary>
-    public bool AutoVolumeEnabled { get; set; } = true;
+    public bool AutoVolumeEnabled { get; set; } = false;
 
     /// <summary>Auto Volume の書き戻し先（既定 Make-Up Gain）。</summary>
     public AutoVolumeTarget AutoVolumeTarget { get; set; } = AutoVolumeTarget.MakeUpGain;
@@ -67,11 +67,20 @@ internal sealed class ProjectProfile
     /// <summary>More Options パネルを開いた状態にするか（既定オン）。</summary>
     public bool MoreOptionsExpanded { get; set; } = true;
 
-    /// <summary>起動時／プロジェクト復帰時に最後のセッションを復元するか（既定オフ）。</summary>
-    public bool KeepLastSession { get; set; }
+    /// <summary>起動時／プロジェクト復帰時に最後のセッションを復元するか（既定オン）。</summary>
+    public bool KeepLastSession { get; set; } = true;
 
     /// <summary>最後に正常に読み込んだ波形のフルパス。</summary>
     public string LastWavePath { get; set; } = string.Empty;
+
+    /// <summary>Wwise 作成先パスをこのプロジェクトで固定するか（既定オフ）。</summary>
+    public bool KeepTarget { get; set; }
+
+    /// <summary>固定中の Wwise オブジェクトパス。</summary>
+    public string KeptTargetPath { get; set; } = string.Empty;
+
+    /// <summary>固定時の Wwise プロジェクトファイルパス（不一致なら再選択しない）。</summary>
+    public string KeptTargetProjectFilePath { get; set; } = string.Empty;
 
     public ProjectProfile Clone() => new()
     {
@@ -102,6 +111,9 @@ internal sealed class ProjectProfile
         MoreOptionsExpanded = MoreOptionsExpanded,
         KeepLastSession = KeepLastSession,
         LastWavePath = LastWavePath,
+        KeepTarget = KeepTarget,
+        KeptTargetPath = KeptTargetPath,
+        KeptTargetProjectFilePath = KeptTargetProjectFilePath,
     };
 
     public void CopyMarkerInto(MarkerSettings markers)
@@ -177,11 +189,14 @@ internal sealed class ProjectSettingsStore
         LoudnessNormalizeEnabled = false,
         LoudnessTargetLkfs = -24.0,
         LoudnessPreserveGroupBalance = true,
-        AutoVolumeEnabled = true,
+        AutoVolumeEnabled = false,
         AutoVolumeTarget = AutoVolumeTarget.MakeUpGain,
         MoreOptionsExpanded = true,
-        KeepLastSession = false,
+        KeepLastSession = true,
         LastWavePath = string.Empty,
+        KeepTarget = false,
+        KeptTargetPath = string.Empty,
+        KeptTargetProjectFilePath = string.Empty,
     };
 
     public static ProjectSettingsStore Load()
@@ -215,6 +230,7 @@ internal sealed class ProjectSettingsStore
             ? store._names.First(n => string.Equals(n, active, StringComparison.OrdinalIgnoreCase))
             : store._names[0];
 
+        store.MigrateLegacyKeepTargetFromApp();
         return store;
     }
 
@@ -319,6 +335,23 @@ internal sealed class ProjectSettingsStore
         }
 
         profile.LastWavePath = path?.Trim() ?? string.Empty;
+        WriteProfile(name, profile);
+    }
+
+    public void SaveKeepTarget(
+        string name,
+        bool enabled,
+        string keptTargetPath,
+        string keptTargetProjectFilePath)
+    {
+        if (!_profiles.TryGetValue(name.Trim(), out var profile))
+        {
+            return;
+        }
+
+        profile.KeepTarget = enabled;
+        profile.KeptTargetPath = keptTargetPath?.Trim() ?? string.Empty;
+        profile.KeptTargetProjectFilePath = keptTargetProjectFilePath?.Trim() ?? string.Empty;
         WriteProfile(name, profile);
     }
 
@@ -610,6 +643,9 @@ internal sealed class ProjectSettingsStore
             ["MoreOptionsExpanded"] = profile.MoreOptionsExpanded ? "1" : "0",
             ["KeepLastSession"] = profile.KeepLastSession ? "1" : "0",
             ["LastWavePath"] = profile.LastWavePath,
+            ["KeepTarget"] = profile.KeepTarget ? "1" : "0",
+            ["KeptTargetPath"] = profile.KeptTargetPath,
+            ["KeptTargetProjectFilePath"] = profile.KeptTargetProjectFilePath,
         });
     }
 
@@ -719,7 +755,7 @@ internal sealed class ProjectSettingsStore
         profile.AutoVolumeEnabled = ReadBool(
             values,
             "AutoVolumeEnabled",
-            defaultValue: true);
+            defaultValue: false);
         if (values.TryGetValue("AutoVolumeTarget", out var autoVolumeTargetText)
             && Enum.TryParse<AutoVolumeTarget>(autoVolumeTargetText, ignoreCase: true, out var autoVolumeTarget))
         {
@@ -734,13 +770,82 @@ internal sealed class ProjectSettingsStore
         profile.KeepLastSession = ReadBool(
             values,
             "KeepLastSession",
-            defaultValue: false);
+            defaultValue: true);
         if (values.TryGetValue("LastWavePath", out var lastWave))
         {
             profile.LastWavePath = lastWave.Trim().Trim('"');
         }
 
+        profile.KeepTarget = ReadBool(
+            values,
+            "KeepTarget",
+            defaultValue: false);
+        if (values.TryGetValue("KeptTargetPath", out var keptTargetPath))
+        {
+            profile.KeptTargetPath = keptTargetPath.Trim().Trim('"');
+        }
+
+        if (values.TryGetValue("KeptTargetProjectFilePath", out var keptTargetProject))
+        {
+            profile.KeptTargetProjectFilePath = keptTargetProject.Trim().Trim('"');
+        }
+
         return profile;
+    }
+
+    /// <summary>
+    /// 旧 [App] KeepTarget 系を Active プロジェクトへ一度だけ移し、[App] から除去する。
+    /// プロジェクト側に既に Keep Target がある場合は App 側だけ消す。
+    /// </summary>
+    private void MigrateLegacyKeepTargetFromApp()
+    {
+        var appValues = IniFile.ReadSection(AppSettings.Section);
+        var hasLegacy = appValues.ContainsKey("KeepTarget")
+            || appValues.ContainsKey("KeptTargetPath")
+            || appValues.ContainsKey("KeptTargetProjectFilePath");
+        if (!hasLegacy)
+        {
+            return;
+        }
+
+        if (_profiles.TryGetValue(ActiveName, out var profile)
+            && !profile.KeepTarget
+            && string.IsNullOrWhiteSpace(profile.KeptTargetPath)
+            && string.IsNullOrWhiteSpace(profile.KeptTargetProjectFilePath))
+        {
+            profile.KeepTarget = ReadBool(appValues, "KeepTarget", defaultValue: false);
+            if (appValues.TryGetValue("KeptTargetPath", out var keptPath))
+            {
+                profile.KeptTargetPath = keptPath.Trim().Trim('"');
+            }
+
+            if (appValues.TryGetValue("KeptTargetProjectFilePath", out var keptProject))
+            {
+                profile.KeptTargetProjectFilePath = keptProject.Trim().Trim('"');
+            }
+
+            WriteProfile(ActiveName, profile);
+        }
+
+        // [App] を Keep Target 無しで書き直し（他キーは AppSettings 経由で維持）。
+        var cleaned = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (appValues.TryGetValue("AlwaysOnTop", out var alwaysOnTop))
+        {
+            cleaned["AlwaysOnTop"] = alwaysOnTop;
+        }
+
+        if (appValues.TryGetValue("UiLanguage", out var language))
+        {
+            cleaned["UiLanguage"] = language;
+        }
+
+        if (cleaned.Count == 0)
+        {
+            cleaned["AlwaysOnTop"] = "0";
+            cleaned["UiLanguage"] = "ja";
+        }
+
+        IniFile.WriteSection(AppSettings.Section, cleaned);
     }
 
     private static IEnumerable<string> ParseNames(string text)

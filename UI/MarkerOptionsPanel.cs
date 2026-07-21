@@ -79,7 +79,7 @@ internal sealed class MarkerOptionsPanel : UserControl
     private bool _loudnessNormalizeEnabled;
     private double _loudnessTargetLkfs = LoudnessTargetDefault;
     private bool _loudnessPreserveGroupBalance = true;
-    private bool _autoVolumeEnabled = true;
+    private bool _autoVolumeEnabled = false;
     private AutoVolumeTarget _autoVolumeTarget = AutoVolumeTarget.MakeUpGain;
     private bool _moreOptionsExpanded = true;
 
@@ -290,11 +290,7 @@ internal sealed class MarkerOptionsPanel : UserControl
         _autoVolumeCheckBox = new FlatOptionCheckBox
         {
             AutoSize = false,
-            Checked = true,
-            Font = baseFont,
-            Location = new Point(autoVolumeX + autoVolumePadL, row1ContentTop),
-            Size = new Size(autoVolumeColW - autoVolumePadL - autoVolumePadR, RowHeight),
-            Text = UiStrings.LabelAutoVolume,
+            Checked = false,
         };
         _autoVolumeCheckBox.CheckedChanged += (_, _) => OnLoudnessUiChanged();
 

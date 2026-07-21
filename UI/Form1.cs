@@ -603,8 +603,14 @@ public partial class Form1 : Form
         _keepTarget = enabled;
         _keptTargetPath = keptTargetPath.Trim();
         _keptTargetProjectFilePath = keptTargetProjectFilePath.Trim();
-        _appSettings.SaveKeepTarget(
-            enabled,
+        if (_creatingNewProject || !_projectStore.ContainsName(_loadedProjectName))
+        {
+            return;
+        }
+
+        _projectStore.SaveKeepTarget(
+            _loadedProjectName,
+            _keepTarget,
             _keptTargetPath,
             _keptTargetProjectFilePath);
     }
@@ -1773,11 +1779,6 @@ public partial class Form1 : Form
             topMostCheckBox.Checked = _appSettings.AlwaysOnTop;
             topMostCheckBox.CheckedChanged += TopMostCheckBox_CheckedChanged;
             TopMost = _appSettings.AlwaysOnTop;
-
-            _keepTarget = _appSettings.KeepTarget;
-            _keptTargetPath = _appSettings.KeptTargetPath?.Trim() ?? string.Empty;
-            _keptTargetProjectFilePath = _appSettings.KeptTargetProjectFilePath?.Trim() ?? string.Empty;
-            waapiStatusBar.KeepTargetChecked = _keepTarget;
         }
         finally
         {
@@ -1834,6 +1835,11 @@ public partial class Form1 : Form
             keepLastSessionCheckBox.Checked = profile.KeepLastSession;
             keepLastSessionCheckBox.CheckedChanged += KeepLastSessionCheckBox_CheckedChanged;
             _lastWavePath = profile.LastWavePath?.Trim() ?? string.Empty;
+
+            _keepTarget = profile.KeepTarget;
+            _keptTargetPath = profile.KeptTargetPath?.Trim() ?? string.Empty;
+            _keptTargetProjectFilePath = profile.KeptTargetProjectFilePath?.Trim() ?? string.Empty;
+            waapiStatusBar.KeepTargetChecked = _keepTarget;
 
             if (selectInCombo)
             {
@@ -2179,6 +2185,9 @@ public partial class Form1 : Form
         profile.MoreOptionsExpanded = markerOptionsPanel.MoreOptionsExpanded;
         profile.KeepLastSession = keepLastSessionCheckBox.Checked;
         profile.LastWavePath = _lastWavePath?.Trim() ?? string.Empty;
+        profile.KeepTarget = _keepTarget;
+        profile.KeptTargetPath = _keptTargetPath?.Trim() ?? string.Empty;
+        profile.KeptTargetProjectFilePath = _keptTargetProjectFilePath?.Trim() ?? string.Empty;
         return profile;
     }
 
@@ -2298,6 +2307,7 @@ public partial class Form1 : Form
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
             ApplyProjectProfile(_projectStore.GetActive(), selectInCombo: true);
+            RestoreKeepLastSessionIfEnabled();
         }
 
         ReleaseProjectComboFocus();
@@ -2474,7 +2484,9 @@ public partial class Form1 : Form
     {
         if (_creatingNewProject)
         {
+            ClearLoadedWaveAndSession();
             ApplyProjectProfile(_projectStore.GetActive(), selectInCombo: true);
+            RestoreKeepLastSessionIfEnabled();
             ReleaseFocusToWaveform();
             return;
         }
@@ -2496,7 +2508,10 @@ public partial class Form1 : Form
         try
         {
             var next = _projectStore.Delete(name);
+            // 削除したプロジェクトの波形／セッションを残さず、切替時と同じく復元する。
+            ClearLoadedWaveAndSession();
             ApplyProjectProfile(next, selectInCombo: true);
+            RestoreKeepLastSessionIfEnabled();
             AppendReport(UiStrings.LogProjectDeleted(name));
         }
         catch (Exception ex)

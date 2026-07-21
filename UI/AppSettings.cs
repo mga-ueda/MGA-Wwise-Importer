@@ -11,12 +11,6 @@ internal sealed class AppSettings
 
     public bool AlwaysOnTop { get; set; }
 
-    public bool KeepTarget { get; set; }
-
-    public string KeptTargetPath { get; set; } = string.Empty;
-
-    public string KeptTargetProjectFilePath { get; set; } = string.Empty;
-
     /// <summary>UI／ログの表示言語（既定 ja）。</summary>
     public UiLanguage UiLanguage { get; set; } = UiLanguage.Japanese;
 
@@ -46,31 +40,9 @@ internal sealed class AppSettings
         Save();
     }
 
-    public void SaveKeepTarget(
-        bool enabled,
-        string? keptTargetPath = null,
-        string? keptTargetProjectFilePath = null)
-    {
-        KeepTarget = enabled;
-        if (keptTargetPath is not null)
-        {
-            KeptTargetPath = keptTargetPath.Trim();
-        }
-
-        if (keptTargetProjectFilePath is not null)
-        {
-            KeptTargetProjectFilePath = keptTargetProjectFilePath.Trim();
-        }
-
-        Save();
-    }
-
     private Dictionary<string, string> ToDictionary() => new(StringComparer.OrdinalIgnoreCase)
     {
         ["AlwaysOnTop"] = AlwaysOnTop ? "1" : "0",
-        ["KeepTarget"] = KeepTarget ? "1" : "0",
-        ["KeptTargetPath"] = KeptTargetPath,
-        ["KeptTargetProjectFilePath"] = KeptTargetProjectFilePath,
         ["UiLanguage"] = UiStrings.ToIniValue(UiLanguage),
     };
 
@@ -79,11 +51,6 @@ internal sealed class AppSettings
         IniFile.WriteSection(Section, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["AlwaysOnTop"] = values.TryGetValue("AlwaysOnTop", out var alwaysOnTop) ? alwaysOnTop : "0",
-            ["KeepTarget"] = values.TryGetValue("KeepTarget", out var keepTarget) ? keepTarget : "0",
-            ["KeptTargetPath"] = values.TryGetValue("KeptTargetPath", out var keptPath) ? keptPath : string.Empty,
-            ["KeptTargetProjectFilePath"] = values.TryGetValue("KeptTargetProjectFilePath", out var keptProject)
-                ? keptProject
-                : string.Empty,
             ["UiLanguage"] = values.TryGetValue("UiLanguage", out var language) ? language : "ja",
         });
     }
@@ -91,13 +58,6 @@ internal sealed class AppSettings
     private static AppSettings Parse(Dictionary<string, string> values) => new()
     {
         AlwaysOnTop = ReadBool(values, "AlwaysOnTop", defaultValue: false),
-        KeepTarget = ReadBool(values, "KeepTarget", defaultValue: false),
-        KeptTargetPath = values.TryGetValue("KeptTargetPath", out var keptPath)
-            ? keptPath.Trim().Trim('"')
-            : string.Empty,
-        KeptTargetProjectFilePath = values.TryGetValue("KeptTargetProjectFilePath", out var keptProject)
-            ? keptProject.Trim().Trim('"')
-            : string.Empty,
         UiLanguage = values.TryGetValue("UiLanguage", out var languageText)
             ? UiStrings.ParseLanguage(languageText)
             : UiLanguage.Japanese,
@@ -105,9 +65,6 @@ internal sealed class AppSettings
 
     private static bool HasKnownKeys(Dictionary<string, string> values) =>
         values.ContainsKey("AlwaysOnTop")
-        || values.ContainsKey("KeepTarget")
-        || values.ContainsKey("KeptTargetPath")
-        || values.ContainsKey("KeptTargetProjectFilePath")
         || values.ContainsKey("UiLanguage");
 
     private static bool ReadBool(Dictionary<string, string> values, string key, bool defaultValue)

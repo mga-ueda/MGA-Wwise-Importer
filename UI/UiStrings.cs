@@ -92,8 +92,8 @@ internal static class UiStrings
         + "OFF: Keep original numbers (gaps remain).");
 
     public static string TipKeepLastSession => Get(
-        "起動時およびこのプロジェクトへ戻ったときに、最後の作業セッション（波形・グループ／無効化／追加マーカー／Fade・Exit Source At）を復元します（プロジェクト設定）。",
-        "On startup and when returning to this project, restore the last session (wave, groups, disables, markers, Fade / Exit Source At). Project setting.");
+        "起動時およびこのプロジェクトへ戻ったときに、最後の作業セッション（波形・グループ／無効化／追加マーカー／Fade・Exit Source At）を復元します（プロジェクト設定・既定オン）。",
+        "On startup and when returning to this project, restore the last session (wave, groups, disables, markers, Fade / Exit Source At). Project setting (default on).");
 
     public static string TipAlwaysOnTop => Get(
         "ウィンドウを常に最前面へ表示します（アプリ設定）。",
@@ -318,9 +318,9 @@ internal static class UiStrings
 
     public static string TipAutoVolume => Get(
         "オンの場合、Loudness Normalize で変化した音量の逆を Music Playlist の"
-        + " Make-Up Gain または Voice Volume へ書き戻します（既定オン）。Normalize オン時のみ有効。",
+        + " Make-Up Gain または Voice Volume へ書き戻します（既定オフ）。Normalize オン時のみ有効。",
         "When on, write the inverse of Loudness Normalize gain back to the Music Playlist"
-        + " Make-Up Gain or Voice Volume (default on). Only when Normalize is on.");
+        + " Make-Up Gain or Voice Volume (default off). Only when Normalize is on.");
 
     public static string TipAutoVolumeMakeUpGain => Get(
         "Auto Volume の補償を Music Playlist の Make-Up Gain へ設定します（既定）。"
@@ -421,16 +421,16 @@ internal static class UiStrings
 
     // --- Keep Target / status ---
     public static string TipKeepTargetUnlock => Get(
-        "いまの作成先パスをアプリ側で固定します。"
+        "いまの作成先パスをこのプロジェクト設定で固定します。"
         + " その後 Wwise 上で選択を変えても、表示と EXPORT 先はこの固定パスのままです。"
         + " 起動時／EXPORT 前には可能なら Wwise 上でも同じパスを再選択します。",
-        "Lock the current destination path in the app."
+        "Lock the current destination path in this project’s settings."
         + " Later Wwise selection changes will not change the display or EXPORT target."
         + " On startup / before EXPORT, the same path is re-selected in Wwise when possible.");
 
     public static string TipKeepTargetLock => Get(
-        "作成先の固定を解除します。",
-        "Unlock the destination path.");
+        "作成先の固定を解除します（このプロジェクト設定）。",
+        "Unlock the destination path (this project setting).");
 
     public static string KeepTargetOnLabel => Get("- Keep Target -", "- Keep Target -");
     public static string KeepTargetOffLabel => Get("- Not Keep Target -", "- Not Keep Target -");
