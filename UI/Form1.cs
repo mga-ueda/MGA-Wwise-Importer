@@ -56,9 +56,13 @@ public partial class Form1 : Form
     private static extern bool HideCaret(IntPtr hWnd);
 
     private const int EmSetRect = 0x00B3;
+    private const int WmSetRedraw = 0x000B;
 
     [DllImport("user32.dll")]
     private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref NativeRect lParam);
+
+    [DllImport("user32.dll", EntryPoint = "SendMessage", CharSet = CharSet.Auto)]
+    private static extern IntPtr SendMessagePtr(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct NativeRect
@@ -426,8 +430,34 @@ public partial class Form1 : Form
 
         // フォームを不透明化する前にすりガラスを載せ、素の UI が一瞬見えるのを防ぐ。
         SetUiInteractionLocked(UiInteractionLock.Load, locked: true, UiStrings.OverlayStarting);
-        Opacity = 1d;
+
+        // Opacity 復帰の描画を止めている間にオーバーレイを前面へ固定し、素の UI の1フレームを出さない。
+        // WM_SETREDRAW は必ず解除する（解除漏れだと子コントロールが描画されず消えたように見える）。
+        var redrawSuspended = false;
+        try
+        {
+            if (IsHandleCreated)
+            {
+                _ = SendMessagePtr(Handle, WmSetRedraw, IntPtr.Zero, IntPtr.Zero);
+                redrawSuspended = true;
+            }
+
+            Opacity = 1d;
+            _exportOverlay?.ReassertAboveOwner();
+        }
+        finally
+        {
+            if (redrawSuspended && IsHandleCreated)
+            {
+                _ = SendMessagePtr(Handle, WmSetRedraw, (IntPtr)1, IntPtr.Zero);
+            }
+        }
+
+        Refresh();
+        Update();
+        _exportOverlay?.ReassertAboveOwner();
         Activate();
+        _exportOverlay?.ReassertAboveOwner();
 
         // 起動時にプロジェクト名コンボが先頭フォーカス／全選択になるのを防ぐ。
         projectNameComboBox.DismissTransientSelection();
@@ -4654,6 +4684,11 @@ public partial class Form1 : Form
         Text = UiStrings.FormTitle;
         languageFlagButton.RefreshAppearance();
         ApplyLocalizedControlLabels();
+        if (playlistToolTip is DarkToolTip darkTip)
+        {
+            darkTip.ApplyTheme();
+        }
+
         ApplyActionBarToolTips();
         ApplyProjectBarToolTips();
         ApplyTransitionToolTips();
@@ -4919,6 +4954,22 @@ public partial class Form1 : Form
     }
 
     /// <summary>
+    /// WAAPI ステータスバーを除いたクライアント領域。
+    /// <see cref="Control.Top"/> 未確定時でも高さ 0 にならないよう、ClientSize 基準で算出する。
+    /// </summary>
+    private Rectangle GetBusyGlassCoverBounds()
+    {
+        var width = Math.Max(0, ClientSize.Width);
+        var height = ClientSize.Height - waapiStatusBar.Height;
+        if (height <= 0)
+        {
+            height = Math.Max(0, ClientSize.Height);
+        }
+
+        return new Rectangle(0, 0, width, height);
+    }
+
+    /// <summary>
     /// 書き出し／読み込み中はコントロールを無効化せず、WAAPI ステータスバーを除くフォーム全体を
     /// すりガラスで覆ってマウス操作を遮断する（ショートカットは <see cref="_uiInteractionLocks"/> 側で抑止）。
     /// 解除は完了ログを短く見せたあと、子ウィンドウの Opacity フェードで行う。
@@ -4944,8 +4995,7 @@ public partial class Form1 : Form
             }
             else
             {
-                var coverBounds = new Rectangle(0, 0, ClientSize.Width, waapiStatusBar.Top);
-                _exportOverlay.ShowOverlay(this, coverBounds, message);
+                _exportOverlay.ShowOverlay(this, GetBusyGlassCoverBounds(), message);
             }
 
             return;

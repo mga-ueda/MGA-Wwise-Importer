@@ -195,6 +195,7 @@ internal sealed class WaapiStatusBar : Panel
 
     private void ApplyToolTips()
     {
+        _toolTip.ApplyTheme();
         _toolTip.SetToolTip(
             _keepLockButton,
             _keepTargetChecked ? UiStrings.TipKeepTargetLock : UiStrings.TipKeepTargetUnlock);
@@ -347,10 +348,26 @@ internal sealed class WaapiStatusBar : Panel
         }
 
         var text = wwiseVersion.Trim();
+
+        // 製品名だけのときはバージョン未取得（"Wwise vWwise" にしない）。
+        if (text.Equals(wwise, StringComparison.OrdinalIgnoreCase)
+            || text.Equals("Wwise", StringComparison.OrdinalIgnoreCase))
+        {
+            return wwise;
+        }
+
         if (text.StartsWith("Wwise v", StringComparison.OrdinalIgnoreCase)
             || text.StartsWith("Wwise V", StringComparison.OrdinalIgnoreCase))
         {
-            return $"{wwise} v" + text["Wwise ".Length..].TrimStart('v', 'V', ' ');
+            var ver = text["Wwise ".Length..].TrimStart('v', 'V', ' ');
+            if (ver.Length == 0
+                || ver.Equals(wwise, StringComparison.OrdinalIgnoreCase)
+                || ver.Equals("Wwise", StringComparison.OrdinalIgnoreCase))
+            {
+                return wwise;
+            }
+
+            return $"{wwise} v{ver}";
         }
 
         if (text.StartsWith("Wwise ", StringComparison.OrdinalIgnoreCase))
@@ -361,12 +378,20 @@ internal sealed class WaapiStatusBar : Panel
                 rest = rest[1..].TrimStart();
             }
 
-            return rest.Length > 0 ? $"{wwise} v{rest}" : wwise;
+            if (rest.Length == 0
+                || rest.Equals(wwise, StringComparison.OrdinalIgnoreCase)
+                || rest.Equals("Wwise", StringComparison.OrdinalIgnoreCase))
+            {
+                return wwise;
+            }
+
+            return $"{wwise} v{rest}";
         }
 
         if (text.StartsWith('v') || text.StartsWith('V'))
         {
-            return $"{wwise} v{text[1..].TrimStart()}";
+            var ver = text[1..].TrimStart();
+            return ver.Length > 0 ? $"{wwise} v{ver}" : wwise;
         }
 
         return $"{wwise} v{text}";
@@ -374,36 +399,60 @@ internal sealed class WaapiStatusBar : Panel
 
     private void LayoutLabels()
     {
-        var titleMidY = Math.Max(0, (ClientSize.Height - _titleLabel.PreferredHeight) / 2);
+        // Text / Visible 変更直後の PreferredSize 遅れ対策。
+        // NoPadding だと Yu Gothic UI で実描画より狭く測られ "WAAPI"→"WAA" のように見える。
+        const TextFormatFlags measureFlags =
+            TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine;
+
+        static Size Measure(string text, Font font)
+        {
+            var size = TextRenderer.MeasureText(
+                string.IsNullOrEmpty(text) ? " " : text,
+                font,
+                Size.Empty,
+                measureFlags);
+            // 末尾グリフのはみ出し余裕。
+            return new Size(size.Width + 2, size.Height);
+        }
+
+        var titleSize = Measure(_titleLabel.Text, _titleLabel.Font);
+        _titleLabel.AutoSize = false;
+        _titleLabel.Size = titleSize;
+
+        var titleMidY = Math.Max(0, (ClientSize.Height - _titleLabel.Height) / 2);
         _titleLabel.Location = new Point(Padding.Left, titleMidY);
 
         const int padX = 8;
         const int padY = 3;
         // Yu Gothic UI はメトリクス上の中央より文字が下に見えるため、塗りだけ少し下げる。
         const int fillNudgeY = 2;
-        var textSize = TextRenderer.MeasureText(
+        var badgeTextSize = TextRenderer.MeasureText(
             _badgeText,
             _badgeFont,
             Size.Empty,
-            TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+            measureFlags);
         var textTop = titleMidY
-            + Math.Max(0, (_titleLabel.PreferredHeight - textSize.Height) / 2);
-        var badgeWidth = textSize.Width + padX * 2;
-        var badgeLeft = _titleLabel.Right + 8;
-        _badgeTextBounds = new Rectangle(badgeLeft, textTop, badgeWidth, textSize.Height);
+            + Math.Max(0, (_titleLabel.Height - badgeTextSize.Height) / 2);
+        var badgeWidth = badgeTextSize.Width + padX * 2;
+        var badgeLeft = _titleLabel.Left + _titleLabel.Width + 8;
+        _badgeTextBounds = new Rectangle(badgeLeft, textTop, badgeWidth, badgeTextSize.Height);
         _badgeFillBounds = new Rectangle(
             badgeLeft,
             textTop - padY + fillNudgeY,
             badgeWidth,
-            textSize.Height + padY * 2);
+            badgeTextSize.Height + padY * 2);
 
         // 省略なし。全文＋末尾鍵＋状態ラベルをそのまま並べる。
         const int gapBeforeLock = 6;
         const int gapBeforeState = 2;
         var detailX = _badgeFillBounds.Right + 12;
-        _detailLabel.AutoSize = true;
+        var detailSize = Measure(_detailLabel.Text, _detailLabel.Font);
+        _detailLabel.AutoSize = false;
         _detailLabel.AutoEllipsis = false;
-        _detailLabel.Location = new Point(detailX, titleMidY);
+        _detailLabel.Size = detailSize;
+        _detailLabel.Location = new Point(
+            detailX,
+            Math.Max(0, (ClientSize.Height - _detailLabel.Height) / 2));
 
         _keepLockButton.Visible = _showKeepLock;
         _keepLockButton.Enabled = _keepLockEnabled;
@@ -413,12 +462,18 @@ internal sealed class WaapiStatusBar : Panel
             _keepStateLabel.Text = _keepTargetChecked
                 ? UiStrings.KeepTargetOnLabel
                 : UiStrings.KeepTargetOffLabel;
-            var lockLeft = _detailLabel.Right + gapBeforeLock;
+            var stateSize = Measure(_keepStateLabel.Text, _keepStateLabel.Font);
+            _keepStateLabel.AutoSize = false;
+            _keepStateLabel.Size = stateSize;
+
+            var lockLeft = detailX + detailSize.Width + gapBeforeLock;
             var lockTop = Math.Max(0, (ClientSize.Height - _keepLockButton.Height) / 2);
             _keepLockButton.Location = new Point(lockLeft, lockTop);
 
-            var stateMidY = Math.Max(0, (ClientSize.Height - _keepStateLabel.PreferredHeight) / 2);
-            _keepStateLabel.Location = new Point(_keepLockButton.Right + gapBeforeState, stateMidY);
+            var stateMidY = Math.Max(0, (ClientSize.Height - _keepStateLabel.Height) / 2);
+            _keepStateLabel.Location = new Point(
+                _keepLockButton.Right + gapBeforeState,
+                stateMidY);
         }
 
         Invalidate();

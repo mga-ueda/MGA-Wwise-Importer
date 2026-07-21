@@ -2132,6 +2132,7 @@ internal sealed class WaveformView : Control
     /// <summary>表示言語切替後にツールチップ文言を付け直す。</summary>
     public void RefreshLocalizedToolTips()
     {
+        _timelineToolTip.ApplyTheme();
         _timelineToolTipText = null;
         var client = PointToClient(Cursor.Position);
         UpdateTimelineToolTip(ClientRectangle.Contains(client) ? client : null);

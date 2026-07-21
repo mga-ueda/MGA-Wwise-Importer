@@ -20,6 +20,11 @@ internal sealed class ExportGlassOverlay : Form
     private const int SwShowNoActivate = 4;
     private const int WsExToolwindow = 0x00000080;
     private const int WsExNoActivate = 0x08000000;
+    private const uint SwpNoSize = 0x0001;
+    private const uint SwpNoMove = 0x0002;
+    private const uint SwpNoActivate = 0x0010;
+    private const uint SwpShowWindow = 0x0040;
+    private static readonly IntPtr HwndTop = new(0);
 
     private readonly System.Windows.Forms.Timer _dotsTimer = new() { Interval = 450 };
     private readonly System.Windows.Forms.Timer _fadeDelayTimer = new() { Interval = FadeOutDelayMs };
@@ -142,6 +147,32 @@ internal sealed class ExportGlassOverlay : Form
 
         ShowWindow(Handle, SwShowNoActivate);
         Visible = true;
+        ReassertAboveOwner();
+    }
+
+    /// <summary>
+    /// オーナーの Opacity 復帰や Activate で前面順が入れ替わったときに、
+    /// アクティブを奪わずオーバーレイをオーナー直上へ戻す。
+    /// フェード中／解除待ちは触らない（再表示で下の UI を隠し続けるのを防ぐ）。
+    /// </summary>
+    public void ReassertAboveOwner()
+    {
+        if (IsDisposed || !IsHandleCreated || !IsShowingBusy)
+        {
+            return;
+        }
+
+        ShowWindow(Handle, SwShowNoActivate);
+        SetWindowPos(
+            Handle,
+            HwndTop,
+            0,
+            0,
+            0,
+            0,
+            SwpNoMove | SwpNoSize | SwpNoActivate | SwpShowWindow);
+        Refresh();
+        Update();
     }
 
     /// <summary>表示を維持したまま中央メッセージだけ差し替える（起動→Last Session 継続用）。</summary>
@@ -535,6 +566,16 @@ internal sealed class ExportGlassOverlay : Form
 
     [DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(
+        IntPtr hWnd,
+        IntPtr hWndInsertAfter,
+        int x,
+        int y,
+        int cx,
+        int cy,
+        uint uFlags);
 
     [DllImport("user32.dll")]
     private static extern IntPtr SetActiveWindow(IntPtr hWnd);

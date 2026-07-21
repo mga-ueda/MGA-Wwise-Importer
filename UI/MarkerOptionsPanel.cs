@@ -1258,6 +1258,7 @@ internal sealed class MarkerOptionsPanel : UserControl
 
     private void ApplyToolTips()
     {
+        _toolTip.ApplyTheme();
         SetToolTip(_streamHeaderLabel, UiStrings.TipStreamHeader);
         SetToolTip(_streamEnabledCheckBox, UiStrings.TipStreamEnabled);
         SetToolTip(_lookAheadLabel, UiStrings.TipLookAheadLabel);

@@ -125,13 +125,49 @@ internal static class WaapiStartupProbe
     private static string FormatWwiseVersion(JsonElement info)
     {
         var displayName = TryGetString(info, "displayName", out var name) ? name : UiStrings.LabelWwise;
-        if (info.TryGetProperty("version", out var version)
-            && TryGetString(version, "displayName", out var versionName))
+        if (info.TryGetProperty("version", out var version))
         {
-            return $"{displayName} {versionName}";
+            if (TryGetString(version, "displayName", out var versionName))
+            {
+                return $"{displayName} {versionName}";
+            }
+
+            // displayName が空のとき year / major / minor / build から組み立てる。
+            if (TryGetInt(version, "year", out var year)
+                && TryGetInt(version, "major", out var major)
+                && TryGetInt(version, "minor", out var minor))
+            {
+                var built = TryGetInt(version, "build", out var build)
+                    ? $"{year}.{major}.{minor}.{build}"
+                    : $"{year}.{major}.{minor}";
+                return $"{displayName} {built}";
+            }
         }
 
         return displayName;
+    }
+
+    private static bool TryGetInt(JsonElement element, string propertyName, out int value)
+    {
+        value = 0;
+        if (element.ValueKind != JsonValueKind.Object
+            || !element.TryGetProperty(propertyName, out var property))
+        {
+            return false;
+        }
+
+        if (property.ValueKind == JsonValueKind.Number && property.TryGetInt32(out value))
+        {
+            return true;
+        }
+
+        if (property.ValueKind == JsonValueKind.String
+            && int.TryParse(property.GetString(), out value))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private static string FormatProject(JsonElement project)

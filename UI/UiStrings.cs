@@ -1243,7 +1243,7 @@ internal static class UiStrings
     public static string LabelBar => Get("Bar", "Bar");
     public static string LabelBeat => Get("Beat", "Beat");
 
-    /// <summary>Fade ラジオの表示（"1.0 Sec." / "1.0 秒"）。0 以下は <see cref="LabelNone"/>。</summary>
+    /// <summary>Fade ラジオの表示（"1.0 Sec."）。0 以下は <see cref="LabelNone"/>。表記は日英とも英語固定。</summary>
     public static string LabelFadeSeconds(double seconds)
     {
         if (seconds <= 0d)
@@ -1252,7 +1252,7 @@ internal static class UiStrings
         }
 
         var value = seconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
-        return Get($"{value} 秒", $"{value} Sec.");
+        return $"{value} Sec.";
     }
 
     /// <summary>Exit Source At ラジオの表示名。</summary>
@@ -1283,11 +1283,12 @@ internal static class UiStrings
         _ => mode.ToString(),
     };
 
-    /// <summary>波形一覧で無効化した Playlist の代替表示名。</summary>
-    public static string LabelExcludedRegion(int index) => Format(
-        "除外リージョン {0}",
-        "Excluded Region {0}",
-        index);
+    /// <summary>波形一覧で無効化した Playlist の代替表示名（英語固定）。</summary>
+    public static string LabelExcludedRegion(int index) =>
+        string.Format(
+            System.Globalization.CultureInfo.InvariantCulture,
+            "Excluded Region {0}",
+            index);
 
     // Form1: フォームタイトル・著作権表記
     public static string FormTitle => Get(
@@ -1300,22 +1301,22 @@ internal static class UiStrings
         "© 2026 MIYABI GAME AUDIO INC.  GitHub"
         + "\nWwise® and Audiokinetic® are trademarks of Audiokinetic Inc.");
 
-    // Form1: アクセシビリティ名
+    // Form1: アクセシビリティ名（元から英語固定）
     public static string AccessibleProjectFolderButton => Get(
-        "書き出し先フォルダを選択",
-        "Choose the export folder");
+        "Select export folder",
+        "Select export folder");
 
     public static string AccessibleProjectDeleteButton => Get(
-        "選択中のプロジェクトを削除",
-        "Delete the selected project");
+        "Delete project",
+        "Delete project");
 
     public static string AccessibleSpectrum => Get(
-        "再生出力の簡易スペクトラム表示",
-        "Simple spectrum meter for playback output");
+        "Output spectrum",
+        "Output spectrum");
 
-    public static string AccessibleLogClear => Get("ログを消去", "Clear log");
-    public static string AccessibleLogCopy => Get("ログをコピー", "Copy log");
-    public static string AccessibleLogDownload => Get("ログを保存", "Download log");
+    public static string AccessibleLogClear => Get("Clear log", "Clear log");
+    public static string AccessibleLogCopy => Get("Copy log", "Copy log");
+    public static string AccessibleLogDownload => Get("Download log", "Download log");
 
     // MarkerOptionsPanel
     public static string LabelStream => Get("Stream", "Stream");
@@ -1342,11 +1343,9 @@ internal static class UiStrings
     public static string LabelMoreOptions(bool expanded) =>
         (expanded ? "▾ " : "▸ ") + Get("More Options", "More Options");
 
-    /// <summary>Marker Comment のプレビュー例（"e.g. {0}"）。</summary>
-    public static string LabelPreviewExample(string example) => Format(
-        "例: {0}",
-        "e.g. {0}",
-        example);
+    /// <summary>Marker Comment のプレビュー例（英語固定 "e.g. {0}"）。</summary>
+    public static string LabelPreviewExample(string example) =>
+        string.Format(System.Globalization.CultureInfo.InvariantCulture, "e.g. {0}", example);
 
     // TransportBar
     public static string LabelTransportGroup => Get("TRANSPORT", "TRANSPORT");
@@ -1355,7 +1354,7 @@ internal static class UiStrings
     public static string LabelAmpZoomGroup => Get("AMP ZOOM", "AMP ZOOM");
 
     public static string AccessibleTransportPositionDisplay => Get(
-        "テンポ・拍子・現在位置・経過時間",
+        "Tempo, time signature, musical position and elapsed time",
         "Tempo, time signature, musical position and elapsed time");
 
     // WaveformView: 情報レーン行ラベル・下段レーン名
@@ -1374,13 +1373,13 @@ internal static class UiStrings
     public static string WaapiBadgeConnect => Get("CONNECT", "CONNECT");
     public static string WaapiBadgeDisconnect => Get("DISCONNECT", "DISCONNECT");
     public static string LabelWwise => Get("Wwise", "Wwise");
-    public static string LabelUnnamedProject => Get("（無題）", "(unnamed)");
-    public static string LabelUnnamedMarker => Get("（無名）", "(unnamed)");
+    public static string LabelUnnamedProject => Get("(unnamed)", "(unnamed)");
+    public static string LabelUnnamedMarker => Get("(unnamed)", "(unnamed)");
 
-    /// <summary>波形範囲外マーカーの種別表示（<c>WaveformIgnoredOutsideMark.Kind</c> の内部識別子 → 表示名）。</summary>
+    /// <summary>波形範囲外マーカーの種別表示（<c>WaveformIgnoredOutsideMark.Kind</c> の内部識別子 → 表示名）。英語固定。</summary>
     public static string LabelIgnoredMarkKind(string kind) => kind switch
     {
-        "Cycle" => Get("サイクル", "Cycle"),
+        "Cycle" => "Cycle",
         "Marker" => LabelMarker,
         _ => kind,
     };
@@ -1392,16 +1391,16 @@ internal static class UiStrings
     // ProjectSettingsStore
     public static string ProjectNewProjectMenuItem => Get("+ New Project", "+ New Project");
     public static string ProjectNewProjectBaseName => Get("New Project", "New Project");
-    public static string StatusProjectUnnamed => Get("(名前なし)", "(unnamed)");
+    public static string StatusProjectUnnamed => Get("(unnamed)", "(unnamed)");
 
-    // Progress / busy overlay
-    public static string OverlayExporting => Get("書き出し中", "Exporting");
-    public static string OverlayLoading => Get("読み込み中", "Loading");
-    public static string OverlayStarting => Get("起動中", "Starting");
-    public static string OverlayLoadingLastSession => Get("前回セッションを読み込み中", "Loading Last Session");
+    // Progress / busy overlay（元から英語固定）
+    public static string OverlayExporting => Get("Exporting", "Exporting");
+    public static string OverlayLoading => Get("Loading", "Loading");
+    public static string OverlayStarting => Get("Starting", "Starting");
+    public static string OverlayLoadingLastSession => Get("Loading Last Session", "Loading Last Session");
 
-    // BarJumpDialog
-    public static string LabelGoToMeasure => Get("小節へジャンプ", "Go To Measure");
+    // BarJumpDialog 描画タイトル（ウィンドウ Title は DialogBarJumpTitle。描画は元から英語固定）
+    public static string LabelGoToMeasure => Get("Go To Measure", "Go To Measure");
 
     // Log headers (=== ... ===) — 表記は日英共通
     public static string LogWaapiHeader => Get("=== WAAPI ===", "=== WAAPI ===");
@@ -1445,34 +1444,35 @@ internal static class UiStrings
         "Dropped files: {0}",
         count);
 
+    // 以下の進捗・診断ログは元から英語固定（言語切替でも英語のまま）
     public static string LogAnacrusisYes => Get(
-        "Anacrusis : あり（波形先頭を相対 Bar 1、次の小節線が Bar 2）",
+        "Anacrusis : yes (relative Bar 1 @ wave start, next bar line = 2)",
         "Anacrusis : yes (relative Bar 1 @ wave start, next bar line = 2)");
 
     public static string LogAnacrusisNo => Get(
-        "Anacrusis : なし（波形先頭が小節線 → 相対 Bar 1）",
+        "Anacrusis : no (wave starts on a bar line → relative Bar 1)",
         "Anacrusis : no (wave starts on a bar line → relative Bar 1)");
 
     // Wwise import progress
     public static string LogBuildingImportPlan => Get(
-        "インポート計画を作成中...",
+        "Building import plan...",
         "Building import plan...");
 
     public static string LogPlanReady(int playlistCount) => Format(
-        "計画完了: Playlist {0} 件。",
+        "Plan ready: {0} playlist(s).",
         "Plan ready: {0} playlist(s).",
         playlistCount);
 
     public static string LogCheckingStateGroup => Get(
-        "State Group を確認中...",
+        "Checking State Group...",
         "Checking State Group...");
 
     public static string LogStateGroupExistingFound => Get(
-        "既存の State Group が見つかりました。",
+        "Existing State Group found.",
         "Existing State Group found.");
 
     public static string LogStateGroupAvailable => Get(
-        "State Group は作成可能です。",
+        "State Group is available.",
         "State Group is available.");
 
     public static string LogAutoVolumeOn(string target) => Format(
@@ -1483,7 +1483,7 @@ internal static class UiStrings
     public static string LogAutoVolumeOff => Get("Auto Volume: OFF", "Auto Volume: OFF");
 
     public static string LogPlaylistSummary(string name, int segmentCount) => Format(
-        "--- Playlist: {0} （セグメント {1} 件） ---",
+        "--- Playlist: {0} ({1} segments) ---",
         "--- Playlist: {0} ({1} segments) ---",
         name,
         segmentCount);
@@ -1494,7 +1494,7 @@ internal static class UiStrings
         fileName);
 
     public static string LogWavSliceWrittenWithGain(string fileName, double gain) => Format(
-        "WAV: {0} （ゲイン {1:0.000}）",
+        "WAV: {0} (gain {1:0.000})",
         "WAV: {0} (gain {1:0.000})",
         fileName,
         gain);
@@ -1506,7 +1506,7 @@ internal static class UiStrings
         present ? PresentYes : PresentNo);
 
     public static string LogPeaksSummary(int bucketCount, long frameCount) => Format(
-        "{0} {1} バケット / {2:N0} フレーム",
+        "{0} {1} buckets / {2:N0} frames",
         "{0} {1} buckets / {2:N0} frames",
         KeyPeaks,
         bucketCount,
@@ -1516,13 +1516,13 @@ internal static class UiStrings
         "Loudness: Normalize ON → target {0:0.##} LKFS{1}",
         "Loudness: Normalize ON → target {0:0.##} LKFS{1}",
         targetLkfs,
-        preserveGroupBalance ? Get(" (グループバランス維持)", " (Preserve Group Balance)") : string.Empty);
+        preserveGroupBalance ? " (Preserve Group Balance)" : string.Empty);
 
     public static string LabelMusicSwitchContainer => Get("Music Switch Container", "Music Switch Container");
     public static string LabelMusicPlaylistContainer => Get("Music Playlist Container", "Music Playlist Container");
 
     public static string LogLoudnessPartSilence(int partNumber) => Format(
-        "Loudness: part {0} = (無音)",
+        "Loudness: part {0} = (silence)",
         "Loudness: part {0} = (silence)",
         partNumber);
 
@@ -1533,7 +1533,7 @@ internal static class UiStrings
         lkfs);
 
     public static string LogLoudnessGroupSilence(int groupId, double gain) => Format(
-        "Loudness: group {0} peak = (無音) → gain {1:0.000}",
+        "Loudness: group {0} peak = (silence) → gain {1:0.000}",
         "Loudness: group {0} peak = (silence) → gain {1:0.000}",
         groupId,
         gain);
@@ -1545,9 +1545,9 @@ internal static class UiStrings
         maxLkfs,
         gain);
 
-    // WavFileInfo report
-    public static string BoolYes => Get("あり", "Yes");
-    public static string BoolNo => Get("なし", "No");
+    // WavFileInfo report（元から Yes / No）
+    public static string BoolYes => Get("Yes", "Yes");
+    public static string BoolNo => Get("No", "No");
 
     public static string LabelWavPath => Get("Path           :", "Path           :");
     public static string LabelFileSize => Get("File Size      :", "File Size      :");

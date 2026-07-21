@@ -144,6 +144,7 @@ internal sealed class TransportBar : UserControl
     /// <summary>表示言語に合わせてツールチップ・グループ見出し・アクセシビリティ名を付け直す。</summary>
     public void ApplyLocalizedToolTips()
     {
+        _toolTip.ApplyTheme();
         foreach (var (command, button) in _commandButtons)
         {
             var tip = UiStrings.TipForTransportCommand(command);
@@ -153,10 +154,47 @@ internal sealed class TransportBar : UserControl
 
         foreach (var (label, titleProvider) in _groupLabels)
         {
-            label.Text = titleProvider();
+            RelayoutGroupLabel(label, titleProvider());
         }
 
         _positionDisplay.AccessibleName = UiStrings.AccessibleTransportPositionDisplay;
+        TightenVerticalLayout();
+    }
+
+    /// <summary>グループ見出しの文言変更に合わせてラベル幅とボタングループ位置を更新する。</summary>
+    private static void RelayoutGroupLabel(Label label, string title)
+    {
+        label.Text = title;
+        if (label.Parent is not Panel group)
+        {
+            return;
+        }
+
+        var labelWidth = TextRenderer.MeasureText(
+            title,
+            label.Font,
+            Size.Empty,
+            TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width + 4;
+        labelWidth = Math.Max(labelWidth, 8);
+        label.Width = labelWidth;
+
+        FlowLayoutPanel? buttons = null;
+        foreach (Control child in group.Controls)
+        {
+            if (child is FlowLayoutPanel flow)
+            {
+                buttons = flow;
+                break;
+            }
+        }
+
+        if (buttons is null)
+        {
+            return;
+        }
+
+        buttons.Left = labelWidth;
+        group.Width = labelWidth + buttons.Width;
     }
 
     /// <summary>キーボード操作中のボタンをマウスオーバーと同じ表示にする。</summary>
@@ -236,7 +274,7 @@ internal sealed class TransportBar : UserControl
         var side = _playButton.Height;
         if (side <= 0)
         {
-            return;
+            side = 30;
         }
 
         foreach (Control group in _groups.Controls)
@@ -271,13 +309,26 @@ internal sealed class TransportBar : UserControl
         }
 
         _groups.MinimumSize = new Size(1, side);
-        var desiredHeight = Padding.Vertical + side;
+        var desiredHeight = Math.Max(36, Padding.Vertical + side);
         if (Height != desiredHeight)
         {
             Height = desiredHeight;
         }
 
+        // Dock レイアウト後に潰れた場合のガード。
+        if (Height < 24)
+        {
+            Height = desiredHeight;
+        }
+
         _groups.Location = new Point(Padding.Left, Padding.Top);
+        Visible = true;
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        TightenVerticalLayout();
     }
 
     protected override void OnPaintBackground(PaintEventArgs e)
@@ -301,7 +352,8 @@ internal sealed class TransportBar : UserControl
             title,
             groupFont,
             Size.Empty,
-            TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width + 2;
+            TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width + 4;
+        labelWidth = Math.Max(labelWidth, 8);
         var groupWidth = labelWidth + definitions.Length * buttonPitch;
         var group = new Panel
         {
