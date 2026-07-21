@@ -1,4 +1,5 @@
 using System.Text;
+using MgaWwiseIMImporter.UI;
 
 namespace MgaWwiseIMImporter.Processing;
 
@@ -23,7 +24,7 @@ internal static class DroppedFilesProcessor
             .ToList();
 
         var sb = new StringBuilder();
-        sb.AppendLine($"Dropped files: {dropped.Count}");
+        sb.AppendLine(UiStrings.LogDroppedFilesHeader(dropped.Count));
         foreach (var file in dropped)
         {
             sb.AppendLine($"- {file}");
@@ -39,9 +40,9 @@ internal static class DroppedFilesProcessor
             if (!extension.Equals(".wav", StringComparison.OrdinalIgnoreCase)
                 && !extension.Equals(".xml", StringComparison.OrdinalIgnoreCase))
             {
-                sb.AppendLine("=== エラー ===");
-                sb.AppendLine($"Path    : {path}");
-                sb.AppendLine("Message : .wav または .xml をドロップしてください。");
+                sb.AppendLine(UiStrings.LogErrorHeader);
+                sb.AppendLine($"{UiStrings.KeyPath} {path}");
+                sb.AppendLine(UiStrings.LogDropNeedWavOrXml);
                 sb.AppendLine();
                 continue;
             }
@@ -73,10 +74,10 @@ internal static class DroppedFilesProcessor
 
         if (!wavExists)
         {
-            sb.AppendLine("=== エラー ===");
-            sb.AppendLine($"Wave : {wavPath} (なし)");
-            sb.AppendLine($"Xml  : {xmlPath} ({(xmlExists ? "あり" : "なし")})");
-            sb.AppendLine("Message : 波形表示には .wav が必要です。");
+            sb.AppendLine(UiStrings.LogErrorHeader);
+            sb.AppendLine(UiStrings.LogWaveMissing(wavPath));
+            sb.AppendLine(UiStrings.LogXmlPresence(xmlPath, xmlExists));
+            sb.AppendLine(UiStrings.LogWaveRequired);
             sb.AppendLine();
             return;
         }
@@ -105,19 +106,16 @@ internal static class DroppedFilesProcessor
 
                 if (!barOverlay.HasIXml || barOverlay.TimeReferenceSamples == 0)
                 {
-                    sb.AppendLine("=== 警告 ===");
-                    sb.AppendLine("Message : iXML の TimeReference が取れません（無し、または 0）。");
-                    sb.AppendLine(
-                        "Message : アウフタクト判定と小節位置の対応には iXML TimeReference が必要です。"
-                        + " 0 のときは波形先頭＝PPQ 0 とみなします。");
+                    sb.AppendLine(UiStrings.LogWarningHeader);
+                    sb.AppendLine(UiStrings.LogIxmlTimeRefMissing);
                     sb.AppendLine();
                 }
             }
             else
             {
-                sb.AppendLine("=== 警告 ===");
-                sb.AppendLine($"Xml  : {xmlPath} (なし)");
-                sb.AppendLine("Message : 同名 .xml が無いため小節線は表示しません。");
+                sb.AppendLine(UiStrings.LogWarningHeader);
+                sb.AppendLine(UiStrings.LogXmlMissing(xmlPath));
+                sb.AppendLine(UiStrings.LogXmlMissingBars);
                 sb.AppendLine();
             }
 
@@ -132,49 +130,47 @@ internal static class DroppedFilesProcessor
                 regions,
                 outputParts));
 
-            sb.AppendLine("=== Waveform ===");
-            sb.AppendLine($"Source : {wavPath}");
-            sb.AppendLine($"Peaks  : {peaks.Mins.Length} buckets / {peaks.FrameCount:N0} frames");
-            sb.AppendLine($"Regions: {regions.Count}");
-            sb.AppendLine($"Outputs: {outputParts.Count}");
+            sb.AppendLine(UiStrings.LogWaveformHeader);
+            sb.AppendLine($"{UiStrings.KeySource} {wavPath}");
+            sb.AppendLine(UiStrings.LogPeaksSummary(peaks.Mins.Length, peaks.FrameCount));
+            sb.AppendLine($"{UiStrings.KeyRegions} {regions.Count}");
+            sb.AppendLine($"{UiStrings.KeyOutputs} {outputParts.Count}");
             foreach (var part in outputParts)
             {
                 sb.AppendLine(
                     $"  - {part.FileName}"
                     + $"  samples=[{part.StartSampleOffset:N0} .. {part.EndSampleOffset:N0})");
             }
-            sb.AppendLine($"Bars   : {bars.Count}");
+            sb.AppendLine($"{UiStrings.KeyBars} {bars.Count}");
             if (barOverlay is not null)
             {
                 sb.AppendLine(
-                    $"Timeline: TimeRef={barOverlay.TimeReferenceSamples:N0}"
+                    $"{UiStrings.KeyTimeline} TimeRef={barOverlay.TimeReferenceSamples:N0}"
                     + $"  waveStartPpq={barOverlay.WaveStartPpq:0.###}"
                     + $"  waveEndPpq={barOverlay.WaveEndPpq:0.###}"
                     + $"  prevBarPpq={FormatOptionalPpq(barOverlay.PreviousBarPpqAtWaveStart)}");
                 if (barOverlay.HasAnacrusis)
                 {
-                    sb.AppendLine("Anacrusis : yes (relative Bar 1 @ wave start, next bar line = 2)");
+                    sb.AppendLine(UiStrings.LogAnacrusisYes);
                 }
                 else
                 {
-                    sb.AppendLine("Anacrusis : no (wave starts on a bar line → relative Bar 1)");
+                    sb.AppendLine(UiStrings.LogAnacrusisNo);
                 }
 
                 if (barOverlay.IgnoredOutsideMarks.Count > 0)
                 {
-                    sb.AppendLine("=== 波形範囲外（無視） ===");
+                    sb.AppendLine(UiStrings.LogOutsideWaveHeader);
+                    sb.AppendLine(UiStrings.LogOutsideWaveMessage);
                     sb.AppendLine(
-                        "Message : 波形タイムライン外のマーカー／サイクルは描画せず、"
-                        + "出力にも含めません。");
-                    sb.AppendLine(
-                        $"WavePpq : [{barOverlay.WaveStartPpq:0.###} .. {barOverlay.WaveEndPpq:0.###}]");
+                        $"{UiStrings.KeyWavePpq} [{barOverlay.WaveStartPpq:0.###} .. {barOverlay.WaveEndPpq:0.###}]");
                     foreach (var ignored in barOverlay.IgnoredOutsideMarks)
                     {
                         var span = ignored.Kind == "Cycle"
                             ? $"PPQ=[{ignored.StartPpq:0.###} .. {ignored.EndPpq:0.###}]"
                             : $"PPQ={ignored.StartPpq:0.###}";
                         sb.AppendLine(
-                            $"  - {ignored.Kind} \"{ignored.Name}\"  {span}"
+                            $"  - {UiStrings.LabelIgnoredMarkKind(ignored.Kind)} \"{ignored.Name}\"  {span}"
                             + $"  ({ignored.Reason})");
                     }
                 }
@@ -195,9 +191,9 @@ internal static class DroppedFilesProcessor
 
     private static void AppendError(StringBuilder sb, string path, Exception ex)
     {
-        sb.AppendLine("=== エラー ===");
-        sb.AppendLine($"Path    : {path}");
-        sb.AppendLine($"Message : {ex.Message}");
+        sb.AppendLine(UiStrings.LogErrorHeader);
+        sb.AppendLine($"{UiStrings.KeyPath} {path}");
+        sb.AppendLine($"{UiStrings.KeyMessage} {ex.Message}");
         sb.AppendLine();
     }
 }

@@ -18,32 +18,32 @@ internal sealed class ExportPreflightResult
         var lines = new List<string>
         {
             UiStrings.LogExportPreflightHeader,
-            $"Status  : {(CanExport ? UiStrings.LogStatusOk : UiStrings.LogStatusNg)}",
-            $"Message : {Reason}",
+            $"{UiStrings.KeyStatus} {(CanExport ? UiStrings.LogStatusOk : UiStrings.LogStatusNg)}",
+            $"{UiStrings.KeyMessage} {Reason}",
         };
 
         if (OutputDirectory.Length > 0)
         {
-            lines.Add($"Output  : {OutputDirectory}");
+            lines.Add($"{UiStrings.KeyOutput} {OutputDirectory}");
         }
 
         if (OriginalsRoot.Length > 0)
         {
-            lines.Add($"Originals: {OriginalsRoot}");
+            lines.Add($"{UiStrings.KeyOriginals} {OriginalsRoot}");
         }
 
         if (ProjectFilePath.Length > 0)
         {
-            lines.Add($"Project : {ProjectFilePath}");
+            lines.Add($"{UiStrings.KeyProject} {ProjectFilePath}");
         }
 
         if (TargetPath.Length > 0)
         {
-            lines.Add($"Target  : {TargetPath}");
+            lines.Add($"{UiStrings.KeyTarget} {TargetPath}");
         }
         else if (!CanExport && IsUnselectedTargetReason(Reason))
         {
-            lines.Add($"Target  : {UiStrings.LogTargetUnselected}");
+            lines.Add($"{UiStrings.KeyTarget} {UiStrings.LogTargetUnselected}");
         }
 
         lines.Add(string.Empty);

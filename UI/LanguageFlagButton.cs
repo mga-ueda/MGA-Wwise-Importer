@@ -37,7 +37,9 @@ internal sealed class LanguageFlagButton : Button
 
     public void RefreshAppearance()
     {
-        AccessibleName = UiStrings.IsJapanese ? "JP" : "EN";
+        AccessibleName = UiStrings.IsJapanese
+            ? UiStrings.LanguageBadgeJapanese
+            : UiStrings.LanguageBadgeEnglish;
         Invalidate();
     }
 
@@ -117,7 +119,9 @@ internal sealed class LanguageFlagButton : Button
             g.DrawRectangle(borderPen, 0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
         }
 
-        var label = UiStrings.IsJapanese ? "JP" : "EN";
+        var label = UiStrings.IsJapanese
+            ? UiStrings.LanguageBadgeJapanese
+            : UiStrings.LanguageBadgeEnglish;
         using var font = new Font("Yu Gothic UI", 7.5F, FontStyle.Bold);
         var textSize = TextRenderer.MeasureText(
             g,

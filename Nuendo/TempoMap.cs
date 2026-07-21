@@ -1,3 +1,5 @@
+using MgaWwiseIMImporter.UI;
+
 namespace MgaWwiseIMImporter.Nuendo;
 
 internal sealed class TempoMap
@@ -11,7 +13,7 @@ internal sealed class TempoMap
     {
         if (tempoEvents.Count == 0)
         {
-            throw new InvalidDataException("テンポイベントがありません。");
+            throw new InvalidDataException(UiStrings.ErrNoTempoEvents);
         }
 
         _tempoEvents = tempoEvents;

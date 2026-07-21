@@ -40,7 +40,7 @@ internal sealed class BarJumpDialogForm : Form
             inputWidth,
             inputHeight);
 
-        Text = "小節へジャンプ";
+        Text = UiStrings.DialogBarJumpTitle;
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.CenterParent;
         MaximizeBox = false;
@@ -309,7 +309,7 @@ internal sealed class BarJumpDialogForm : Form
             Alignment = StringAlignment.Center,
             LineAlignment = StringAlignment.Center,
         };
-        g.DrawString("Go To Measure", titleFont, titleBrush, titleRect, format);
+        g.DrawString(UiStrings.LabelGoToMeasure, titleFont, titleBrush, titleRect, format);
 
         return bmp;
     }

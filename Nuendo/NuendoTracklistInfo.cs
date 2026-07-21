@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Xml.Linq;
+using MgaWwiseIMImporter.UI;
 
 namespace MgaWwiseIMImporter.Nuendo;
 
@@ -60,7 +61,7 @@ internal sealed class NuendoTracklistInfo
         var tempoTrack = document
             .Descendants("obj")
             .FirstOrDefault(e => (string?)e.Attribute("class") == "MTempoTrackEvent")
-            ?? throw new InvalidDataException("MTempoTrackEvent (Tempo Track) が見つかりません。");
+            ?? throw new InvalidDataException(UiStrings.ErrTempoTrackMissing);
 
         var signatureTrack = document
             .Descendants("obj")
@@ -78,9 +79,9 @@ internal sealed class NuendoTracklistInfo
             .Select(obj => new NuendoTempoEvent
             {
                 Bpm = NuendoXml.ReadFloatChild(obj, "BPM")
-                    ?? throw new InvalidDataException("TempoEvent に BPM がありません。"),
+                    ?? throw new InvalidDataException(UiStrings.ErrTempoEventNoBpm),
                 Ppq = NuendoXml.ReadFloatChild(obj, "PPQ")
-                    ?? throw new InvalidDataException("TempoEvent に PPQ がありません。"),
+                    ?? throw new InvalidDataException(UiStrings.ErrTempoEventNoPpq),
                 Func = NuendoXml.ReadIntChild(obj, "Func"),
             })
             .OrderBy(e => e.Ppq)
@@ -129,13 +130,13 @@ internal sealed class NuendoTracklistInfo
     public string ToDisplayText()
     {
         var sb = new StringBuilder();
-        sb.AppendLine("=== Nuendo Tempo Track ===");
-        sb.AppendLine($"Path            : {Path}");
-        sb.AppendLine($"Rehearsal Tempo : {FormatOptional(RehearsalTempo, "BPM")}");
-        sb.AppendLine($"PPQ Resolution  : {PulsesPerQuarterNote:0} pulses / quarter note");
-        sb.AppendLine($"Tempo Events    : {TempoEvents.Count}");
-        sb.AppendLine($"Signatures      : {SignatureEvents.Count}");
-        sb.AppendLine($"Markers         : {MarkerEvents.Count}");
+        sb.AppendLine(UiStrings.LogNuendoTempoTrackHeader);
+        sb.AppendLine($"{UiStrings.LabelNuendoPath} {Path}");
+        sb.AppendLine($"{UiStrings.LabelRehearsalTempo} {FormatOptional(RehearsalTempo, "BPM")}");
+        sb.AppendLine($"{UiStrings.LabelPpqResolution} {UiStrings.LabelPpqResolutionValue(PulsesPerQuarterNote)}");
+        sb.AppendLine($"{UiStrings.LabelTempoEvents} {TempoEvents.Count}");
+        sb.AppendLine($"{UiStrings.LabelSignatures} {SignatureEvents.Count}");
+        sb.AppendLine($"{UiStrings.LabelMarkers} {MarkerEvents.Count}");
         sb.AppendLine();
 
         for (var i = 0; i < TempoEvents.Count; i++)
@@ -165,7 +166,9 @@ internal sealed class NuendoTracklistInfo
         for (var i = 0; i < MarkerEvents.Count; i++)
         {
             var marker = MarkerEvents[i];
-            var kind = marker.Kind == NuendoMarkerKind.CycleRegion ? "Region" : "Marker";
+            var kind = marker.Kind == NuendoMarkerKind.CycleRegion
+                ? UiStrings.LabelRegionKind
+                : UiStrings.LabelMarkerKind;
             sb.AppendLine(
                 $"{kind}[{i}] PPQ={FormatNumber(marker.StartPpq)}"
                 + (marker.Kind == NuendoMarkerKind.CycleRegion

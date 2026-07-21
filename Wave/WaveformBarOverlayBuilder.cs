@@ -1,3 +1,5 @@
+using MgaWwiseIMImporter.UI;
+
 namespace MgaWwiseIMImporter.Wave;
 
 /// <summary>波形上に重ねる小節線／テンポ変更マーク 1 本。</summary>
@@ -307,10 +309,10 @@ internal static class WaveformBarOverlayBuilder
             {
                 ignoredOutside.Add(new WaveformIgnoredOutsideMark(
                     "Marker",
-                    comment.Length == 0 ? "(unnamed)" : comment,
+                    comment.Length == 0 ? UiStrings.LabelUnnamedMarker : comment,
                     markerPpq,
                     markerPpq,
-                    "波形タイムライン範囲外（描画・出力計画の対象外）"));
+                    UiStrings.ReasonOutsideTimeline));
                 continue;
             }
 
@@ -319,10 +321,10 @@ internal static class WaveformBarOverlayBuilder
             {
                 ignoredOutside.Add(new WaveformIgnoredOutsideMark(
                     "Marker",
-                    comment.Length == 0 ? "(unnamed)" : comment,
+                    comment.Length == 0 ? UiStrings.LabelUnnamedMarker : comment,
                     markerPpq,
                     markerPpq,
-                    "波形サンプル範囲外（描画・出力計画の対象外）"));
+                    UiStrings.ReasonOutsideSamples));
                 continue;
             }
 
@@ -369,10 +371,10 @@ internal static class WaveformBarOverlayBuilder
             {
                 ignoredOutside.Add(new WaveformIgnoredOutsideMark(
                     "Cycle",
-                    name.Length == 0 ? "(unnamed)" : name,
+                    name.Length == 0 ? UiStrings.LabelUnnamedMarker : name,
                     startPpq,
                     endPpq,
-                    "波形タイムライン範囲外（描画・出力計画の対象外）"));
+                    UiStrings.ReasonOutsideTimeline));
                 continue;
             }
 
@@ -384,10 +386,10 @@ internal static class WaveformBarOverlayBuilder
             {
                 ignoredOutside.Add(new WaveformIgnoredOutsideMark(
                     "Cycle",
-                    name.Length == 0 ? "(unnamed)" : name,
+                    name.Length == 0 ? UiStrings.LabelUnnamedMarker : name,
                     startPpq,
                     endPpq,
-                    "波形と有効な重なりなし（描画・出力計画の対象外）"));
+                    UiStrings.ReasonNoOverlap));
                 continue;
             }
 

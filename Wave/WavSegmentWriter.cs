@@ -1,4 +1,5 @@
 using System.Text;
+using MgaWwiseIMImporter.UI;
 
 namespace MgaWwiseIMImporter.Wave;
 
@@ -22,12 +23,12 @@ internal static class WavSegmentWriter
     {
         if (blockAlign == 0)
         {
-            throw new InvalidDataException("BlockAlign が不正です。");
+            throw new InvalidDataException(UiStrings.ErrBlockAlignInvalid);
         }
 
         if (endSample <= startSample)
         {
-            throw new ArgumentOutOfRangeException(nameof(endSample), "書き出し範囲が空です。");
+            throw new ArgumentOutOfRangeException(nameof(endSample), UiStrings.ErrExportRangeEmpty);
         }
 
         using var source = File.OpenRead(sourcePath);
@@ -35,13 +36,13 @@ internal static class WavSegmentWriter
 
         if (ReadFourCc(reader) != "RIFF")
         {
-            throw new InvalidDataException("RIFF ヘッダーではありません。");
+            throw new InvalidDataException(UiStrings.ErrNotRiffHeader);
         }
 
         _ = reader.ReadUInt32();
         if (ReadFourCc(reader) != "WAVE")
         {
-            throw new InvalidDataException("WAVE 形式ではありません。");
+            throw new InvalidDataException(UiStrings.ErrNotWaveFormat);
         }
 
         byte[]? fmtData = null;
@@ -55,7 +56,7 @@ internal static class WavSegmentWriter
             var chunkDataStart = source.Position;
             if (chunkDataStart + size > source.Length)
             {
-                throw new InvalidDataException($"チャンクサイズが不正です: {id}");
+                throw new InvalidDataException(UiStrings.ErrChunkSizeInvalid(id));
             }
 
             if (id == "fmt ")
@@ -74,12 +75,12 @@ internal static class WavSegmentWriter
 
         if (fmtData is null)
         {
-            throw new InvalidDataException("fmt チャンクが見つかりません。");
+            throw new InvalidDataException(UiStrings.ErrFmtChunkMissing);
         }
 
         if (dataStart < 0)
         {
-            throw new InvalidDataException("data チャンクが見つかりません。");
+            throw new InvalidDataException(UiStrings.ErrDataChunkMissing);
         }
 
         var startByte = checked(startSample * (long)blockAlign);
@@ -88,8 +89,7 @@ internal static class WavSegmentWriter
         {
             throw new ArgumentOutOfRangeException(
                 nameof(endSample),
-                $"書き出し範囲が data 外です: samples=[{startSample}..{endSample})"
-                + $" dataFrames={dataSize / blockAlign}");
+                UiStrings.ErrExportRangeBeforeData(startSample, endSample));
         }
 
         var segmentByteLength = checked((int)(endByte - startByte));
@@ -137,12 +137,12 @@ internal static class WavSegmentWriter
         var channels = info.Channels;
         if (bytesPerSample <= 0 || info.BlockAlign != channels * bytesPerSample)
         {
-            throw new InvalidDataException("WAV のサンプル形式が不正です。");
+            throw new InvalidDataException(UiStrings.ErrSampleFormatInvalid);
         }
 
         if (byteCount % info.BlockAlign != 0)
         {
-            throw new InvalidDataException("書き出しバイト数が BlockAlign の倍数ではありません。");
+            throw new InvalidDataException(UiStrings.ErrExportBytesNotBlockAligned);
         }
 
         var frame = new byte[info.BlockAlign];
@@ -152,7 +152,7 @@ internal static class WavSegmentWriter
             var read = source.Read(frame, 0, frame.Length);
             if (read != frame.Length)
             {
-                throw new EndOfStreamException("data チャンクの読み取りが途中で終わりました。");
+                throw new EndOfStreamException(UiStrings.ErrDataChunkTruncated);
             }
 
             for (var c = 0; c < channels; c++)
@@ -186,7 +186,7 @@ internal static class WavSegmentWriter
             var read = source.Read(buffer, 0, toRead);
             if (read <= 0)
             {
-                throw new EndOfStreamException("data チャンクの読み取りが途中で終わりました。");
+                throw new EndOfStreamException(UiStrings.ErrDataChunkTruncated);
             }
 
             destination.Write(buffer, 0, read);

@@ -1,3 +1,5 @@
+using MgaWwiseIMImporter.UI;
+
 namespace MgaWwiseIMImporter.Wave;
 
 /// <summary>
@@ -270,8 +272,8 @@ internal static class WaveformRegionBuilder
         if (hits.Count > 1)
         {
             throw new InvalidDataException(
-                $"リージョン範囲が重なっています: sample={midSample} ({string.Join(" と ", hits)})。"
-                + " -R / -L / -E（および内部生成の -A）は重ならないようにマーカーを配置してください。");
+                UiStrings.ErrRegionOverlap(
+                    $"sample={midSample} ({string.Join(UiStrings.ListJoinAnd, hits)})"));
         }
 
         // -R は IsExcluded で表し、接尾辞には付けない。

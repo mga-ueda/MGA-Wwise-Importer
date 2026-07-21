@@ -1,3 +1,5 @@
+using MgaWwiseIMImporter.UI;
+
 namespace MgaWwiseIMImporter.Wwise;
 
 /// <summary>
@@ -57,7 +59,7 @@ internal static class WaapiSelection
         var keptPath = keptTargetPath.Trim();
         if (keptPath.Length == 0)
         {
-            return (false, string.Empty, "Keep Target がオンですが、記憶パスが空です。");
+            return (false, string.Empty, UiStrings.LogKeepTargetMemoryEmpty);
         }
 
         var keptProject = keptTargetProjectFilePath.Trim();
@@ -69,19 +71,19 @@ internal static class WaapiSelection
             return (
                 false,
                 keptPath,
-                "Keep Target の記憶パスは別プロジェクト向けのため再選択しませんでした。");
+                UiStrings.LogKeepTargetOtherProject);
         }
 
         try
         {
             var ok = await TrySelectAsync(settings, keptPath, cancellationToken).ConfigureAwait(false);
             return ok
-                ? (true, keptPath, $"Keep Target : 再選択しました → {keptPath}")
-                : (false, keptPath, $"Keep Target : オブジェクトが見つかりません → {keptPath}");
+                ? (true, keptPath, UiStrings.LogKeepTargetReselectOk(keptPath))
+                : (false, keptPath, UiStrings.LogKeepTargetObjectMissing(keptPath));
         }
         catch (Exception ex)
         {
-            return (false, keptPath, $"Keep Target : 再選択に失敗 → {ex.Message}");
+            return (false, keptPath, UiStrings.LogKeepTargetReselectFailed(ex.Message));
         }
     }
 }

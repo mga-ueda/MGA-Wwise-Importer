@@ -12,13 +12,15 @@ internal sealed class ColorDevPanelForm : Form
     private readonly Panel _scroll;
     private readonly TableLayoutPanel _list;
     private readonly FlowLayoutPanel _buttons;
+    private readonly Button _closeButton;
+    private readonly Button _resetButton;
     private bool _suppressHexEvents;
 
     public event EventHandler? ColorsChanged;
 
     public ColorDevPanelForm()
     {
-        Text = "色調整（開発者）";
+        Text = UiStrings.ColorDevTitle;
         FormBorderStyle = FormBorderStyle.SizableToolWindow;
         StartPosition = FormStartPosition.Manual;
         MinimumSize = new Size(540, 320);
@@ -116,24 +118,64 @@ internal sealed class ColorDevPanelForm : Form
             BackColor = BackColor,
         };
 
-        var closeButton = new Button { Text = "閉じる", AutoSize = true, FlatStyle = FlatStyle.System };
-        closeButton.Click += (_, _) => Close();
+        _closeButton = new Button
+        {
+            Text = UiStrings.ColorDevClose,
+            AutoSize = true,
+            FlatStyle = FlatStyle.System,
+        };
+        _closeButton.Click += (_, _) => Close();
 
-        var resetButton = new Button { Text = "既定に戻す", AutoSize = true, FlatStyle = FlatStyle.System };
-        resetButton.Click += (_, _) =>
+        _resetButton = new Button
+        {
+            Text = UiStrings.ColorDevResetToDefaults,
+            AutoSize = true,
+            FlatStyle = FlatStyle.System,
+        };
+        _resetButton.Click += (_, _) =>
         {
             UiColors.ResetToDefaults();
             ApplyColorChange();
         };
 
-        _buttons.Controls.Add(closeButton);
-        _buttons.Controls.Add(resetButton);
+        _buttons.Controls.Add(_closeButton);
+        _buttons.Controls.Add(_resetButton);
 
         _root.Controls.Add(_scroll, 0, 0);
         _root.Controls.Add(_buttons, 0, 1);
         Controls.Add(_root);
 
         RefreshRows();
+
+        UiStrings.LanguageChanged += UiStrings_LanguageChanged;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            UiStrings.LanguageChanged -= UiStrings_LanguageChanged;
+        }
+
+        base.Dispose(disposing);
+    }
+
+    private void UiStrings_LanguageChanged(object? sender, EventArgs e) => ApplyLocalizedLabels();
+
+    /// <summary>タイトル・ボタン・各行の色名を現在の表示言語で反映する。</summary>
+    public void ApplyLocalizedLabels()
+    {
+        Text = UiStrings.ColorDevTitle;
+        _closeButton.Text = UiStrings.ColorDevClose;
+        _resetButton.Text = UiStrings.ColorDevResetToDefaults;
+
+        for (var i = 0; i < UiColors.Entries.Count; i++)
+        {
+            if (_list.GetControlFromPosition(0, i) is Label nameLabel)
+            {
+                nameLabel.Text = UiColors.Entries[i].Label;
+            }
+        }
     }
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)

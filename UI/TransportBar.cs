@@ -41,6 +41,7 @@ internal sealed class TransportBar : UserControl
     private readonly TransportPositionDisplay _positionDisplay = new();
     private readonly Dictionary<TransportCommand, TransportIconButton> _commandButtons = [];
     private readonly System.Windows.Forms.Timer _commandRepeatTimer = new();
+    private readonly List<(Label Label, Func<string> TitleProvider)> _groupLabels = [];
     private readonly TransportIconButton _playButton;
     private TransportCommand? _heldCommand;
     private TransportIconButton? _heldButton;
@@ -74,13 +75,13 @@ internal sealed class TransportBar : UserControl
         _groups.Controls.Add(_positionDisplay);
 
         _playButton = AddGroup(
-            "TRANSPORT",
+            () => UiStrings.LabelTransportGroup,
             repeatOnHold: false,
             (TransportCommand.TogglePlayback, TransportIcon.PlayPause),
             (TransportCommand.JumpToBar, TransportIcon.JumpToBar));
 
         AddGroup(
-            "NAVIGATION",
+            () => UiStrings.LabelNavigationGroup,
             repeatOnHold: true,
             (TransportCommand.GoToStart, TransportIcon.GoToStart),
             (TransportCommand.PreviousPage, TransportIcon.PreviousPage),
@@ -92,7 +93,7 @@ internal sealed class TransportBar : UserControl
             (TransportCommand.GoToEnd, TransportIcon.GoToEnd));
 
         AddGroup(
-            "TIME ZOOM",
+            () => UiStrings.LabelTimeZoomGroup,
             repeatOnHold: true,
             (TransportCommand.TimeZoomIn, TransportIcon.TimeZoomIn),
             (TransportCommand.TimeZoomOut, TransportIcon.TimeZoomOut),
@@ -100,7 +101,7 @@ internal sealed class TransportBar : UserControl
             (TransportCommand.TimeZoomReset, TransportIcon.TimeZoomReset));
 
         AddGroup(
-            "AMP ZOOM",
+            () => UiStrings.LabelAmpZoomGroup,
             repeatOnHold: true,
             (TransportCommand.AmpZoomIn, TransportIcon.AmpZoomIn),
             (TransportCommand.AmpZoomOut, TransportIcon.AmpZoomOut),
@@ -140,7 +141,7 @@ internal sealed class TransportBar : UserControl
         _positionDisplay.Position = position;
     }
 
-    /// <summary>表示言語に合わせてツールチップを付け直す。</summary>
+    /// <summary>表示言語に合わせてツールチップ・グループ見出し・アクセシビリティ名を付け直す。</summary>
     public void ApplyLocalizedToolTips()
     {
         foreach (var (command, button) in _commandButtons)
@@ -149,6 +150,13 @@ internal sealed class TransportBar : UserControl
             button.AccessibleName = tip;
             _toolTip.SetToolTip(button, tip);
         }
+
+        foreach (var (label, titleProvider) in _groupLabels)
+        {
+            label.Text = titleProvider();
+        }
+
+        _positionDisplay.AccessibleName = UiStrings.AccessibleTransportPositionDisplay;
     }
 
     /// <summary>キーボード操作中のボタンをマウスオーバーと同じ表示にする。</summary>
@@ -281,12 +289,13 @@ internal sealed class TransportBar : UserControl
     }
 
     private TransportIconButton AddGroup(
-        string title,
+        Func<string> titleProvider,
         bool repeatOnHold,
         params (TransportCommand Command, TransportIcon Icon)[] definitions)
     {
         const int buttonHeight = 30;
         const int buttonPitch = 31;
+        var title = titleProvider();
         using var groupFont = new Font("Yu Gothic UI", 7F, FontStyle.Bold);
         var labelWidth = TextRenderer.MeasureText(
             title,
@@ -313,6 +322,7 @@ internal sealed class TransportBar : UserControl
             Text = title,
             TextAlign = ContentAlignment.MiddleRight,
         };
+        _groupLabels.Add((label, titleProvider));
         var buttons = new FlowLayoutPanel
         {
             AutoSize = false,
@@ -444,7 +454,7 @@ internal sealed class TransportPositionDisplay : Control
 
     public TransportPositionDisplay()
     {
-        AccessibleName = "Tempo, time signature, musical position and elapsed time";
+        AccessibleName = UiStrings.AccessibleTransportPositionDisplay;
         BackColor = UiColors.ForControlBack(UiColors.TransportBack);
         ForeColor = UiColors.TransportFore;
         Font = new Font("Yu Gothic UI", 9.5F, FontStyle.Bold);

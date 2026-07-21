@@ -1,8 +1,9 @@
 namespace MgaWwiseIMImporter.UI;
 
 /// <summary>
-/// ツールチップ・ダイアログ・ユーザー向けログの日英文言を一箇所に集約する。
-/// 画面の固定ラベル（EXPORT 等）は対象外。編集はこのファイルを優先する。
+/// ユーザーに見えるすべての表示テキスト（ツールチップ・ダイアログ・ログ・ラベル・ボタン・
+/// アクセシビリティ名・開発者パネルなど）を一箇所に集約する。画面の固定ラベルも例外ではない。
+/// 新しい表示テキストを追加するときは、必ずこのファイルへプロパティ／メソッドを追加してから参照する。
 /// </summary>
 internal static class UiStrings
 {
@@ -635,9 +636,9 @@ internal static class UiStrings
         "プロジェクトの削除に失敗",
         "Failed to delete project");
 
-    public static string LogExportPreflightHeader => "=== Export Preflight ===";
-    public static string LogStatusOk => "OK";
-    public static string LogStatusNg => "NG";
+    public static string LogExportPreflightHeader => Get("=== Export Preflight ===", "=== Export Preflight ===");
+    public static string LogStatusOk => Get("OK", "OK");
+    public static string LogStatusNg => Get("NG", "NG");
     public static string LogTargetUnselected => Get("（未選択）", "(none selected)");
 
     public static string PreflightNoParts => Get(
@@ -698,7 +699,7 @@ internal static class UiStrings
         "Ready to export.");
 
     // --- Wwise import progress (common lines) ---
-    public static string LogWwiseImportHeader => "=== Wwise Import ===";
+    public static string LogWwiseImportHeader => Get("=== Wwise Import ===", "=== Wwise Import ===");
     public static string LogWwiseImportComplete => Get(
         "=== Wwise Import complete ===",
         "=== Wwise Import complete ===");
@@ -761,4 +762,932 @@ internal static class UiStrings
         segmentPath,
         cueLabel,
         deleted);
+
+    // --- Status / empty UI ---
+    public static string StatusChecking => Get("確認中…", "Checking…");
+    public static string StatusStartupCheckOff => Get("起動時チェックオフ", "Startup check off");
+    public static string StatusDisconnected => Get("未接続", "Disconnected");
+    public static string StatusNoneSelected => Get("（未選択）", "(none selected)");
+    public static string StatusNoProject => Get("(プロジェクトなし)", "(no project)");
+
+    public static string WaveformEmptyHint => Get(
+        "Wave / XML をドロップすると波形と小節線を表示します",
+        "Drop a Wave / XML file to show the waveform and bar lines");
+
+    public static string DialogBarJumpTitle => Get("小節へジャンプ", "Jump to bar");
+
+    public static string MarkerCommentNeedPrefix => Get(
+        "Digits が 0 のときは Prefix を入力してください",
+        "Enter a Prefix when Digits is 0");
+
+    public static string MarkerCommentEmptyName => Get(
+        "名前が空です",
+        "Name is empty");
+
+    public static string MarkerCommentControlChars => Get(
+        "制御文字は使用できません",
+        "Control characters are not allowed");
+
+    public static string PlaylistNone => Get("Playlist はありません", "No playlists");
+    public static string PlaylistLoading => Get("読み込み中…", "Loading…");
+    public static string PlaylistFetchFailed => Get(
+        "Playlist を取得できませんでした",
+        "Failed to get playlists");
+
+    // --- WAAPI / Keep Target logs ---
+    public static string LogTargetKeepOn(string path) => Format(
+        "Target  : Keep → {0}（このパスへ書き出します）",
+        "Target  : Keep → {0} (export to this path)",
+        path);
+
+    public static string LogTargetKeepUnset => Get(
+        "Target  : Keep → （未設定）",
+        "Target  : Keep → (not set)");
+
+    public static string LogTargetNoneSelected => Get(
+        "Target  : （未選択）",
+        "Target  : (none selected)");
+
+    public static string LogKeepTargetPathUnset => Get(
+        "Keep Target : 作成先パスが未設定です。",
+        "Keep Target : destination path is not set.");
+
+    public static string LogKeepTargetReselected(string path) => Format(
+        "Keep Target : Wwise 上でも作成先を合わせました → {0}",
+        "Keep Target : also reselected destination in Wwise → {0}",
+        path);
+
+    public static string LogKeepTargetExportPath(string path) => Format(
+        "Keep Target : EXPORT はこのパスへ書き出します → {0}",
+        "Keep Target : EXPORT will write to → {0}",
+        path);
+
+    public static string LogKeepTargetExportRegardless(string path) => Format(
+        "Keep Target : Wwise 上の選択に関わらず、EXPORT はこのパスへ書き出します → {0}",
+        "Keep Target : EXPORT will write to this path regardless of Wwise selection → {0}",
+        path);
+
+    public static string LogWaapiConnectFailed => Get(
+        "接続できません。Wwise 起動と WAAPI 有効化を確認してください。",
+        "Cannot connect. Ensure Wwise is running and WAAPI is enabled.");
+
+    public static string LogWaapiTimeout => Get(
+        "タイムアウト。Wwise の起動と WAAPI（HTTP）有効化を確認してください。",
+        "Timed out. Ensure Wwise is running and WAAPI (HTTP) is enabled.");
+
+    public static string LogKeepTargetMemoryEmpty => Get(
+        "Keep Target がオンですが、記憶パスが空です。",
+        "Keep Target is on but the remembered path is empty.");
+
+    public static string LogKeepTargetOtherProject => Get(
+        "Keep Target の記憶パスは別プロジェクト向けのため再選択しませんでした。",
+        "Keep Target path belongs to another project; did not reselect.");
+
+    public static string LogKeepTargetReselectOk(string path) => Format(
+        "Keep Target : 再選択しました → {0}",
+        "Keep Target : reselected → {0}",
+        path);
+
+    public static string LogKeepTargetObjectMissing(string path) => Format(
+        "Keep Target : オブジェクトが見つかりません → {0}",
+        "Keep Target : object not found → {0}",
+        path);
+
+    public static string LogKeepTargetReselectFailed(string message) => Format(
+        "Keep Target : 再選択に失敗 → {0}",
+        "Keep Target : failed to reselect → {0}",
+        message);
+
+    public static string LogPlaylistScheduleFailed(string fileName) => Format(
+        "Playlist 遷移を予約できませんでした: {0}",
+        "Could not schedule playlist transition: {0}",
+        fileName);
+
+    public static string LogSameTimeOutOfRange(string fileName, long sample, long duration) => Format(
+        "Same Time の遷移位置が遷移先の範囲外です: {0} (位置={1}, 長さ={2})",
+        "Same Time transition position is outside the destination range: {0} (pos={1}, len={2})",
+        fileName,
+        sample,
+        duration);
+
+    public static string LogLastWaveBadPath(string message) => Format(
+        "前回読み込んだ波形のパスが不正です: {0}",
+        "Last loaded wave path is invalid: {0}",
+        message);
+
+    public static string LogLastWaveMissing(string path) => Format(
+        "前回読み込んだ波形が見つかりません: {0}",
+        "Last loaded wave was not found: {0}",
+        path);
+
+    public static string LogPlaybackPrepareFailed(string message) => Format(
+        "=== エラー ==={0}Message : 再生の準備に失敗: {1}{0}{0}",
+        "=== Error ==={0}Message : Failed to prepare playback: {1}{0}{0}",
+        Environment.NewLine,
+        message);
+
+    public static string LogExportReady(int partCount) => Format(
+        "Message : 出力パート {0} 件。［EXPORT］で分割 WAV を書き出し、Wwise へ登録できます。",
+        "Message : {0} output part(s). Use [EXPORT] to write split WAVs and register in Wwise.",
+        partCount);
+
+    public static string LogExportBlocked(int partCount, string reason) => Format(
+        "Message : 出力パート {0} 件。書き出し条件未達: {1}",
+        "Message : {0} output part(s). Export requirements not met: {1}",
+        partCount,
+        reason);
+
+    public static string LogExportSaveTo(string directory) => Format(
+        "保存先  : {0}",
+        "Output  : {0}",
+        directory);
+
+    public static string LogLastSessionCorrupt => Get(
+        "Message : 前回セッションの読み込みに失敗しました（形式不正）。",
+        "Message : Failed to load the last session (invalid format).");
+
+    public static string LogLastSessionPartMismatch => Get(
+        "Message : 前回セッションはパート構成が一致しないため復元しませんでした。",
+        "Message : Last session was not restored because the part layout does not match.");
+
+    public static string LogLastSessionPartial(
+        int groupApplied,
+        int groupRequested,
+        int disabledApplied,
+        int disabledRequested,
+        int markerApplied,
+        int markerRequested,
+        int exitApplied,
+        int exitRequested,
+        int fadeInApplied,
+        int fadeInRequested,
+        int fadeOutApplied,
+        int fadeOutRequested,
+        int groupFadeInApplied,
+        int groupFadeInRequested,
+        int groupFadeOutApplied,
+        int groupFadeOutRequested) => Format(
+        "Message : 前回セッションを部分復元: グループ {0}/{1}、無効 {2}/{3}、マーカー {4}/{5}、"
+        + "Exit Source {6}/{7}、Fade In {8}/{9}、Fade Out {10}/{11}、"
+        + "Fade In Group {12}/{13}、Fade Out Group {14}/{15}",
+        "Message : Partially restored last session: groups {0}/{1}, disabled {2}/{3}, markers {4}/{5}, "
+        + "Exit Source {6}/{7}, Fade In {8}/{9}, Fade Out {10}/{11}, "
+        + "Fade In Group {12}/{13}, Fade Out Group {14}/{15}",
+        groupApplied,
+        groupRequested,
+        disabledApplied,
+        disabledRequested,
+        markerApplied,
+        markerRequested,
+        exitApplied,
+        exitRequested,
+        fadeInApplied,
+        fadeInRequested,
+        fadeOutApplied,
+        fadeOutRequested,
+        groupFadeInApplied,
+        groupFadeInRequested,
+        groupFadeOutApplied,
+        groupFadeOutRequested);
+
+    public static string PresentYes => Get("あり", "present");
+    public static string PresentNo => Get("なし", "missing");
+
+    public static string LogWaapiStateFailed(string message) => Format(
+        "Message : Wwise 状態の取得に失敗: {0}",
+        "Message : Failed to get Wwise state: {0}",
+        message);
+
+    public static string LogImportSkippedNoSelection => Get(
+        "Message : Wwise 上で作成先オブジェクトが選択されていないためスキップしました。",
+        "Message : Skipped because no destination object is selected in Wwise.");
+
+    public static string LogImportPlanFailed(string message) => Format(
+        "Message : インポート計画の作成に失敗: {0}",
+        "Message : Failed to build the import plan: {0}",
+        message);
+
+    public static string LogStateGroupCheckFailed(string message) => Format(
+        "Message : State Group の存在確認に失敗: {0}",
+        "Message : Failed to check State Group: {0}",
+        message);
+
+    public static string LogBarNotFound(int barNumber) => Format(
+        "Message : 小節 {0} が見つかりません。",
+        "Message : Bar {0} was not found.",
+        barNumber);
+
+    // --- Drop / analyze ---
+    public static string LogErrorHeader => Get("=== エラー ===", "=== Error ===");
+    public static string LogWarningHeader => Get("=== 警告 ===", "=== Warning ===");
+    public static string LogDropNeedWavOrXml => Get(
+        "Message : .wav または .xml をドロップしてください。",
+        "Message : Drop a .wav or .xml file.");
+
+    public static string LogWaveMissing(string path) => Format(
+        "Wave : {0} (なし)",
+        "Wave : {0} (missing)",
+        path);
+
+    public static string LogWaveRequired => Get(
+        "Message : 波形表示には .wav が必要です。",
+        "Message : A .wav file is required to show the waveform.");
+
+    public static string LogIxmlTimeRefMissing => Get(
+        "Message : iXML の TimeReference が取れません（無し、または 0）。"
+        + Environment.NewLine
+        + "Message : アウフタクト判定と小節位置の対応には iXML TimeReference が必要です。"
+        + " 0 のときは波形先頭＝PPQ 0 とみなします。",
+        "Message : iXML TimeReference is missing (absent or 0)."
+        + Environment.NewLine
+        + "Message : Anacrusis detection and bar positions need iXML TimeReference."
+        + " When 0, the wave start is treated as PPQ 0.");
+
+    public static string LogXmlMissing(string path) => Format(
+        "Xml  : {0} (なし)",
+        "Xml  : {0} (missing)",
+        path);
+
+    public static string LogXmlMissingBars => Get(
+        "Message : 同名 .xml が無いため小節線は表示しません。",
+        "Message : No matching .xml; bar lines will not be shown.");
+
+    public static string LogOutsideWaveHeader => Get(
+        "=== 波形範囲外（無視） ===",
+        "=== Outside wave range (ignored) ===");
+
+    public static string LogOutsideWaveMessage => Get(
+        "Message : 波形タイムライン外のマーカー／サイクルは描画せず、出力にも含めません。",
+        "Message : Markers/cycles outside the wave timeline are not drawn or exported.");
+
+    // --- Project store ---
+    public static string ErrProjectNotFound(string name) => Format(
+        "プロジェクトが見つかりません: {0}",
+        "Project not found: {0}",
+        name);
+
+    public static string ErrProjectNameRequired => Get(
+        "プロジェクト名を入力してください。",
+        "Enter a project name.");
+
+    public static string ErrProjectNameReserved => Get(
+        "この名前は予約されています。",
+        "This name is reserved.");
+
+    public static string ErrProjectNameExists(string name) => Format(
+        "同じ名前のプロジェクトが既にあります: {0}",
+        "A project with this name already exists: {0}",
+        name);
+
+    // --- Importer exceptions ---
+    public static string ErrBadSampleRate => Get(
+        "サンプルレートまたは BlockAlign が不正です。",
+        "Sample rate or BlockAlign is invalid.");
+
+    public static string ErrStateGroupPathRequired => Get(
+        "複数パート時は State Group パスが必要です。",
+        "A State Group path is required for multi-part projects.");
+
+    public static string ErrNoTracks(string segmentName) => Format(
+        "トラックがありません: {0}",
+        "No tracks: {0}",
+        segmentName);
+
+    public static string ErrCannotResolveOutputPart(string path) => Format(
+        "出力パートを特定できません: {0}",
+        "Cannot identify output part: {0}",
+        path);
+
+    public static string ErrTrackRangeEmpty(string segmentName, string trackName, string rangeMs) => Format(
+        "トラック範囲が空です: {0}/{1} ({2})",
+        "Track range is empty: {0}/{1} ({2})",
+        segmentName,
+        trackName,
+        rangeMs);
+
+    public static string LogAutoVolumeGainMismatch(string playlistName, int partNumber) => Format(
+        "Auto Volume: playlist {0} のレイヤーゲインが不一致のため 先頭パート {1} の補償を使用",
+        "Auto Volume: playlist {0} layer gains differ; using compensation from first part {1}",
+        playlistName,
+        partNumber);
+
+    public static string ErrSlicedWavMissing(string segmentName, string trackName) => Format(
+        "切り出し WAV が見つかりません: {0}/{1}",
+        "Sliced WAV not found: {0}/{1}",
+        segmentName,
+        trackName);
+
+    public static string ListJoinAnd => Get(" と ", " and ");
+
+    public static string ErrRegionOverlap(string detail) => Format(
+        "リージョン範囲が重なっています: {0}。"
+        + " -R / -L / -E（および内部生成の -A）は重ならないようにマーカーを配置してください。",
+        "Region ranges overlap: {0}."
+        + " Place -R / -L / -E (and internally generated -A) so they do not overlap.",
+        detail);
+
+    public static string ReasonOutsideTimeline => Get(
+        "波形タイムライン範囲外（描画・出力計画の対象外）",
+        "Outside wave timeline (excluded from draw/export plan)");
+
+    public static string ReasonOutsideSamples => Get(
+        "波形サンプル範囲外（描画・出力計画の対象外）",
+        "Outside wave sample range (excluded from draw/export plan)");
+
+    public static string ReasonNoOverlap => Get(
+        "波形と有効な重なりなし（描画・出力計画の対象外）",
+        "No valid overlap with the wave (excluded from draw/export plan)");
+
+    public static string ErrNoTempoEvents => Get(
+        "テンポイベントがありません。",
+        "No tempo events.");
+
+    public static string ErrTempoTrackMissing => Get(
+        "MTempoTrackEvent (Tempo Track) が見つかりません。",
+        "MTempoTrackEvent (Tempo Track) was not found.");
+
+    public static string ErrTempoEventNoBpm => Get(
+        "TempoEvent に BPM がありません。",
+        "TempoEvent has no BPM.");
+
+    public static string ErrTempoEventNoPpq => Get(
+        "TempoEvent に PPQ がありません。",
+        "TempoEvent has no PPQ.");
+
+    public static string ErrSampleRateZero => Get(
+        "サンプルレートが 0 です。",
+        "Sample rate is 0.");
+
+    public static string ErrNoOutputParts => Get(
+        "出力パートがありません。",
+        "No output parts.");
+
+    public static string ErrEmptyWaapiResponse => Get(
+        "空の応答を受信しました。",
+        "Received an empty response.");
+
+    public static string ErrNotRiffHeader => Get(
+        "RIFF ヘッダーではありません。",
+        "Not a RIFF header.");
+
+    public static string ErrNotWaveFormat => Get(
+        "WAVE 形式ではありません。",
+        "Not WAVE format.");
+
+    public static string ErrFmtChunkMissing => Get(
+        "fmt チャンクが見つかりません。",
+        "fmt chunk not found.");
+
+    public static string ErrFmtChunkInvalid => Get(
+        "fmt チャンクが不正です。",
+        "fmt chunk is invalid.");
+
+    public static string ErrDataChunkMissing => Get(
+        "data チャンクが見つかりません。",
+        "data chunk not found.");
+
+    public static string ErrDataChunkTruncated => Get(
+        "data チャンクの読み取りが途中で終了しました。",
+        "Reading the data chunk ended unexpectedly.");
+
+    public static string ErrChunkSizeInvalid(string id) => Format(
+        "チャンクサイズが不正です: {0}",
+        "Invalid chunk size: {0}",
+        id);
+
+    public static string ErrBitsPerSampleInvalid => Get(
+        "BitsPerSample が不正です。",
+        "BitsPerSample is invalid.");
+
+    public static string ErrUnsupportedBitDepth(int bits) => Format(
+        "未対応のビット深度です: {0}",
+        "Unsupported bit depth: {0}",
+        bits);
+
+    public static string ErrUnsupportedWavFormat(string name) => Format(
+        "未対応の WAV 形式です: {0}",
+        "Unsupported WAV format: {0}",
+        name);
+
+    public static string ErrWaveFormatInvalid => Get(
+        "波形フォーマットが不正です。",
+        "Wave format is invalid.");
+
+    public static string ErrEmptyData => Get(
+        "データが空です。",
+        "Data is empty.");
+
+    public static string ErrBlockAlignInvalid => Get(
+        "BlockAlign が不正です。",
+        "BlockAlign is invalid.");
+
+    public static string ErrExportRangeEmpty => Get(
+        "書き出し範囲が空です。",
+        "Export range is empty.");
+
+    public static string ErrExportRangeBeforeData(long start, long end) => Format(
+        "書き出し範囲が data 外です: samples=[{0}..{1})",
+        "Export range is outside data: samples=[{0}..{1})",
+        start,
+        end);
+
+    public static string ErrSampleFormatInvalid => Get(
+        "WAV のサンプル形式が不正です。",
+        "WAV sample format is invalid.");
+
+    public static string ErrExportBytesNotBlockAligned => Get(
+        "書き出しバイト数が BlockAlign の倍数ではありません。",
+        "Export byte count is not a multiple of BlockAlign.");
+
+    public static string ErrPcmBitUnsupported(int bits) => Format(
+        "{0} bit PCM は未対応です。",
+        "{0}-bit PCM is not supported.",
+        bits);
+
+    public static string ErrAudioFormatUnsupported(int format) => Format(
+        "AudioFormat={0} は波形表示未対応です。",
+        "AudioFormat={0} is not supported for waveform display.",
+        format);
+
+    public static string ErrAudioFormatNameUnsupported(string name) => Format(
+        "AudioFormat={0} は波形表示未対応です。",
+        "AudioFormat={0} is not supported for waveform display.",
+        name);
+
+    // --- Labels / Buttons / Status / Log keys / Progress / Accessibility / ColorDev ---
+
+    // Form1: action bar / checkboxes / buttons
+    public static string LabelKeepLastSession => Get("Keep Last Session", "Keep Last Session");
+    public static string LabelAlwaysOnTop => Get("Always on Top", "Always on Top");
+    public static string LabelDebugLog => Get("Debug Log", "Debug Log");
+    public static string LabelCompactFileNumbers => Get("Compact Num.", "Compact Num.");
+    public static string LabelClear => Get("CLEAR", "CLEAR");
+    public static string LabelReload => Get("RELOAD", "RELOAD");
+    public static string LabelExport => Get("EXPORT", "EXPORT");
+    public static string LabelNone => Get("None", "None");
+
+    // Form1: Fade / Exit Source At / Group / Playlist header
+    public static string LabelFadeIn => Get("Fade In", "Fade In");
+    public static string LabelFadeOut => Get("Fade Out", "Fade Out");
+    public static string LabelGroup => Get("Group", "Group");
+    public static string LabelExitSourceAt => Get("Exit Source At", "Exit Source At");
+    public static string LabelMusicPlaylist => Get("Music Playlist", "Music Playlist");
+    public static string LabelImmediate => Get("Immediate", "Immediate");
+    public static string LabelNextBar => Get("Next Bar", "Next Bar");
+    public static string LabelNextBeat => Get("Next Beat", "Next Beat");
+    public static string LabelNextCue => Get("Next Cue", "Next Cue");
+    public static string LabelExitCue => Get("Exit Cue", "Exit Cue");
+    public static string LabelEntryCue => Get("Entry Cue", "Entry Cue");
+    public static string LabelSameTime => Get("Same Time", "Same Time");
+    public static string LabelTimeline => Get("Timeline", "Timeline");
+    public static string LabelBar => Get("Bar", "Bar");
+    public static string LabelBeat => Get("Beat", "Beat");
+
+    /// <summary>Fade ラジオの表示（"1.0 Sec." / "1.0 秒"）。0 以下は <see cref="LabelNone"/>。</summary>
+    public static string LabelFadeSeconds(double seconds)
+    {
+        if (seconds <= 0d)
+        {
+            return LabelNone;
+        }
+
+        var value = seconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+        return Get($"{value} 秒", $"{value} Sec.");
+    }
+
+    /// <summary>Exit Source At ラジオの表示名。</summary>
+    public static string LabelExitSource(PlaylistExitSourceMode mode) => mode switch
+    {
+        PlaylistExitSourceMode.Immediate => LabelImmediate,
+        PlaylistExitSourceMode.NextBar => LabelNextBar,
+        PlaylistExitSourceMode.NextBeat => LabelNextBeat,
+        PlaylistExitSourceMode.NextCue => LabelNextCue,
+        PlaylistExitSourceMode.ExitCue => LabelExitCue,
+        _ => mode.ToString(),
+    };
+
+    /// <summary>遷移先同期モードの表示名（ログ・診断用）。</summary>
+    public static string LabelDestinationSync(PlaylistDestinationSyncMode mode) => mode switch
+    {
+        PlaylistDestinationSyncMode.EntryCue => LabelEntryCue,
+        PlaylistDestinationSyncMode.SameTime => LabelSameTime,
+        _ => mode.ToString(),
+    };
+
+    /// <summary>Marker Grid ラジオの表示名。</summary>
+    public static string LabelMarkerGrid(MarkerGridOverrideMode mode) => mode switch
+    {
+        MarkerGridOverrideMode.Default => LabelTimeline,
+        MarkerGridOverrideMode.Bar => LabelBar,
+        MarkerGridOverrideMode.Beat => LabelBeat,
+        _ => mode.ToString(),
+    };
+
+    /// <summary>波形一覧で無効化した Playlist の代替表示名。</summary>
+    public static string LabelExcludedRegion(int index) => Format(
+        "除外リージョン {0}",
+        "Excluded Region {0}",
+        index);
+
+    // Form1: フォームタイトル・著作権表記
+    public static string FormTitle => Get(
+        "MGA Wwise IMImporter - Version 1.00 β",
+        "MGA Wwise IMImporter - Version 1.00 β");
+
+    public static string CopyrightText => Get(
+        "© 2026 MIYABI GAME AUDIO INC.  GitHub"
+        + "\nWwise® and Audiokinetic® are trademarks of Audiokinetic Inc.",
+        "© 2026 MIYABI GAME AUDIO INC.  GitHub"
+        + "\nWwise® and Audiokinetic® are trademarks of Audiokinetic Inc.");
+
+    // Form1: アクセシビリティ名
+    public static string AccessibleProjectFolderButton => Get(
+        "書き出し先フォルダを選択",
+        "Choose the export folder");
+
+    public static string AccessibleProjectDeleteButton => Get(
+        "選択中のプロジェクトを削除",
+        "Delete the selected project");
+
+    public static string AccessibleSpectrum => Get(
+        "再生出力の簡易スペクトラム表示",
+        "Simple spectrum meter for playback output");
+
+    public static string AccessibleLogClear => Get("ログを消去", "Clear log");
+    public static string AccessibleLogCopy => Get("ログをコピー", "Copy log");
+    public static string AccessibleLogDownload => Get("ログを保存", "Download log");
+
+    // MarkerOptionsPanel
+    public static string LabelStream => Get("Stream", "Stream");
+    public static string LabelPrefetchLength => Get("Prefetch Length", "Prefetch Length");
+    public static string LabelLookAheadTime => Get("Look-ahead Time", "Look-ahead Time");
+    public static string LabelLoudnessNormalize => Get("Loudness Normalize", "Loudness Normalize");
+    public static string LabelNormalize => Get("Normalize", "Normalize");
+    public static string LabelTarget => Get("Target", "Target");
+    public static string LabelLkfsUnit => Get("LKFS", "LKFS");
+    public static string LabelPreserveGroupBalance => Get("Preserve Group Balance", "Preserve Group Balance");
+    public static string LabelAutoVolume => Get("Auto Volume", "Auto Volume");
+    public static string LabelMakeUpGain => Get("Make-Up Gain", "Make-Up Gain");
+    public static string LabelVoiceVolume => Get("Voice Volume", "Voice Volume");
+    public static string LabelMarkerGridHeader => Get("Marker Grid", "Marker Grid");
+    public static string LabelMarkerComment => Get("Marker Comment", "Marker Comment");
+    public static string LabelDigits => Get("Digits", "Digits");
+    public static string LabelZeroPad => Get("Zero Pad", "Zero Pad");
+    public static string LabelResetPerPart => Get("Reset Per Part", "Reset Per Part");
+    public static string LabelPrefix => Get("Prefix", "Prefix");
+    public static string LabelSuffix => Get("Suffix", "Suffix");
+    public static string LabelSeparator => Get("Separator", "Separator");
+
+    /// <summary>More Options 見出し（開閉状態で ▾／▸ を切り替える）。</summary>
+    public static string LabelMoreOptions(bool expanded) =>
+        (expanded ? "▾ " : "▸ ") + Get("More Options", "More Options");
+
+    /// <summary>Marker Comment のプレビュー例（"e.g. {0}"）。</summary>
+    public static string LabelPreviewExample(string example) => Format(
+        "例: {0}",
+        "e.g. {0}",
+        example);
+
+    // TransportBar
+    public static string LabelTransportGroup => Get("TRANSPORT", "TRANSPORT");
+    public static string LabelNavigationGroup => Get("NAVIGATION", "NAVIGATION");
+    public static string LabelTimeZoomGroup => Get("TIME ZOOM", "TIME ZOOM");
+    public static string LabelAmpZoomGroup => Get("AMP ZOOM", "AMP ZOOM");
+
+    public static string AccessibleTransportPositionDisplay => Get(
+        "テンポ・拍子・現在位置・経過時間",
+        "Tempo, time signature, musical position and elapsed time");
+
+    // WaveformView: 情報レーン行ラベル・下段レーン名
+    public static string LabelMeasure => Get("Measure", "Measure");
+    public static string LabelTempo => Get("Tempo", "Tempo");
+    public static string LabelSignature => Get("Signature", "Signature");
+    public static string LabelMarker => Get("Marker", "Marker");
+    public static string LabelMusicSegmentName => Get("Music Segment Name", "Music Segment Name");
+    public static string LabelMusicPlaylistName => Get("Music Playlist Name", "Music Playlist Name");
+
+    public static IReadOnlyList<string> WaveformInfoRowLabels =>
+        [LabelMeasure, LabelTempo, LabelSignature, LabelMarker];
+
+    // WaapiStatusBar
+    public static string WaapiTitle => Get("WAAPI", "WAAPI");
+    public static string WaapiBadgeConnect => Get("CONNECT", "CONNECT");
+    public static string WaapiBadgeDisconnect => Get("DISCONNECT", "DISCONNECT");
+    public static string LabelWwise => Get("Wwise", "Wwise");
+    public static string LabelUnnamedProject => Get("（無題）", "(unnamed)");
+    public static string LabelUnnamedMarker => Get("（無名）", "(unnamed)");
+
+    /// <summary>波形範囲外マーカーの種別表示（<c>WaveformIgnoredOutsideMark.Kind</c> の内部識別子 → 表示名）。</summary>
+    public static string LabelIgnoredMarkKind(string kind) => kind switch
+    {
+        "Cycle" => Get("サイクル", "Cycle"),
+        "Marker" => LabelMarker,
+        _ => kind,
+    };
+
+    // LanguageFlagButton
+    public static string LanguageBadgeJapanese => Get("JP", "JP");
+    public static string LanguageBadgeEnglish => Get("EN", "EN");
+
+    // ProjectSettingsStore
+    public static string ProjectNewProjectMenuItem => Get("+ New Project", "+ New Project");
+    public static string ProjectNewProjectBaseName => Get("New Project", "New Project");
+    public static string StatusProjectUnnamed => Get("(名前なし)", "(unnamed)");
+
+    // Progress / busy overlay
+    public static string OverlayExporting => Get("書き出し中", "Exporting");
+    public static string OverlayLoading => Get("読み込み中", "Loading");
+    public static string OverlayStarting => Get("起動中", "Starting");
+    public static string OverlayLoadingLastSession => Get("前回セッションを読み込み中", "Loading Last Session");
+
+    // BarJumpDialog
+    public static string LabelGoToMeasure => Get("小節へジャンプ", "Go To Measure");
+
+    // Log headers (=== ... ===) — 表記は日英共通
+    public static string LogWaapiHeader => Get("=== WAAPI ===", "=== WAAPI ===");
+    public static string LogExportHeader => Get("=== Export ===", "=== Export ===");
+    public static string LogSessionHeader => Get("=== Session ===", "=== Session ===");
+    public static string LogGoToMeasureHeader => Get("=== Go To Measure ===", "=== Go To Measure ===");
+    public static string LogWaveHeader => Get("=== Wave ===", "=== Wave ===");
+    public static string LogWaveformHeader => Get("=== Waveform ===", "=== Waveform ===");
+    public static string LogNuendoTempoTrackHeader => Get(
+        "=== Nuendo Tempo Track ===",
+        "=== Nuendo Tempo Track ===");
+
+    // Report / log field keys（固定幅の列見出しは日英共通）
+    public static string KeyStatus => Get("Status  :", "Status  :");
+    public static string KeyTarget => Get("Target  :", "Target  :");
+    public static string KeyType => Get("Type    :", "Type    :");
+    public static string KeyMessage => Get("Message :", "Message :");
+    public static string KeyDetail => Get("Detail  :", "Detail  :");
+    public static string KeyOutput => Get("Output  :", "Output  :");
+    public static string KeyOriginals => Get("Originals:", "Originals:");
+    public static string KeyProject => Get("Project :", "Project :");
+    public static string KeyWwise => Get("Wwise   :", "Wwise   :");
+    public static string KeyMode => Get("Mode    :", "Mode    :");
+    public static string KeyName => Get("Name    :", "Name    :");
+    public static string KeyStateGrp => Get("StateGrp :", "StateGrp :");
+    public static string KeyLoudness => Get("Loudness:", "Loudness:");
+    public static string KeyAutoVolume => Get("Auto Volume:", "Auto Volume:");
+    public static string KeySource => Get("Source :", "Source :");
+    public static string KeyPeaks => Get("Peaks  :", "Peaks  :");
+    public static string KeyRegions => Get("Regions:", "Regions:");
+    public static string KeyOutputs => Get("Outputs:", "Outputs:");
+    public static string KeyBars => Get("Bars   :", "Bars   :");
+    public static string KeyTimeline => Get("Timeline:", "Timeline:");
+    public static string KeyAnacrusis => Get("Anacrusis :", "Anacrusis :");
+    public static string KeyPath => Get("Path    :", "Path    :");
+    public static string KeySlices => Get("Slices  :", "Slices  :");
+    public static string KeyWavePpq => Get("WavePpq :", "WavePpq :");
+
+    public static string LogDroppedFilesHeader(int count) => Format(
+        "Dropped files: {0}",
+        "Dropped files: {0}",
+        count);
+
+    public static string LogAnacrusisYes => Get(
+        "Anacrusis : あり（波形先頭を相対 Bar 1、次の小節線が Bar 2）",
+        "Anacrusis : yes (relative Bar 1 @ wave start, next bar line = 2)");
+
+    public static string LogAnacrusisNo => Get(
+        "Anacrusis : なし（波形先頭が小節線 → 相対 Bar 1）",
+        "Anacrusis : no (wave starts on a bar line → relative Bar 1)");
+
+    // Wwise import progress
+    public static string LogBuildingImportPlan => Get(
+        "インポート計画を作成中...",
+        "Building import plan...");
+
+    public static string LogPlanReady(int playlistCount) => Format(
+        "計画完了: Playlist {0} 件。",
+        "Plan ready: {0} playlist(s).",
+        playlistCount);
+
+    public static string LogCheckingStateGroup => Get(
+        "State Group を確認中...",
+        "Checking State Group...");
+
+    public static string LogStateGroupExistingFound => Get(
+        "既存の State Group が見つかりました。",
+        "Existing State Group found.");
+
+    public static string LogStateGroupAvailable => Get(
+        "State Group は作成可能です。",
+        "State Group is available.");
+
+    public static string LogAutoVolumeOn(string target) => Format(
+        "Auto Volume: ON → {0}",
+        "Auto Volume: ON → {0}",
+        target);
+
+    public static string LogAutoVolumeOff => Get("Auto Volume: OFF", "Auto Volume: OFF");
+
+    public static string LogPlaylistSummary(string name, int segmentCount) => Format(
+        "--- Playlist: {0} （セグメント {1} 件） ---",
+        "--- Playlist: {0} ({1} segments) ---",
+        name,
+        segmentCount);
+
+    public static string LogWavSliceWritten(string fileName) => Format(
+        "WAV: {0}",
+        "WAV: {0}",
+        fileName);
+
+    public static string LogWavSliceWrittenWithGain(string fileName, double gain) => Format(
+        "WAV: {0} （ゲイン {1:0.000}）",
+        "WAV: {0} (gain {1:0.000})",
+        fileName,
+        gain);
+
+    public static string LogXmlPresence(string path, bool present) => Format(
+        "Xml  : {0} ({1})",
+        "Xml  : {0} ({1})",
+        path,
+        present ? PresentYes : PresentNo);
+
+    public static string LogPeaksSummary(int bucketCount, long frameCount) => Format(
+        "{0} {1} バケット / {2:N0} フレーム",
+        "{0} {1} buckets / {2:N0} frames",
+        KeyPeaks,
+        bucketCount,
+        frameCount);
+
+    public static string LogLoudnessNormalizeOn(double targetLkfs, bool preserveGroupBalance) => Format(
+        "Loudness: Normalize ON → target {0:0.##} LKFS{1}",
+        "Loudness: Normalize ON → target {0:0.##} LKFS{1}",
+        targetLkfs,
+        preserveGroupBalance ? Get(" (グループバランス維持)", " (Preserve Group Balance)") : string.Empty);
+
+    public static string LabelMusicSwitchContainer => Get("Music Switch Container", "Music Switch Container");
+    public static string LabelMusicPlaylistContainer => Get("Music Playlist Container", "Music Playlist Container");
+
+    public static string LogLoudnessPartSilence(int partNumber) => Format(
+        "Loudness: part {0} = (無音)",
+        "Loudness: part {0} = (silence)",
+        partNumber);
+
+    public static string LogLoudnessPartValue(int partNumber, double lkfs) => Format(
+        "Loudness: part {0} = {1:0.00} LKFS",
+        "Loudness: part {0} = {1:0.00} LKFS",
+        partNumber,
+        lkfs);
+
+    public static string LogLoudnessGroupSilence(int groupId, double gain) => Format(
+        "Loudness: group {0} peak = (無音) → gain {1:0.000}",
+        "Loudness: group {0} peak = (silence) → gain {1:0.000}",
+        groupId,
+        gain);
+
+    public static string LogLoudnessGroupValue(int groupId, double maxLkfs, double gain) => Format(
+        "Loudness: group {0} peak = {1:0.00} LKFS → gain {2:0.000}",
+        "Loudness: group {0} peak = {1:0.00} LKFS → gain {2:0.000}",
+        groupId,
+        maxLkfs,
+        gain);
+
+    // WavFileInfo report
+    public static string BoolYes => Get("あり", "Yes");
+    public static string BoolNo => Get("なし", "No");
+
+    public static string LabelWavPath => Get("Path           :", "Path           :");
+    public static string LabelFileSize => Get("File Size      :", "File Size      :");
+    public static string LabelFormat => Get("Format         :", "Format         :");
+    public static string LabelChannels => Get("Channels       :", "Channels       :");
+    public static string LabelSampleRate => Get("Sample Rate    :", "Sample Rate    :");
+    public static string LabelBitDepth => Get("Bit Depth      :", "Bit Depth      :");
+    public static string LabelBlockAlign => Get("Block Align    :", "Block Align    :");
+    public static string LabelByteRate => Get("Byte Rate      :", "Byte Rate      :");
+    public static string LabelDataSize => Get("Data Size      :", "Data Size      :");
+    public static string LabelFrames => Get("Frames         :", "Frames         :");
+    public static string LabelDuration => Get("Duration       :", "Duration       :");
+    public static string LabelIXml => Get("iXML           :", "iXML           :");
+    public static string LabelTimeReference => Get("Time Reference :", "Time Reference :");
+
+    /// <summary>WAV フォーマット（AudioFormat コード）の表示名。技術用語のため日英共通。</summary>
+    public static string AudioFormatName(ushort audioFormat) => audioFormat switch
+    {
+        1 => "PCM",
+        3 => "IEEE Float",
+        6 => "A-law",
+        7 => "μ-law",
+        65534 => "Extensible",
+        _ => Format("不明 ({0})", "Unknown ({0})", audioFormat),
+    };
+
+    // NuendoTracklistInfo report
+    public static string LabelNuendoPath => Get("Path            :", "Path            :");
+    public static string LabelRehearsalTempo => Get("Rehearsal Tempo :", "Rehearsal Tempo :");
+    public static string LabelPpqResolution => Get("PPQ Resolution  :", "PPQ Resolution  :");
+    public static string LabelTempoEvents => Get("Tempo Events    :", "Tempo Events    :");
+    public static string LabelSignatures => Get("Signatures      :", "Signatures      :");
+    public static string LabelMarkers => Get("Markers         :", "Markers         :");
+    public static string LabelRegionKind => Get("Region", "Region");
+    public static string LabelMarkerKind => Get("Marker", "Marker");
+
+    public static string LabelPpqResolutionValue(double pulsesPerQuarterNote) => Format(
+        "{0:0} パルス / 四分音符",
+        "{0:0} pulses / quarter note",
+        pulsesPerQuarterNote);
+
+    // HTTP error（WaapiHttpClient）
+    public static string ErrWaapiHttpStatus(int statusCode, string? reasonPhrase, string bodySnippet) => Format(
+        "HTTP {0} {1}. {2}",
+        "HTTP {0} {1}. {2}",
+        statusCode,
+        reasonPhrase ?? string.Empty,
+        bodySnippet);
+
+    // --- ColorDev panel ---
+    public static string ColorDevTitle => Get("色調整（開発者）", "Color Adjustment (Developer)");
+    public static string ColorDevClose => Get("閉じる", "Close");
+    public static string ColorDevResetToDefaults => Get("既定に戻す", "Reset to Defaults");
+
+    /// <summary>色調整パネルの表示名（キー → 日英ラベル）。<see cref="UiColors.Entries"/> の Key と対応。</summary>
+    public static string ColorLabel(string key) => key switch
+    {
+        "PrimaryFore" => Get("共通・標準文字／アイコン", "Common - Primary Text / Icon"),
+        "MutedFore" => Get("共通・弱い文字／枠", "Common - Muted Text / Border"),
+        "AccentCyan" => Get("共通・シアンアクセント", "Common - Cyan Accent"),
+        "SurfaceBack" => Get("共通・基本背景", "Common - Base Background"),
+        "ChromeBack" => Get("共通・クローム背景", "Common - Chrome Background"),
+        "ChromeBorder" => Get("共通・クローム境界線／ホバー", "Common - Chrome Border / Hover"),
+        "ChromeMid" => Get("共通・中間グレー（押下／つまみ）", "Common - Mid Gray (Pressed / Thumb)"),
+        "ChromeDim" => Get("共通・やや明るいグレー（無効／ホバー）", "Common - Dim Gray (Disabled / Hover)"),
+        "WaveformBack" => Get("波形エリア背景", "Waveform Area Background"),
+        "EmptyHint" => Get("空状態ヒント", "Empty State Hint"),
+        "TempoBg" => Get("テンポ・背景", "Tempo - Background"),
+        "SignatureBg" => Get("拍子・背景", "Signature - Background"),
+        "MarkerRowBg" => Get("マーカー行・背景", "Marker Row - Background"),
+        "MarkerTriangle" => Get("マーカー三角", "Marker Triangle"),
+        "BarLine" => Get("小節線", "Bar Line"),
+        "BeatLine" => Get("拍線", "Beat Line"),
+        "TempoChangeLine" => Get("テンポ変更線", "Tempo Change Line"),
+        "WaveFill" => Get("波形", "Waveform Fill"),
+        "WaveCenter" => Get("波形センター線", "Waveform Center Line"),
+        "WaveformSourceMeterTrack" => Get("波形メーター・トラック", "Waveform Meter - Track"),
+        "WaveformSourceMeterMinimum" => Get("波形メーター・最小", "Waveform Meter - Minimum"),
+        "WaveformSourceMeterMaximum" => Get("波形メーター・最大", "Waveform Meter - Maximum"),
+        "RegionWaveFillGray" => Get("波形リージョン塗り（通常）", "Region Fill (Normal)"),
+        "RegionWaveFillExcluded" => Get("波形リージョン塗り（-R）", "Region Fill (-R)"),
+        "RegionWaveFillLoop" => Get("波形リージョン塗り（-L）", "Region Fill (-L)"),
+        "RegionWaveFillAnacrusis" => Get("波形リージョン塗り（-A）", "Region Fill (-A)"),
+        "RegionWaveFillExit" => Get("波形リージョン塗り（-E）", "Region Fill (-E)"),
+        "RegionBoundaryMarker" => Get("リージョン境界マーカー", "Region Boundary Marker"),
+        "EntryCueMarker" => Get("Entry Cue マーカー", "Entry Cue Marker"),
+        "ExitCueMarker" => Get("Exit Cue マーカー", "Exit Cue Marker"),
+        "OutputPartShadow" => Get("出力パート名・影", "Output Part Name - Shadow"),
+        "MusicSegmentLaneBg" => Get("Music Segment Name・背景", "Music Segment Name - Background"),
+        "MusicPlaylistLaneBg" => Get("Music Playlist Name・背景", "Music Playlist Name - Background"),
+        "SeekExit" => Get("Exit 二重再生ヘッド", "Exit Dual Playhead"),
+        "SeekAnacrusis" => Get("アウフタクト先行再生ヘッド", "Anacrusis Lead-in Playhead"),
+        "SeekFadeOut" => Get("遷移元フェードアウトヘッド", "Source Fade-out Playhead"),
+        "MouseGuide" => Get("マウスガイド", "Mouse Guide"),
+        "WaveformScrollTrack" => Get("波形スクロール・トラック", "Waveform Scrollbar - Track"),
+        "TransportBadgeBack" => Get("Transport・ズーム記号背景", "Transport - Zoom Badge Background"),
+        "LogDefault" => Get("ログ文字（既定）", "Log Text (Default)"),
+        "LogHeader" => Get("ログ文字（ヘッダ）", "Log Text (Header)"),
+        "LogWarning" => Get("ログ文字（警告）", "Log Text (Warning)"),
+        "LogError" => Get("ログ文字（エラー）", "Log Text (Error)"),
+        "LogButtonHoverBack" => Get("ログボタン・ホバー背景", "Log Button - Hover Background"),
+        "OptionGlyphCheckMark" => Get("オプション・チェック線", "Option - Check Mark"),
+        "SectionHeaderBack" => Get("セクション見出し・背景", "Section Header - Background"),
+        "PlaylistAutoBack" => Get("Playlist・自動再生開始フェード塗り", "Playlist - Auto Start Fade Fill"),
+        "PlaylistManualBack" => Get("Playlist・手動再生開始フェード塗り", "Playlist - Manual Start Fade Fill"),
+        "PlaylistManualBorder" => Get("Playlist・手動再生中枠", "Playlist - Manual Playing Border"),
+        "MarkerCommentErrorFore" => Get("Marker Comment・エラー文字", "Marker Comment - Error Text"),
+        "ActionLinkFore" => Get("Action Bar・リンク文字", "Action Bar - Link Text"),
+        "ReloadButtonFill" => Get("RELOAD・塗り", "RELOAD - Fill"),
+        "ReloadButtonHoverFill" => Get("RELOAD・ホバー塗り", "RELOAD - Hover Fill"),
+        "ReloadButtonBack" => Get("RELOAD・枠", "RELOAD - Border"),
+        "ReloadButtonHoverBack" => Get("RELOAD・ホバー枠", "RELOAD - Hover Border"),
+        "ReloadButtonPressedBack" => Get("RELOAD・押下枠", "RELOAD - Pressed Border"),
+        "ClearButtonFill" => Get("CLEAR・塗り", "CLEAR - Fill"),
+        "ClearButtonHoverFill" => Get("CLEAR・ホバー塗り", "CLEAR - Hover Fill"),
+        "ClearButtonBack" => Get("CLEAR・枠", "CLEAR - Border"),
+        "ClearButtonHoverBack" => Get("CLEAR・ホバー枠", "CLEAR - Hover Border"),
+        "ClearButtonPressedBack" => Get("CLEAR・押下枠", "CLEAR - Pressed Border"),
+        "ExportButtonFill" => Get("EXPORT・塗り", "EXPORT - Fill"),
+        "ExportButtonHoverFill" => Get("EXPORT・ホバー塗り", "EXPORT - Hover Fill"),
+        "ExportButtonBack" => Get("EXPORT・枠", "EXPORT - Border"),
+        "ExportButtonHoverBack" => Get("EXPORT・ホバー枠", "EXPORT - Hover Border"),
+        "ExportButtonPressedBack" => Get("EXPORT・押下枠", "EXPORT - Pressed Border"),
+        "SpectrumBar" => Get("スペアナ・バー", "Spectrum - Bar"),
+        "StatusBarBack" => Get("WAAPI Status・背景", "WAAPI Status - Background"),
+        "StatusBarConnectedBadgeBack" => Get("WAAPI Status・接続バッジ背景", "WAAPI Status - Connected Badge Background"),
+        "StatusBarDisconnectedBadgeBack" => Get(
+            "WAAPI Status・切断バッジ背景",
+            "WAAPI Status - Disconnected Badge Background"),
+        "StatusBarErrorDetailFore" => Get("WAAPI Status・エラー詳細文字", "WAAPI Status - Error Detail Text"),
+        "KeepTargetLockFore" => Get("Keep Target・施錠", "Keep Target - Locked"),
+        "KeepTargetLockHoverFore" => Get("Keep Target・施錠ホバー", "Keep Target - Locked Hover"),
+        "KeepTargetUnlockFore" => Get("Keep Target・開錠", "Keep Target - Unlocked"),
+        "KeepTargetUnlockHoverFore" => Get("Keep Target・開錠ホバー", "Keep Target - Unlocked Hover"),
+        "DialogBodyBack" => Get("Go To Measure・背景", "Go To Measure - Background"),
+        "DialogInputBack" => Get("Go To Measure・入力背景", "Go To Measure - Input Background"),
+        "DialogShadow" => Get("Go To Measure・影", "Go To Measure - Shadow"),
+        "ColorPanelBack" => Get("色設定パネル・背景", "Color Panel - Background"),
+        "ColorPanelListBack" => Get("色設定パネル・一覧背景", "Color Panel - List Background"),
+        "ColorPanelInputBack" => Get("色設定パネル・入力背景", "Color Panel - Input Background"),
+        _ => key,
+    };
 }

@@ -37,7 +37,7 @@ internal sealed class WaveformView : Control
     private const int SourceMeterGapPx = 8;
     private const float NameLaneFontMinPx = 8f;
     private const float NameLaneFontScale = 0.16f;
-    private static readonly string[] InfoRowLabels = ["Measure", "Tempo", "Signature", "Marker"];
+    private static IReadOnlyList<string> InfoRowLabels => UiStrings.WaveformInfoRowLabels;
 
     // MGA-CineAudio-Reviewer (transport-timeline.js) と同じ残光パラメータ
     /// <summary>軌跡の目標長さ（画面ピクセル）。ズームによらず見た目を揃える。</summary>
@@ -155,6 +155,13 @@ internal sealed class WaveformView : Control
         Cursor = Cursors.Default;
         _exportGlowTimer = new System.Windows.Forms.Timer { Interval = 16 };
         _exportGlowTimer.Tick += (_, _) => Invalidate();
+        UiStrings.LanguageChanged += (_, _) =>
+        {
+            if (!IsDisposed)
+            {
+                Invalidate();
+            }
+        };
     }
 
     public void SetPreview(
@@ -2374,7 +2381,7 @@ internal sealed class WaveformView : Control
         }
 
         using var brush = new SolidBrush(UiColors.EmptyHint);
-        const string message = "Wave / XML をドロップすると波形と小節線を表示します";
+        var message = UiStrings.WaveformEmptyHint;
         var size = g.MeasureString(message, Font);
         var centerX = wave.Width > 0
             ? wave.Left + (wave.Width - size.Width) / 2f
@@ -2469,8 +2476,8 @@ internal sealed class WaveformView : Control
             maxText = Math.Max(maxText, g.MeasureString(label, infoFont).Width);
         }
 
-        maxText = Math.Max(maxText, g.MeasureString("Music Playlist Name", infoFont).Width);
-        maxText = Math.Max(maxText, g.MeasureString("Music Segment Name", infoFont).Width);
+        maxText = Math.Max(maxText, g.MeasureString(UiStrings.LabelMusicPlaylistName, infoFont).Width);
+        maxText = Math.Max(maxText, g.MeasureString(UiStrings.LabelMusicSegmentName, infoFont).Width);
         if (_sourceDisplayName.Length > 0)
         {
             maxText = Math.Max(
@@ -2588,7 +2595,7 @@ internal sealed class WaveformView : Control
             FormatFlags = StringFormatFlags.NoWrap,
         };
 
-        var count = Math.Min(visibleRowCount, InfoRowLabels.Length);
+        var count = Math.Min(visibleRowCount, InfoRowLabels.Count);
         for (var i = 0; i < count; i++)
         {
             var top = labels.Top + i * rowHeight;
@@ -2618,9 +2625,23 @@ internal sealed class WaveformView : Control
         }
 
         DrawBottomLaneInfoLabel(
-            g, info, segmentLane, "Music Segment Name", infoFont, textBrush, format, UiColors.MusicSegmentLaneBg);
+            g,
+            info,
+            segmentLane,
+            UiStrings.LabelMusicSegmentName,
+            infoFont,
+            textBrush,
+            format,
+            UiColors.MusicSegmentLaneBg);
         DrawBottomLaneInfoLabel(
-            g, info, playlistLane, "Music Playlist Name", infoFont, textBrush, format, UiColors.MusicPlaylistLaneBg);
+            g,
+            info,
+            playlistLane,
+            UiStrings.LabelMusicPlaylistName,
+            infoFont,
+            textBrush,
+            format,
+            UiColors.MusicPlaylistLaneBg);
 
         if (_sourceDisplayName.Length == 0 || wave.Height <= 0)
         {

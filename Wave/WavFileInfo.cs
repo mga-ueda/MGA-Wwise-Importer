@@ -1,4 +1,5 @@
 using System.Text;
+using MgaWwiseIMImporter.UI;
 
 namespace MgaWwiseIMImporter.Wave;
 
@@ -16,15 +17,7 @@ internal sealed class WavFileInfo
     public bool HasIXml { get; init; }
     public ulong TimeReferenceSamples { get; init; }
 
-    public string AudioFormatName => AudioFormat switch
-    {
-        1 => "PCM",
-        3 => "IEEE Float",
-        6 => "A-law",
-        7 => "μ-law",
-        65534 => "Extensible",
-        _ => $"Unknown ({AudioFormat})",
-    };
+    public string AudioFormatName => UiStrings.AudioFormatName(AudioFormat);
 
     public long FrameCount => BlockAlign == 0 ? 0 : DataSizeBytes / BlockAlign;
 
@@ -40,14 +33,14 @@ internal sealed class WavFileInfo
         var riff = ReadFourCc(reader);
         if (riff != "RIFF")
         {
-            throw new InvalidDataException("RIFF ヘッダーではありません。");
+            throw new InvalidDataException(UiStrings.ErrNotRiffHeader);
         }
 
         _ = reader.ReadUInt32();
         var wave = ReadFourCc(reader);
         if (wave != "WAVE")
         {
-            throw new InvalidDataException("WAVE 形式ではありません。");
+            throw new InvalidDataException(UiStrings.ErrNotWaveFormat);
         }
 
         ushort? audioFormat = null;
@@ -75,7 +68,7 @@ internal sealed class WavFileInfo
             {
                 if (chunkSize < 16)
                 {
-                    throw new InvalidDataException("fmt チャンクが不正です。");
+                    throw new InvalidDataException(UiStrings.ErrFmtChunkInvalid);
                 }
 
                 audioFormat = reader.ReadUInt16();
@@ -105,7 +98,7 @@ internal sealed class WavFileInfo
 
         if (audioFormat is null)
         {
-            throw new InvalidDataException("fmt チャンクが見つかりません。");
+            throw new InvalidDataException(UiStrings.ErrFmtChunkMissing);
         }
 
         return new WavFileInfo
@@ -127,20 +120,20 @@ internal sealed class WavFileInfo
     public string ToDisplayText()
     {
         var sb = new StringBuilder();
-        sb.AppendLine("=== Wave ===");
-        sb.AppendLine($"Path           : {Path}");
-        sb.AppendLine($"File Size      : {FileSizeBytes:N0} bytes");
-        sb.AppendLine($"Format         : {AudioFormatName} ({AudioFormat})");
-        sb.AppendLine($"Channels       : {Channels}");
-        sb.AppendLine($"Sample Rate    : {SampleRate} Hz");
-        sb.AppendLine($"Bit Depth      : {BitsPerSample} bit");
-        sb.AppendLine($"Block Align    : {BlockAlign} bytes");
-        sb.AppendLine($"Byte Rate      : {ByteRate:N0} bytes/sec");
-        sb.AppendLine($"Data Size      : {DataSizeBytes:N0} bytes");
-        sb.AppendLine($"Frames         : {FrameCount:N0}");
-        sb.AppendLine($"Duration       : {FormatDuration(Duration)}");
-        sb.AppendLine($"iXML           : {(HasIXml ? "Yes" : "No")}");
-        sb.AppendLine($"Time Reference : {TimeReferenceSamples:N0} samples");
+        sb.AppendLine(UiStrings.LogWaveHeader);
+        sb.AppendLine($"{UiStrings.LabelWavPath} {Path}");
+        sb.AppendLine($"{UiStrings.LabelFileSize} {FileSizeBytes:N0} bytes");
+        sb.AppendLine($"{UiStrings.LabelFormat} {AudioFormatName} ({AudioFormat})");
+        sb.AppendLine($"{UiStrings.LabelChannels} {Channels}");
+        sb.AppendLine($"{UiStrings.LabelSampleRate} {SampleRate} Hz");
+        sb.AppendLine($"{UiStrings.LabelBitDepth} {BitsPerSample} bit");
+        sb.AppendLine($"{UiStrings.LabelBlockAlign} {BlockAlign} bytes");
+        sb.AppendLine($"{UiStrings.LabelByteRate} {ByteRate:N0} bytes/sec");
+        sb.AppendLine($"{UiStrings.LabelDataSize} {DataSizeBytes:N0} bytes");
+        sb.AppendLine($"{UiStrings.LabelFrames} {FrameCount:N0}");
+        sb.AppendLine($"{UiStrings.LabelDuration} {FormatDuration(Duration)}");
+        sb.AppendLine($"{UiStrings.LabelIXml} {(HasIXml ? UiStrings.BoolYes : UiStrings.BoolNo)}");
+        sb.AppendLine($"{UiStrings.LabelTimeReference} {TimeReferenceSamples:N0} samples");
         return sb.ToString();
     }
 

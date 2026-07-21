@@ -1,4 +1,5 @@
 using NAudio.Wave;
+using MgaWwiseIMImporter.UI;
 
 namespace MgaWwiseIMImporter.Wave;
 
@@ -825,7 +826,7 @@ internal sealed class WaveAudioPlayer : IDisposable
         {
             if (info.Channels == 0 || info.BlockAlign == 0 || info.SampleRate == 0)
             {
-                throw new InvalidDataException("波形フォーマットが不正です。");
+                throw new InvalidDataException(UiStrings.ErrWaveFormatInvalid);
             }
 
             _source = source;

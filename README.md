@@ -48,7 +48,7 @@ Nuendo の tracklist XML と Wave を読み、波形プレビュー、分割 WAV
 | ドロップ | `.wav`（＋同名 `.xml`）を読み込み、プレビュー更新。書き出し条件を満たせば［EXPORT］を有効化 |
 | ログ右下アイコン | クリアアイコンでログ表示だけを消去、コピーアイコンで全ログをクリップボードへコピー、保存アイコンで UTF-8 の `.log`／`.txt` ファイルへ保存（各機能名はツールチップに表示） |
 | Debug Log | 操作バーのチェック。Playlist推移・再生エンジン診断を `[PlaybackDebug]` JSON Lines形式でログへ出力（既定オン） |
-| 表示言語（JP／EN） | スペクトラム表示の左の正方形ボタン。ツールチップ・ダイアログ・ユーザー向けログを日英切替（`[App] UiLanguage`。既定 `ja`）。画面の固定ラベル（EXPORT 等）は対象外 |
+| 表示言語（JP／EN） | スペクトラム表示の左の正方形ボタン。画面上のラベル・ボタン・ツールチップ・ダイアログ・ログ・アクセシビリティ名を含む、すべての表示テキストを日英切替（`[App] UiLanguage`。既定 `ja`） |
 | Compact File Numbers | 無効項目を除いた書き出し WAV・Playlist・Segment 名の番号を詰める（既定オフ）。オフでは元の番号を維持し、欠番を残す |
 | Keep Last Session | `Always on Top` 左側のチェック。起動時およびこのプロジェクトへ戻ったときに、最後の作業セッションを復元（`[Project.*] KeepLastSession` / `LastWavePath`）。波形に加え、同プロジェクトのサイドカー JSON のグループ／無効化／追加マーカー／Fade In・Out（通常／Group）／Exit Source At（パート別）を復元 |
 | Always on Top | WAAPI ステータスバー直上の操作バーにあるチェック。ウィンドウを最前面に固定（`[App] AlwaysOnTop`。既定オフ） |

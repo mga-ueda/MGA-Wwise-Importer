@@ -17,43 +17,16 @@ internal enum PlaylistExitSourceMode
 internal static class PlaylistUiNames
 {
     /// <summary>Exit Source At ラジオの表示名。</summary>
-    public static string ToUiName(this PlaylistExitSourceMode mode) => mode switch
-    {
-        PlaylistExitSourceMode.Immediate => "Immediate",
-        PlaylistExitSourceMode.NextBar => "Next Bar",
-        PlaylistExitSourceMode.NextBeat => "Next Beat",
-        PlaylistExitSourceMode.NextCue => "Next Cue",
-        PlaylistExitSourceMode.ExitCue => "Exit Cue",
-        _ => mode.ToString(),
-    };
+    public static string ToUiName(this PlaylistExitSourceMode mode) => UiStrings.LabelExitSource(mode);
 
     /// <summary>遷移先同期モードの表示名（ログ・診断用）。</summary>
-    public static string ToUiName(this PlaylistDestinationSyncMode mode) => mode switch
-    {
-        PlaylistDestinationSyncMode.EntryCue => "Entry Cue",
-        PlaylistDestinationSyncMode.SameTime => "Same Time",
-        _ => mode.ToString(),
-    };
+    public static string ToUiName(this PlaylistDestinationSyncMode mode) => UiStrings.LabelDestinationSync(mode);
 
     /// <summary>Marker Grid ラジオの表示名。</summary>
-    public static string ToUiName(this MarkerGridOverrideMode mode) => mode switch
-    {
-        MarkerGridOverrideMode.Default => "Timeline",
-        MarkerGridOverrideMode.Bar => "Bar",
-        MarkerGridOverrideMode.Beat => "Beat",
-        _ => mode.ToString(),
-    };
+    public static string ToUiName(this MarkerGridOverrideMode mode) => UiStrings.LabelMarkerGrid(mode);
 
     /// <summary>Fade In / Fade Out の秒数に対応する表示名。</summary>
-    public static string ToFadeUiName(double seconds, bool isFadeIn)
-    {
-        if (seconds <= 0d)
-        {
-            return "None";
-        }
-
-        return $"{seconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} Sec.";
-    }
+    public static string ToFadeUiName(double seconds, bool isFadeIn) => UiStrings.LabelFadeSeconds(seconds);
 }
 
 [Flags]
@@ -136,7 +109,7 @@ public partial class Form1 : Form
     private bool _exportBusy;
     private UiInteractionLock _uiInteractionLocks;
     private ExportGlassOverlay? _exportOverlay;
-    private string _busyOverlayMessage = "Exporting";
+    private string _busyOverlayMessage = UiStrings.OverlayExporting;
     private bool _populatingPlaylistChoices;
     private bool _automaticPlaylistPlayback;
     private double _playlistFadeInSeconds;
@@ -271,7 +244,7 @@ public partial class Form1 : Form
         ApplyProjectBarColors();
         transportBar.ApplyColors();
         UpdateTransportPlaybackState();
-        ClearPlaylistChoices("Playlist はありません");
+        ClearPlaylistChoices(UiStrings.PlaylistNone);
         AdjustTransitionSectionHeights();
         UpdateGroupFadeRadioEnabled();
         ApplyMarkerOptionsPanelFixedHeight();
@@ -452,7 +425,7 @@ public partial class Form1 : Form
         Update();
 
         // フォームを不透明化する前にすりガラスを載せ、素の UI が一瞬見えるのを防ぐ。
-        SetUiInteractionLocked(UiInteractionLock.Load, locked: true, "Starting");
+        SetUiInteractionLocked(UiInteractionLock.Load, locked: true, UiStrings.OverlayStarting);
         Opacity = 1d;
         Activate();
 
@@ -650,34 +623,34 @@ public partial class Form1 : Form
 
         var lines = new List<string>
         {
-            "=== WAAPI ===",
-            "Status  : OK",
+            UiStrings.LogWaapiHeader,
+            $"{UiStrings.KeyStatus} {UiStrings.LogStatusOk}",
         };
         if (result.WwiseVersion.Length > 0)
         {
-            lines.Add($"Wwise   : {result.WwiseVersion}");
+            lines.Add($"{UiStrings.KeyWwise} {result.WwiseVersion}");
         }
 
         if (result.Project.Length > 0)
         {
-            lines.Add($"Project : {result.Project}");
+            lines.Add($"{UiStrings.KeyProject} {result.Project}");
         }
 
         var displayPath = GetDisplayTargetPath();
         if (_keepTarget)
         {
             lines.Add(displayPath.Length > 0
-                ? $"Target  : Keep → {displayPath}（このパスへ書き出します）"
-                : "Target  : Keep → （未設定）");
+                ? UiStrings.LogTargetKeepOn(displayPath)
+                : UiStrings.LogTargetKeepUnset);
         }
         else
         {
             lines.Add(displayPath.Length > 0
-                ? $"Target  : {displayPath}"
-                : "Target  : （未選択）");
+                ? $"{UiStrings.KeyTarget} {displayPath}"
+                : UiStrings.LogTargetNoneSelected);
             if (result.SelectedType.Length > 0)
             {
-                lines.Add($"Type    : {result.SelectedType}");
+                lines.Add($"{UiStrings.KeyType} {result.SelectedType}");
             }
         }
 
@@ -701,7 +674,7 @@ public partial class Form1 : Form
             if (logReport)
             {
                 AppendReport(
-                    "Keep Target : 作成先パスが未設定です。"
+                    UiStrings.LogKeepTargetPathUnset
                     + Environment.NewLine);
             }
 
@@ -725,16 +698,16 @@ public partial class Form1 : Form
             if (applied)
             {
                 AppendReport(
-                    $"Keep Target : Wwise 上でも作成先を合わせました → {keptPath}"
+                    UiStrings.LogKeepTargetReselected(keptPath)
                     + Environment.NewLine
-                    + $"Keep Target : EXPORT はこのパスへ書き出します → {keptPath}"
+                    + UiStrings.LogKeepTargetExportPath(keptPath)
                     + Environment.NewLine);
             }
             else if (message.Length > 0)
             {
                 AppendReport(
                     $"{message}{Environment.NewLine}"
-                    + $"Keep Target : Wwise 上の選択に関わらず、EXPORT はこのパスへ書き出します → {keptPath}"
+                    + UiStrings.LogKeepTargetExportRegardless(keptPath)
                     + Environment.NewLine);
             }
         }
@@ -851,8 +824,8 @@ public partial class Form1 : Form
                 _waapiLoggedSelectionPath = path;
                 AppendReport(
                     path.Length > 0
-                        ? $"Target  : {path}{Environment.NewLine}"
-                        : $"Target  : （未選択）{Environment.NewLine}");
+                        ? $"{UiStrings.KeyTarget} {path}{Environment.NewLine}"
+                        : UiStrings.LogTargetNoneSelected + Environment.NewLine);
             }
 
             UpdateExportButtonState();
@@ -871,7 +844,7 @@ public partial class Form1 : Form
                 {
                     Ok = false,
                     Url = _waapiSettings.Url,
-                    Message = "接続できません。Wwise 起動と WAAPI 有効化を確認してください。",
+                    Message = UiStrings.LogWaapiConnectFailed,
                 },
                 logReport: true);
         }
@@ -2315,7 +2288,7 @@ public partial class Form1 : Form
         _lastInputFiles = [];
         reloadButton.Enabled = false;
         ClearPendingPlaylistUiTransition();
-        ClearPlaylistChoices("Playlist はありません");
+        ClearPlaylistChoices(UiStrings.PlaylistNone);
         UpdateTransportPosition();
         UpdateTransportPlaybackState();
         UpdateSourceLevelMeter();
@@ -2826,7 +2799,7 @@ public partial class Form1 : Form
         {
             if (_disabledPlaylistPartNumbers.Contains(part.Number))
             {
-                names[part.Number] = $"Excluded Region {++excludedIndex}";
+                names[part.Number] = UiStrings.LabelExcludedRegion(++excludedIndex);
             }
         }
 
@@ -3291,7 +3264,7 @@ public partial class Form1 : Form
 
             if (parts.Count == 0)
             {
-                AddPlaylistStatusLabel("Playlist はありません");
+                AddPlaylistStatusLabel(UiStrings.PlaylistNone);
                 return;
             }
 
@@ -4105,7 +4078,7 @@ public partial class Form1 : Form
         }
 
         AppendReport(
-            $"Playlist 遷移を予約できませんでした: {target.FileName}"
+            UiStrings.LogPlaylistScheduleFailed(target.FileName)
             + Environment.NewLine);
         WritePlaybackDiagnostic(
             "playlist.transition-schedule-failed",
@@ -4166,8 +4139,10 @@ public partial class Form1 : Form
                 var targetDuration =
                     target.EndSampleOffset - target.StartSampleOffset;
                 AppendReport(
-                    $"Same Time の遷移位置が遷移先の範囲外です: {target.FileName}"
-                    + $" (相対={schedule.SourceRelativeSample}, 長さ={targetDuration})"
+                    UiStrings.LogSameTimeOutOfRange(
+                        target.FileName,
+                        schedule.SourceRelativeSample,
+                        targetDuration)
                     + Environment.NewLine);
                 WritePlaybackDiagnostic(
                     "playlist.transition-rejected-same-time-range",
@@ -4676,7 +4651,9 @@ public partial class Form1 : Form
 
     private void ApplyLocalizedUiText()
     {
+        Text = UiStrings.FormTitle;
         languageFlagButton.RefreshAppearance();
+        ApplyLocalizedControlLabels();
         ApplyActionBarToolTips();
         ApplyProjectBarToolTips();
         ApplyTransitionToolTips();
@@ -4684,6 +4661,92 @@ public partial class Form1 : Form
         ApplyPlaylistItemToolTips();
         transportBar.ApplyLocalizedToolTips();
         waveformView.RefreshLocalizedToolTips();
+        markerOptionsPanel.ApplyLocalizedLabels();
+        if (_loadedPreview is { } preview)
+        {
+            UpdatePlaylistDisplayNames(preview.OutputParts);
+        }
+
+        if (_waapiLastResult is { } last)
+        {
+            waapiStatusBar.SetResult(last);
+            RefreshWaapiStatusDisplay();
+        }
+    }
+
+    /// <summary>Form1 の固定ラベル・ボタン・チェックボックス・見出し・著作権表記を言語切替時に反映する。</summary>
+    private void ApplyLocalizedControlLabels()
+    {
+        keepLastSessionCheckBox.Text = UiStrings.LabelKeepLastSession;
+        topMostCheckBox.Text = UiStrings.LabelAlwaysOnTop;
+        detailedLogCheckBox.Text = UiStrings.LabelDebugLog;
+        compactFileNumbersCheckBox.Text = UiStrings.LabelCompactFileNumbers;
+        clearButton.Text = UiStrings.LabelClear;
+        reloadButton.Text = UiStrings.LabelReload;
+        exportButton.Text = UiStrings.LabelExport;
+        copyrightLinkLabel.Text = UiStrings.CopyrightText;
+
+        projectFolderButton.AccessibleName = UiStrings.AccessibleProjectFolderButton;
+        projectDeleteButton.AccessibleName = UiStrings.AccessibleProjectDeleteButton;
+        projectSpectrumView.AccessibleName = UiStrings.AccessibleSpectrum;
+
+        logClearButton.AccessibleName = UiStrings.AccessibleLogClear;
+        logCopyButton.AccessibleName = UiStrings.AccessibleLogCopy;
+        logDownloadButton.AccessibleName = UiStrings.AccessibleLogDownload;
+
+        fadeInHeaderLabel.Text = UiStrings.LabelFadeIn;
+        transitionTimeHeaderLabel.Text = UiStrings.LabelFadeOut;
+        fadeInGroupDividerLabel.Text = UiStrings.LabelGroup;
+        fadeOutGroupDividerLabel.Text = UiStrings.LabelGroup;
+        exitSourceAtHeaderLabel.Text = UiStrings.LabelExitSourceAt;
+        playlistHeaderLabel.Text = UiStrings.LabelMusicPlaylist;
+
+        FlatOptionRadioButton[] fadeRadios =
+        [
+            fadeInNoneRadio,
+            fadeInOneSecondRadio,
+            fadeInThreeSecondsRadio,
+            fadeInSixSecondsRadio,
+            fadeInNineSecondsRadio,
+            transitionTimeHalfSecondRadio,
+            transitionTimeOneSecondRadio,
+            transitionTimeThreeSecondsRadio,
+            transitionTimeSixSecondsRadio,
+            transitionTimeNineSecondsRadio,
+            fadeInGroupNoneRadio,
+            fadeInGroupOneSecondRadio,
+            fadeInGroupThreeSecondsRadio,
+            fadeInGroupSixSecondsRadio,
+            fadeInGroupNineSecondsRadio,
+            fadeOutGroupNoneRadio,
+            fadeOutGroupOneSecondRadio,
+            fadeOutGroupThreeSecondsRadio,
+            fadeOutGroupSixSecondsRadio,
+            fadeOutGroupNineSecondsRadio,
+        ];
+        foreach (var radio in fadeRadios)
+        {
+            if (radio.Tag is double seconds)
+            {
+                radio.Text = UiStrings.LabelFadeSeconds(seconds);
+            }
+        }
+
+        RadioButton[] exitSourceRadios =
+        [
+            exitSourceImmediateRadio,
+            exitSourceNextBarRadio,
+            exitSourceNextBeatRadio,
+            exitSourceNextCueRadio,
+            exitSourceExitCueRadio,
+        ];
+        foreach (var radio in exitSourceRadios)
+        {
+            if (radio.Tag is PlaylistExitSourceMode mode)
+            {
+                radio.Text = UiStrings.LabelExitSource(mode);
+            }
+        }
     }
 
     private void ApplyPlaylistItemToolTips()
@@ -4865,7 +4928,7 @@ public partial class Form1 : Form
         string? message = null;
         if (_uiInteractionLocks.HasFlag(UiInteractionLock.Export))
         {
-            message = "Exporting";
+            message = UiStrings.OverlayExporting;
         }
         else if (_uiInteractionLocks.HasFlag(UiInteractionLock.Load))
         {
@@ -5381,13 +5444,13 @@ public partial class Form1 : Form
         }
         catch (Exception ex)
         {
-            AppendReport($"前回読み込んだ波形のパスが不正です: {ex.Message}" + Environment.NewLine);
+            AppendReport(UiStrings.LogLastWaveBadPath(ex.Message) + Environment.NewLine);
             return false;
         }
 
         if (!File.Exists(wavPath))
         {
-            AppendReport($"前回読み込んだ波形が見つかりません: {wavPath}" + Environment.NewLine);
+            AppendReport(UiStrings.LogLastWaveMissing(wavPath) + Environment.NewLine);
             return false;
         }
 
@@ -5422,7 +5485,7 @@ public partial class Form1 : Form
         }
 
         var exportGeneration = ++_exportGeneration;
-        var loadMessage = isLastSessionLoad ? "Loading Last Session" : "Loading";
+        var loadMessage = isLastSessionLoad ? UiStrings.OverlayLoadingLastSession : UiStrings.OverlayLoading;
         // 起動中すりガラスが既にあればスナップショットは維持し、メッセージだけ差し替える。
         SetUiInteractionLocked(UiInteractionLock.Load, locked: true, loadMessage);
 
@@ -5435,7 +5498,7 @@ public partial class Form1 : Form
             _exportBusy = false;
             UpdateTransportPosition();
             ClearPendingPlaylistUiTransition();
-            ClearPlaylistChoices("読み込み中…");
+            ClearPlaylistChoices(UiStrings.PlaylistLoading);
             UpdateExportButtonState();
             waveformView.ClearExportHighlight();
             _playheadTimer.Stop();
@@ -5468,7 +5531,7 @@ public partial class Form1 : Form
                 _loadedPreview = null;
                 _previewSession = null;
                 UpdateTransportPosition();
-                ClearPlaylistChoices("Playlist を取得できませんでした");
+                ClearPlaylistChoices(UiStrings.PlaylistFetchFailed);
                 UpdateExportButtonState();
                 return;
             }
@@ -5487,9 +5550,7 @@ public partial class Form1 : Form
             }
             catch (Exception ex)
             {
-                AppendReport(
-                    $"=== エラー ==={Environment.NewLine}"
-                    + $"Message : 再生の準備に失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}");
+                AppendReport(UiStrings.LogPlaybackPrepareFailed(ex.Message));
             }
 
             if (IsDisposed || exportGeneration != _exportGeneration)
@@ -5558,13 +5619,16 @@ public partial class Form1 : Form
             ? preflight.OutputDirectory
             : (_projectOutputDirectory.Trim().Length > 0
                 ? _projectOutputDirectory.Trim()
-                : "（未選択）");
+                : UiStrings.StatusNoneSelected);
         AppendReport(
-            $"=== Export ==={Environment.NewLine}"
+            $"{UiStrings.LogExportHeader}{Environment.NewLine}"
             + (preflight.CanExport
-                ? $"Message : 出力パート {preview.OutputParts.Count} 件。［EXPORT］で分割 WAV を書き出し、Wwise へ登録できます。{Environment.NewLine}"
-                : $"Message : 出力パート {preview.OutputParts.Count} 件。書き出し条件未達: {preflight.Reason}{Environment.NewLine}")
-            + $"保存先  : {directory}{Environment.NewLine}{Environment.NewLine}");
+                ? UiStrings.LogExportReady(preview.OutputParts.Count) + Environment.NewLine
+                : UiStrings.LogExportBlocked(preview.OutputParts.Count, preflight.Reason)
+                    + Environment.NewLine)
+            + UiStrings.LogExportSaveTo(directory)
+            + Environment.NewLine
+            + Environment.NewLine);
         _lastLoggedPreflightKey = $"{preflight.CanExport}|{preflight.Reason}|{preflight.OutputDirectory}"
             + $"|{preflight.TargetPath}|{preflight.ProjectFilePath}";
     }
@@ -5600,8 +5664,10 @@ public partial class Form1 : Form
                 out var savedGroupFadeOuts))
         {
             AppendReport(
-                $"=== Session ==={Environment.NewLine}"
-                + $"Message : 前回セッションの読み込みに失敗しました（形式不正）。{Environment.NewLine}{Environment.NewLine}");
+                $"{UiStrings.LogSessionHeader}{Environment.NewLine}"
+                + UiStrings.LogLastSessionCorrupt
+                + Environment.NewLine
+                + Environment.NewLine);
             return;
         }
 
@@ -5634,8 +5700,10 @@ public partial class Form1 : Form
         if (state.Parts.Count > 0 && matchingNumbers.Count == 0)
         {
             AppendReport(
-                $"=== Session ==={Environment.NewLine}"
-                + $"Message : 前回セッションはパート構成が一致しないため復元しませんでした。{Environment.NewLine}{Environment.NewLine}");
+                $"{UiStrings.LogSessionHeader}{Environment.NewLine}"
+                + UiStrings.LogLastSessionPartMismatch
+                + Environment.NewLine
+                + Environment.NewLine);
             return;
         }
 
@@ -5805,16 +5873,26 @@ public partial class Form1 : Form
         ApplyPlaylistGroupColorsOnly();
 
         AppendReport(
-            $"=== Session ==={Environment.NewLine}"
-            + $"Message : 前回セッションを部分復元: グループ {groupApplied}/{groupRequested}、"
-            + $"無効 {disabledApplied}/{disabledRequested}、"
-            + $"マーカー {markerApplied}/{markerRequested}、"
-            + $"Exit Source {exitApplied}/{exitRequested}、"
-            + $"Fade In {fadeInApplied}/{savedFadeIns.Count}、"
-            + $"Fade Out {fadeOutApplied}/{savedFadeOuts.Count}、"
-            + $"Fade In Group {groupFadeInApplied}/{savedGroupFadeIns.Count}、"
-            + $"Fade Out Group {groupFadeOutApplied}/{savedGroupFadeOuts.Count}"
-            + $"{Environment.NewLine}{Environment.NewLine}");
+            $"{UiStrings.LogSessionHeader}{Environment.NewLine}"
+            + UiStrings.LogLastSessionPartial(
+                groupApplied,
+                groupRequested,
+                disabledApplied,
+                disabledRequested,
+                markerApplied,
+                markerRequested,
+                exitApplied,
+                exitRequested,
+                fadeInApplied,
+                savedFadeIns.Count,
+                fadeOutApplied,
+                savedFadeOuts.Count,
+                groupFadeInApplied,
+                savedGroupFadeIns.Count,
+                groupFadeOutApplied,
+                savedGroupFadeOuts.Count)
+            + Environment.NewLine
+            + Environment.NewLine);
     }
 
     /// <summary>
@@ -5890,9 +5968,11 @@ public partial class Form1 : Form
         catch (Exception ex)
         {
             AppendReport(
-                $"=== Export Preflight ==={Environment.NewLine}"
-                + $"Status  : NG{Environment.NewLine}"
-                + $"Message : Wwise 状態の取得に失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}");
+                $"{UiStrings.LogExportPreflightHeader}{Environment.NewLine}"
+                + $"{UiStrings.KeyStatus} {UiStrings.LogStatusNg}{Environment.NewLine}"
+                + UiStrings.LogWaapiStateFailed(ex.Message)
+                + Environment.NewLine
+                + Environment.NewLine);
             UpdateExportButtonState();
             ReleaseFocusToWaveform();
             return;
@@ -5934,7 +6014,7 @@ public partial class Form1 : Form
         StopPlaybackForExport();
 
         _exportBusy = true;
-        SetUiInteractionLocked(UiInteractionLock.Export, locked: true, "Exporting");
+        SetUiInteractionLocked(UiInteractionLock.Export, locked: true, UiStrings.OverlayExporting);
         UpdateExportButtonState();
 
         try
@@ -5981,8 +6061,10 @@ public partial class Form1 : Form
         if (targetPath.Length == 0)
         {
             AppendReport(
-                $"=== Wwise Import ==={Environment.NewLine}"
-                + $"Message : Wwise 上で作成先オブジェクトが選択されていないためスキップしました。{Environment.NewLine}{Environment.NewLine}");
+                $"{UiStrings.LogWwiseImportHeader}{Environment.NewLine}"
+                + UiStrings.LogImportSkippedNoSelection
+                + Environment.NewLine
+                + Environment.NewLine);
             return;
         }
 
@@ -5995,7 +6077,7 @@ public partial class Form1 : Form
         WwiseMusicPlan plan;
         try
         {
-            ReportProgress("Building import plan...");
+            ReportProgress(UiStrings.LogBuildingImportPlan);
             plan = WwiseMusicPlanBuilder.Build(
                 BuildNamingSourcePath(preview.SourcePath),
                 preview.WavInfo.SampleRate,
@@ -6008,13 +6090,15 @@ public partial class Form1 : Form
                 outputDirectory,
                 snapshot.PartExitSourceModes,
                 _playlistExitSourceMode);
-            ReportProgress($"Plan ready: {plan.Playlists.Count} playlist(s).");
+            ReportProgress(UiStrings.LogPlanReady(plan.Playlists.Count));
         }
         catch (Exception ex)
         {
             AppendReport(
-                $"=== Wwise Import ==={Environment.NewLine}"
-                + $"Message : インポート計画の作成に失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}");
+                $"{UiStrings.LogWwiseImportHeader}{Environment.NewLine}"
+                + UiStrings.LogImportPlanFailed(ex.Message)
+                + Environment.NewLine
+                + Environment.NewLine);
             return;
         }
 
@@ -6025,18 +6109,20 @@ public partial class Form1 : Form
             bool exists;
             try
             {
-                ReportProgress("Checking State Group...");
+                ReportProgress(UiStrings.LogCheckingStateGroup);
                 exists = await WaapiObjectUtil.ExistsAsync(_waapiSettings, stateGroupPath);
                 ReportProgress(exists
-                    ? "Existing State Group found."
-                    : "State Group is available.");
+                    ? UiStrings.LogStateGroupExistingFound
+                    : UiStrings.LogStateGroupAvailable);
             }
             catch (Exception ex)
             {
                 AppendReport(
-                    $"=== Wwise Import ==={Environment.NewLine}"
-                    + $"Status  : NG{Environment.NewLine}"
-                    + $"Message : State Group の存在確認に失敗: {ex.Message}{Environment.NewLine}{Environment.NewLine}");
+                    $"{UiStrings.LogWwiseImportHeader}{Environment.NewLine}"
+                    + $"{UiStrings.KeyStatus} {UiStrings.LogStatusNg}{Environment.NewLine}"
+                    + UiStrings.LogStateGroupCheckFailed(ex.Message)
+                    + Environment.NewLine
+                    + Environment.NewLine);
                 return;
             }
 
@@ -6082,9 +6168,9 @@ public partial class Form1 : Form
             if (!IsDisposed)
             {
                 AppendReport(
-                    $"=== Wwise Import ==={Environment.NewLine}"
-                    + $"Status  : NG{Environment.NewLine}"
-                    + $"Message : {ex.Message}{Environment.NewLine}{Environment.NewLine}");
+                    $"{UiStrings.LogWwiseImportHeader}{Environment.NewLine}"
+                    + $"{UiStrings.KeyStatus} {UiStrings.LogStatusNg}{Environment.NewLine}"
+                    + $"{UiStrings.KeyMessage} {ex.Message}{Environment.NewLine}{Environment.NewLine}");
             }
         }
     }
@@ -6107,8 +6193,10 @@ public partial class Form1 : Form
         if (!waveformView.TrySeekToBarNumber(barNumber))
         {
             AppendReport(
-                $"=== Go To Measure ==={Environment.NewLine}"
-                + $"Message : 小節 {barNumber} が見つかりません。{Environment.NewLine}{Environment.NewLine}");
+                $"{UiStrings.LogGoToMeasureHeader}{Environment.NewLine}"
+                + UiStrings.LogBarNotFound(barNumber)
+                + Environment.NewLine
+                + Environment.NewLine);
         }
     }
 
@@ -6680,10 +6768,15 @@ public partial class Form1 : Form
         if (t.StartsWith("=== エラー", StringComparison.Ordinal)
             || t.StartsWith("=== Error", StringComparison.OrdinalIgnoreCase)
             || t.StartsWith("Status  : 接続失敗", StringComparison.Ordinal)
+            || t.StartsWith("Status  : connection failed", StringComparison.OrdinalIgnoreCase)
+            || t.StartsWith("Status  : Disconnected", StringComparison.OrdinalIgnoreCase)
             || t.StartsWith("Status  : NG", StringComparison.Ordinal)
             || t.StartsWith("自動読み込み対象が見つかりません", StringComparison.Ordinal)
+            || t.StartsWith("Auto-load target was not found", StringComparison.OrdinalIgnoreCase)
             || t.StartsWith("Target  : （未選択）", StringComparison.Ordinal)
+            || t.StartsWith("Target  : (none selected)", StringComparison.OrdinalIgnoreCase)
             || t.Contains("(なし)", StringComparison.Ordinal)
+            || t.Contains("(missing)", StringComparison.OrdinalIgnoreCase)
             || IsErrorMessageLine(t))
         {
             return UiColors.LogError;
@@ -6727,7 +6820,20 @@ public partial class Form1 : Form
             || trimmedLine.Contains("復元しません", StringComparison.Ordinal)
             || trimmedLine.Contains("スキップしました", StringComparison.Ordinal)
             || trimmedLine.Contains("ドロップしてください", StringComparison.Ordinal)
-            || trimmedLine.Contains("必要です", StringComparison.Ordinal);
+            || trimmedLine.Contains("必要です", StringComparison.Ordinal)
+            || trimmedLine.Contains("Failed", StringComparison.OrdinalIgnoreCase)
+            || trimmedLine.Contains("Error", StringComparison.OrdinalIgnoreCase)
+            || trimmedLine.Contains("not found", StringComparison.OrdinalIgnoreCase)
+            || trimmedLine.Contains("requirements not met", StringComparison.OrdinalIgnoreCase)
+            || trimmedLine.Contains("required", StringComparison.OrdinalIgnoreCase)
+            || trimmedLine.Contains("invalid format", StringComparison.OrdinalIgnoreCase)
+            || trimmedLine.Contains("was not restored", StringComparison.OrdinalIgnoreCase)
+            || trimmedLine.Contains("Skipped", StringComparison.OrdinalIgnoreCase)
+            || trimmedLine.Contains("Drop", StringComparison.OrdinalIgnoreCase)
+            || trimmedLine.Contains("Cannot connect", StringComparison.OrdinalIgnoreCase)
+            || trimmedLine.Contains("Disconnected", StringComparison.OrdinalIgnoreCase)
+            || trimmedLine.Contains("missing", StringComparison.OrdinalIgnoreCase)
+            || trimmedLine.Contains("none selected", StringComparison.OrdinalIgnoreCase);
     }
 
     protected override void WndProc(ref Message m)

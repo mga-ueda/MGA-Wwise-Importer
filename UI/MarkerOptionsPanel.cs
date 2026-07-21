@@ -191,7 +191,7 @@ internal sealed class MarkerOptionsPanel : UserControl
             Font = baseFont,
             Location = new Point(leftX + streamPadL, row1ContentTop),
             Size = new Size(leftColW - streamPadL - streamPadR, RowHeight),
-            Text = "Stream",
+            Text = UiStrings.LabelStream,
         };
         _streamEnabledCheckBox.CheckedChanged += (_, _) => OnStreamUiChanged();
         _prefetchLabel = new Label
@@ -199,7 +199,7 @@ internal sealed class MarkerOptionsPanel : UserControl
             Font = baseFont,
             Location = new Point(leftX + streamPadL, row1ContentTop + RowPitch),
             Size = new Size(streamLabelW, RowHeight),
-            Text = "Prefetch Length",
+            Text = UiStrings.LabelPrefetchLength,
             TextAlign = ContentAlignment.MiddleLeft,
         };
         _prefetchTextBox = CreateStreamMsTextBox(
@@ -212,7 +212,7 @@ internal sealed class MarkerOptionsPanel : UserControl
             Font = baseFont,
             Location = new Point(leftX + streamPadL, row1ContentTop + RowPitch * 2),
             Size = new Size(streamLabelW, RowHeight),
-            Text = "Look-ahead Time",
+            Text = UiStrings.LabelLookAheadTime,
             TextAlign = ContentAlignment.MiddleLeft,
         };
         _lookAheadTextBox = CreateStreamMsTextBox(
@@ -222,7 +222,7 @@ internal sealed class MarkerOptionsPanel : UserControl
             streamMsBoxW);
 
         _loudnessHeaderLabel = CreateHeader(
-            "Loudness Normalize",
+            UiStrings.LabelLoudnessNormalize,
             headerFont,
             loudnessX,
             loudnessColW,
@@ -233,7 +233,7 @@ internal sealed class MarkerOptionsPanel : UserControl
             Font = baseFont,
             Location = new Point(loudnessX + loudnessPadL, row1ContentTop),
             Size = new Size(loudnessColW - loudnessPadL - loudnessPadR, RowHeight),
-            Text = "Normalize",
+            Text = UiStrings.LabelNormalize,
         };
         _loudnessEnabledCheckBox.CheckedChanged += (_, _) => OnLoudnessUiChanged();
         _loudnessTargetLabel = new Label
@@ -241,7 +241,7 @@ internal sealed class MarkerOptionsPanel : UserControl
             Font = baseFont,
             Location = new Point(loudnessX + loudnessPadL, row1ContentTop + RowPitch),
             Size = new Size(loudnessTargetLabelW, RowHeight),
-            Text = "Target",
+            Text = UiStrings.LabelTarget,
             TextAlign = ContentAlignment.MiddleLeft,
         };
         _loudnessTargetTextBox = new TextBox
@@ -267,7 +267,7 @@ internal sealed class MarkerOptionsPanel : UserControl
                 _loudnessTargetTextBox.Right + loudnessGap,
                 row1ContentTop + RowPitch),
             Size = new Size(loudnessUnitW, RowHeight),
-            Text = "LKFS",
+            Text = UiStrings.LabelLkfsUnit,
             TextAlign = ContentAlignment.MiddleLeft,
         };
         _loudnessGroupBalanceCheckBox = new FlatOptionCheckBox
@@ -277,12 +277,12 @@ internal sealed class MarkerOptionsPanel : UserControl
             Font = baseFont,
             Location = new Point(loudnessX + loudnessPadL, row1ContentTop + RowPitch * 2),
             Size = new Size(loudnessColW - loudnessPadL - loudnessPadR, RowHeight),
-            Text = "Preserve Group Balance",
+            Text = UiStrings.LabelPreserveGroupBalance,
         };
         _loudnessGroupBalanceCheckBox.CheckedChanged += (_, _) => OnLoudnessUiChanged();
 
         _autoVolumeHeaderLabel = CreateHeader(
-            "Auto Volume",
+            UiStrings.LabelAutoVolume,
             headerFont,
             autoVolumeX,
             autoVolumeColW,
@@ -294,7 +294,7 @@ internal sealed class MarkerOptionsPanel : UserControl
             Font = baseFont,
             Location = new Point(autoVolumeX + autoVolumePadL, row1ContentTop),
             Size = new Size(autoVolumeColW - autoVolumePadL - autoVolumePadR, RowHeight),
-            Text = "Auto Volume",
+            Text = UiStrings.LabelAutoVolume,
         };
         _autoVolumeCheckBox.CheckedChanged += (_, _) => OnLoudnessUiChanged();
 
@@ -312,7 +312,7 @@ internal sealed class MarkerOptionsPanel : UserControl
             Location = new Point(0, 0),
             Size = new Size(autoVolumeInnerW, RowHeight),
             Tag = AutoVolumeTarget.MakeUpGain,
-            Text = "Make-Up Gain",
+            Text = UiStrings.LabelMakeUpGain,
             Checked = true,
         };
         _autoVolumeMakeUpGainRadio.CheckedChanged += (_, _) =>
@@ -328,7 +328,7 @@ internal sealed class MarkerOptionsPanel : UserControl
             Location = new Point(0, RowPitch),
             Size = new Size(autoVolumeInnerW, RowHeight),
             Tag = AutoVolumeTarget.VoiceVolume,
-            Text = "Voice Volume",
+            Text = UiStrings.LabelVoiceVolume,
         };
         _autoVolumeVoiceVolumeRadio.CheckedChanged += (_, _) =>
         {
@@ -340,11 +340,21 @@ internal sealed class MarkerOptionsPanel : UserControl
         _autoVolumeTargetPanel.Controls.Add(_autoVolumeMakeUpGainRadio);
         _autoVolumeTargetPanel.Controls.Add(_autoVolumeVoiceVolumeRadio);
 
-        _gridHeaderLabel = CreateHeader("Marker Grid", headerFont, leftX, leftColW, y: row2HeaderY);
-        _gridBarRadio = CreateGridRadio("Bar", MarkerGridOverrideMode.Bar, leftX, leftColW, row2ContentTop);
-        _gridBeatRadio = CreateGridRadio("Beat", MarkerGridOverrideMode.Beat, leftX, leftColW, row2ContentTop + RowPitch);
+        _gridHeaderLabel = CreateHeader(UiStrings.LabelMarkerGridHeader, headerFont, leftX, leftColW, y: row2HeaderY);
+        _gridBarRadio = CreateGridRadio(
+            UiStrings.LabelBar,
+            MarkerGridOverrideMode.Bar,
+            leftX,
+            leftColW,
+            row2ContentTop);
+        _gridBeatRadio = CreateGridRadio(
+            UiStrings.LabelBeat,
+            MarkerGridOverrideMode.Beat,
+            leftX,
+            leftColW,
+            row2ContentTop + RowPitch);
         _gridDefaultRadio = CreateGridRadio(
-            "Timeline",
+            UiStrings.LabelTimeline,
             MarkerGridOverrideMode.Default,
             leftX,
             leftColW,
@@ -353,7 +363,7 @@ internal sealed class MarkerOptionsPanel : UserControl
         var commentDigitsX = loudnessX;
         var commentFieldsX = loudnessX + col2W + commentColumnGap;
         _commentHeaderLabel = CreateHeader(
-            "Marker Comment",
+            UiStrings.LabelMarkerComment,
             headerFont,
             loudnessX,
             rightBlockW,
@@ -364,7 +374,7 @@ internal sealed class MarkerOptionsPanel : UserControl
             Font = baseFont,
             Location = new Point(commentDigitsX + S(12), row2ContentTop),
             Size = new Size(S(48), RowHeight),
-            Text = "Digits",
+            Text = UiStrings.LabelDigits,
             TextAlign = ContentAlignment.MiddleLeft,
         };
         _digitsTextBox = new TextBox
@@ -384,13 +394,13 @@ internal sealed class MarkerOptionsPanel : UserControl
         WireTextEditingFocus(_digitsTextBox);
 
         _zeroPadCheckBox = CreateCheckBox(
-            "Zero Pad",
+            UiStrings.LabelZeroPad,
             baseFont,
             commentDigitsX + S(12),
             row2ContentTop + RowPitch,
             col2W - S(16));
         _resetPerPartCheckBox = CreateCheckBox(
-            "Reset Per Part",
+            UiStrings.LabelResetPerPart,
             baseFont,
             commentDigitsX + S(12),
             row2ContentTop + RowPitch * 2,
@@ -408,11 +418,21 @@ internal sealed class MarkerOptionsPanel : UserControl
 
         var commentFieldX = commentFieldsX + col3PadL;
         var commentEditorX = commentFieldX + col3LabelW + col3Gap;
-        _prefixLabel = CreateFieldLabel("Prefix", baseFont, commentFieldX, row2ContentTop, col3LabelW);
+        _prefixLabel = CreateFieldLabel(UiStrings.LabelPrefix, baseFont, commentFieldX, row2ContentTop, col3LabelW);
         _prefixTextBox = CreateTextBox(baseFont, commentEditorX, row2ContentTop, col3EditorW);
-        _suffixLabel = CreateFieldLabel("Suffix", baseFont, commentFieldX, row2ContentTop + RowPitch, col3LabelW);
+        _suffixLabel = CreateFieldLabel(
+            UiStrings.LabelSuffix,
+            baseFont,
+            commentFieldX,
+            row2ContentTop + RowPitch,
+            col3LabelW);
         _suffixTextBox = CreateTextBox(baseFont, commentEditorX, row2ContentTop + RowPitch, col3EditorW);
-        _joinerLabel = CreateFieldLabel("Separator", baseFont, commentFieldX, row2ContentTop + RowPitch * 2, col3LabelW);
+        _joinerLabel = CreateFieldLabel(
+            UiStrings.LabelSeparator,
+            baseFont,
+            commentFieldX,
+            row2ContentTop + RowPitch * 2,
+            col3LabelW);
         _joinerTextBox = CreateTextBox(baseFont, commentEditorX, row2ContentTop + RowPitch * 2, col3EditorW);
 
         _moreOptionsBodyControls =
@@ -464,9 +484,47 @@ internal sealed class MarkerOptionsPanel : UserControl
         {
             if (!IsDisposed)
             {
-                ApplyToolTips();
+                ApplyLocalizedLabels();
             }
         };
+    }
+
+    /// <summary>言語切替時に、パネル内の全ラベル・チェックボックス・見出し・ラジオ・プレビューを再設定する。</summary>
+    public void ApplyLocalizedLabels()
+    {
+        _streamHeaderLabel.Text = UiStrings.LabelStream;
+        _streamEnabledCheckBox.Text = UiStrings.LabelStream;
+        _prefetchLabel.Text = UiStrings.LabelPrefetchLength;
+        _lookAheadLabel.Text = UiStrings.LabelLookAheadTime;
+
+        _loudnessHeaderLabel.Text = UiStrings.LabelLoudnessNormalize;
+        _loudnessEnabledCheckBox.Text = UiStrings.LabelNormalize;
+        _loudnessTargetLabel.Text = UiStrings.LabelTarget;
+        _loudnessUnitLabel.Text = UiStrings.LabelLkfsUnit;
+        _loudnessGroupBalanceCheckBox.Text = UiStrings.LabelPreserveGroupBalance;
+
+        _autoVolumeHeaderLabel.Text = UiStrings.LabelAutoVolume;
+        _autoVolumeCheckBox.Text = UiStrings.LabelAutoVolume;
+        _autoVolumeMakeUpGainRadio.Text = UiStrings.LabelMakeUpGain;
+        _autoVolumeVoiceVolumeRadio.Text = UiStrings.LabelVoiceVolume;
+
+        _gridHeaderLabel.Text = UiStrings.LabelMarkerGridHeader;
+        _gridBarRadio.Text = UiStrings.LabelBar;
+        _gridBeatRadio.Text = UiStrings.LabelBeat;
+        _gridDefaultRadio.Text = UiStrings.LabelTimeline;
+
+        _commentHeaderLabel.Text = UiStrings.LabelMarkerComment;
+        _digitsLabel.Text = UiStrings.LabelDigits;
+        _zeroPadCheckBox.Text = UiStrings.LabelZeroPad;
+        _resetPerPartCheckBox.Text = UiStrings.LabelResetPerPart;
+        _prefixLabel.Text = UiStrings.LabelPrefix;
+        _suffixLabel.Text = UiStrings.LabelSuffix;
+        _joinerLabel.Text = UiStrings.LabelSeparator;
+
+        _moreOptionsHeaderLabel.Text = FormatMoreOptionsHeader(_moreOptionsExpanded);
+
+        ApplyToolTips();
+        UpdatePreview();
     }
 
     /// <summary>自前で DPI を考慮して配置するため、AutoScale を子へ伝播させない。</summary>
@@ -752,8 +810,7 @@ internal sealed class MarkerOptionsPanel : UserControl
         }
     }
 
-    private static string FormatMoreOptionsHeader(bool expanded) =>
-        expanded ? "▾ More Options" : "▸ More Options";
+    private static string FormatMoreOptionsHeader(bool expanded) => UiStrings.LabelMoreOptions(expanded);
 
     private SectionHeaderLabel CreateHeader(string text, Font font, int x, int width, int y) => new()
     {
@@ -1251,7 +1308,7 @@ internal sealed class MarkerOptionsPanel : UserControl
         var validationError = ValidateWwiseCustomCueName(_settings, example);
         if (validationError is null)
         {
-            _previewLabel.Text = $"e.g. {example}";
+            _previewLabel.Text = UiStrings.LabelPreviewExample(example);
             _previewLabel.ForeColor = UiColors.PlaylistDefaultFore;
         }
         else
@@ -1271,17 +1328,17 @@ internal sealed class MarkerOptionsPanel : UserControl
         if (settings.CommentDigits <= 0
             && string.IsNullOrWhiteSpace(settings.CommentPrefix))
         {
-            return "Digits が 0 のときは Prefix を入力してください";
+            return UiStrings.MarkerCommentNeedPrefix;
         }
 
         if (string.IsNullOrWhiteSpace(name))
         {
-            return "名前が空です";
+            return UiStrings.MarkerCommentEmptyName;
         }
 
         if (name.Any(char.IsControl))
         {
-            return "制御文字は使用できません";
+            return UiStrings.MarkerCommentControlChars;
         }
 
         return null;

@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using MgaWwiseIMImporter.UI;
 
 namespace MgaWwiseIMImporter.Wwise;
 
@@ -52,7 +53,7 @@ internal sealed class WaapiHttpClient : IDisposable
 
         if (string.IsNullOrWhiteSpace(body))
         {
-            throw new WaapiException("空の応答を受信しました。");
+            throw new WaapiException(UiStrings.ErrEmptyWaapiResponse);
         }
 
         using var document = JsonDocument.Parse(body);

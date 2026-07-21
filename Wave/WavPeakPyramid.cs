@@ -1,4 +1,5 @@
 using System.Text;
+using MgaWwiseIMImporter.UI;
 
 namespace MgaWwiseIMImporter.Wave;
 
@@ -123,7 +124,7 @@ internal sealed class WavPeakPyramid
     {
         if (info.FrameCount <= 0 || info.BlockAlign == 0 || info.Channels == 0)
         {
-            throw new InvalidDataException("波形フォーマットが不正です。");
+            throw new InvalidDataException(UiStrings.ErrWaveFormatInvalid);
         }
 
         using var stream = new FileStream(
@@ -137,14 +138,14 @@ internal sealed class WavPeakPyramid
 
         if (!WavPeakReader.TryFindDataChunk(stream, reader, out var dataStart, out var dataSize))
         {
-            throw new InvalidDataException("data チャンクが見つかりません。");
+            throw new InvalidDataException(UiStrings.ErrDataChunkMissing);
         }
 
         var blockAlign = info.BlockAlign;
         var frameCount = Math.Min(info.FrameCount, (long)(dataSize / blockAlign));
         if (frameCount <= 0)
         {
-            throw new InvalidDataException("データが空です。");
+            throw new InvalidDataException(UiStrings.ErrEmptyData);
         }
 
         var baseBucket = (int)Math.Max(1L, (frameCount + TargetBaseBuckets - 1) / TargetBaseBuckets);

@@ -141,8 +141,9 @@ internal sealed class ProjectProfile
 internal sealed class ProjectSettingsStore
 {
     public const string DefaultName = "Default";
-    public const string NewProjectMenuItem = "+ New Project";
     public const string IndexSection = "Projects";
+
+    public static string NewProjectMenuItem => UiStrings.ProjectNewProjectMenuItem;
 
     private readonly List<string> _names = [];
     private readonly Dictionary<string, ProjectProfile> _profiles =
@@ -226,7 +227,7 @@ internal sealed class ProjectSettingsStore
             return profile.Clone();
         }
 
-        throw new InvalidOperationException($"プロジェクトが見つかりません: {name}");
+        throw new InvalidOperationException(UiStrings.ErrProjectNotFound(name));
     }
 
     public bool ContainsName(string name) =>
@@ -237,7 +238,7 @@ internal sealed class ProjectSettingsStore
         var trimmed = name.Trim();
         if (!_profiles.ContainsKey(trimmed))
         {
-            throw new InvalidOperationException($"プロジェクトが見つかりません: {trimmed}");
+            throw new InvalidOperationException(UiStrings.ErrProjectNotFound(trimmed));
         }
 
         ActiveName = _names.First(n => string.Equals(n, trimmed, StringComparison.OrdinalIgnoreCase));
@@ -435,19 +436,19 @@ internal sealed class ProjectSettingsStore
         var trimmedNew = NormalizeName(newName);
         if (trimmedNew.Length == 0)
         {
-            throw new InvalidOperationException("プロジェクト名を入力してください。");
+            throw new InvalidOperationException(UiStrings.ErrProjectNameRequired);
         }
 
         if (string.Equals(trimmedNew, NewProjectMenuItem, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException("この名前は予約されています。");
+            throw new InvalidOperationException(UiStrings.ErrProjectNameReserved);
         }
 
         if (creatingNew)
         {
             if (_profiles.ContainsKey(trimmedNew))
             {
-                throw new InvalidOperationException($"同じ名前のプロジェクトが既にあります: {trimmedNew}");
+                throw new InvalidOperationException(UiStrings.ErrProjectNameExists(trimmedNew));
             }
 
             profile.Name = trimmedNew;
@@ -462,13 +463,13 @@ internal sealed class ProjectSettingsStore
         var trimmedCurrent = currentName.Trim();
         if (!_profiles.ContainsKey(trimmedCurrent))
         {
-            throw new InvalidOperationException($"プロジェクトが見つかりません: {trimmedCurrent}");
+            throw new InvalidOperationException(UiStrings.ErrProjectNotFound(trimmedCurrent));
         }
 
         var rename = !string.Equals(trimmedCurrent, trimmedNew, StringComparison.OrdinalIgnoreCase);
         if (rename && _profiles.ContainsKey(trimmedNew))
         {
-            throw new InvalidOperationException($"同じ名前のプロジェクトが既にあります: {trimmedNew}");
+            throw new InvalidOperationException(UiStrings.ErrProjectNameExists(trimmedNew));
         }
 
         profile.Name = trimmedNew;
@@ -498,7 +499,7 @@ internal sealed class ProjectSettingsStore
         var trimmed = name.Trim();
         if (!_profiles.ContainsKey(trimmed))
         {
-            throw new InvalidOperationException($"プロジェクトが見つかりません: {trimmed}");
+            throw new InvalidOperationException(UiStrings.ErrProjectNotFound(trimmed));
         }
 
         _names.RemoveAll(n => string.Equals(n, trimmed, StringComparison.OrdinalIgnoreCase));
@@ -524,7 +525,7 @@ internal sealed class ProjectSettingsStore
 
     public string SuggestNewProjectName()
     {
-        const string baseName = "New Project";
+        var baseName = UiStrings.ProjectNewProjectBaseName;
         if (!_profiles.ContainsKey(baseName))
         {
             return baseName;

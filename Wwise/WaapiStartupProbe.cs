@@ -1,4 +1,5 @@
 using System.Text.Json;
+using MgaWwiseIMImporter.UI;
 
 namespace MgaWwiseIMImporter.Wwise;
 
@@ -39,7 +40,7 @@ internal static class WaapiStartupProbe
             }
             catch
             {
-                projectText = "(プロジェクトなし)";
+                projectText = UiStrings.StatusNoProject;
             }
 
             TryGetString(info, "processPath", out var processPath);
@@ -62,13 +63,13 @@ internal static class WaapiStartupProbe
         }
         catch (TaskCanceledException)
         {
-            return Fail(settings.Url, "タイムアウト。Wwise の起動と WAAPI（HTTP）有効化を確認してください。");
+            return Fail(settings.Url, UiStrings.LogWaapiTimeout);
         }
         catch (HttpRequestException ex)
         {
             return Fail(
                 settings.Url,
-                "接続できません。Wwise 起動と WAAPI 有効化を確認してください。",
+                UiStrings.LogWaapiConnectFailed,
                 ex.Message);
         }
         catch (Exception ex)
@@ -123,7 +124,7 @@ internal static class WaapiStartupProbe
 
     private static string FormatWwiseVersion(JsonElement info)
     {
-        var displayName = TryGetString(info, "displayName", out var name) ? name : "Wwise";
+        var displayName = TryGetString(info, "displayName", out var name) ? name : UiStrings.LabelWwise;
         if (info.TryGetProperty("version", out var version)
             && TryGetString(version, "displayName", out var versionName))
         {
@@ -135,7 +136,7 @@ internal static class WaapiStartupProbe
 
     private static string FormatProject(JsonElement project)
     {
-        var name = TryGetString(project, "name", out var n) ? n : "(unnamed)";
+        var name = TryGetString(project, "name", out var n) ? n : UiStrings.LabelUnnamedProject;
         var path = ReadProjectFilePath(project);
         return path.Length > 0 ? $"{name} ({path})" : name;
     }

@@ -31,12 +31,12 @@ internal static class WwiseMusicPlanBuilder
     {
         if (sampleRate == 0)
         {
-            throw new ArgumentException("サンプルレートが 0 です。", nameof(sampleRate));
+            throw new ArgumentException(UiStrings.ErrSampleRateZero, nameof(sampleRate));
         }
 
         if (outputParts.Count == 0)
         {
-            throw new ArgumentException("出力パートがありません。", nameof(outputParts));
+            throw new ArgumentException(UiStrings.ErrNoOutputParts, nameof(outputParts));
         }
 
         var baseName = Path.GetFileNameWithoutExtension(sourcePath);

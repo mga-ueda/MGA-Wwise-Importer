@@ -35,7 +35,7 @@ internal sealed class WaapiStatusBar : Panel
         _titleLabel = new Label
         {
             AutoSize = true,
-            Text = "WAAPI",
+            Text = UiStrings.WaapiTitle,
             Font = new Font("Yu Gothic UI", 9F, FontStyle.Bold),
             Location = new Point(10, 7),
             TabStop = false,
@@ -71,7 +71,7 @@ internal sealed class WaapiStatusBar : Panel
         _keepStateLabel = new Label
         {
             AutoSize = true,
-            Text = "- Not Keep Target -",
+            Text = UiStrings.KeepTargetOffLabel,
             Font = new Font("Yu Gothic UI", 9F),
             TabStop = false,
         };
@@ -93,6 +93,8 @@ internal sealed class WaapiStatusBar : Panel
             }
 
             UpdateKeepLockAppearance();
+            _titleLabel.Text = UiStrings.WaapiTitle;
+            LayoutLabels();
         };
     }
 
@@ -136,12 +138,12 @@ internal sealed class WaapiStatusBar : Panel
         _keepStateLabel.BackColor = BackColor;
         ApplyKeepLockColors();
 
-        if (_badgeText == "CONNECT")
+        if (_badgeText == UiStrings.WaapiBadgeConnect)
         {
             SetBadgeConnected();
             ApplyDetailForeColor(connected: true);
         }
-        else if (_badgeText == "DISCONNECT")
+        else if (_badgeText == UiStrings.WaapiBadgeDisconnect)
         {
             SetBadgeDisconnected();
             ApplyDetailForeColor(connected: false);
@@ -211,7 +213,7 @@ internal sealed class WaapiStatusBar : Panel
 
     private void SetBadgeConnected()
     {
-        _badgeText = "CONNECT";
+        _badgeText = UiStrings.WaapiBadgeConnect;
         _badgeBack = UiColors.StatusBarConnectedBadgeBack;
         _badgeFore = Color.White;
         _badgeFilled = true;
@@ -219,7 +221,7 @@ internal sealed class WaapiStatusBar : Panel
 
     private void SetBadgeDisconnected()
     {
-        _badgeText = "DISCONNECT";
+        _badgeText = UiStrings.WaapiBadgeDisconnect;
         _badgeBack = UiColors.StatusBarDisconnectedBadgeBack;
         _badgeFore = Color.White;
         _badgeFilled = true;
@@ -246,7 +248,7 @@ internal sealed class WaapiStatusBar : Panel
         _showKeepLock = false;
         _badgeText = "…";
         SetBadgeNeutral();
-        SetPlainDetail("確認中…", UiColors.StatusBarTitleFore);
+        SetPlainDetail(UiStrings.StatusChecking, UiColors.StatusBarTitleFore);
     }
 
     public void SetSkipped()
@@ -256,7 +258,7 @@ internal sealed class WaapiStatusBar : Panel
         _showKeepLock = false;
         _badgeText = "—";
         SetBadgeNeutral();
-        SetPlainDetail("起動時チェックオフ", UiColors.StatusBarTitleFore);
+        SetPlainDetail(UiStrings.StatusStartupCheckOff, UiColors.StatusBarTitleFore);
     }
 
     public void SetResult(WaapiProbeResult result)
@@ -270,7 +272,7 @@ internal sealed class WaapiStatusBar : Panel
             SetConnectedDetail(
                 result.WwiseVersion,
                 result.ProjectName,
-                result.HasSelection ? result.SelectedPath : "（未選択）");
+                result.HasSelection ? result.SelectedPath : UiStrings.StatusNoneSelected);
         }
         else
         {
@@ -279,7 +281,7 @@ internal sealed class WaapiStatusBar : Panel
             SetBadgeDisconnected();
             ApplyDetailForeColor(connected: false);
             SetPlainDetail(
-                result.Message.Length > 0 ? result.Message : "未接続",
+                result.Message.Length > 0 ? result.Message : UiStrings.StatusDisconnected,
                 UiColors.StatusBarErrorDetailFore);
         }
     }
@@ -310,7 +312,7 @@ internal sealed class WaapiStatusBar : Panel
         SetConnectedDetail(
             wwiseVersion,
             projectName,
-            string.IsNullOrEmpty(selectedPath) ? "（未選択）" : selectedPath);
+            string.IsNullOrEmpty(selectedPath) ? UiStrings.StatusNoneSelected : selectedPath);
     }
 
     private void SetPlainDetail(string text, Color foreColor)
@@ -338,16 +340,17 @@ internal sealed class WaapiStatusBar : Panel
     /// <summary>表示用に <c>Wwise v2024.1.6</c> 形式へ揃える。</summary>
     private static string FormatDisplayVersion(string wwiseVersion)
     {
+        var wwise = UiStrings.LabelWwise;
         if (string.IsNullOrWhiteSpace(wwiseVersion))
         {
-            return "Wwise";
+            return wwise;
         }
 
         var text = wwiseVersion.Trim();
         if (text.StartsWith("Wwise v", StringComparison.OrdinalIgnoreCase)
             || text.StartsWith("Wwise V", StringComparison.OrdinalIgnoreCase))
         {
-            return "Wwise v" + text["Wwise ".Length..].TrimStart('v', 'V', ' ');
+            return $"{wwise} v" + text["Wwise ".Length..].TrimStart('v', 'V', ' ');
         }
 
         if (text.StartsWith("Wwise ", StringComparison.OrdinalIgnoreCase))
@@ -358,15 +361,15 @@ internal sealed class WaapiStatusBar : Panel
                 rest = rest[1..].TrimStart();
             }
 
-            return rest.Length > 0 ? $"Wwise v{rest}" : "Wwise";
+            return rest.Length > 0 ? $"{wwise} v{rest}" : wwise;
         }
 
         if (text.StartsWith('v') || text.StartsWith('V'))
         {
-            return $"Wwise v{text[1..].TrimStart()}";
+            return $"{wwise} v{text[1..].TrimStart()}";
         }
 
-        return $"Wwise v{text}";
+        return $"{wwise} v{text}";
     }
 
     private void LayoutLabels()
@@ -407,7 +410,9 @@ internal sealed class WaapiStatusBar : Panel
         _keepStateLabel.Visible = _showKeepLock;
         if (_showKeepLock)
         {
-            _keepStateLabel.Text = _keepTargetChecked ? "- Keep Target -" : "- Not Keep Target -";
+            _keepStateLabel.Text = _keepTargetChecked
+                ? UiStrings.KeepTargetOnLabel
+                : UiStrings.KeepTargetOffLabel;
             var lockLeft = _detailLabel.Right + gapBeforeLock;
             var lockTop = Math.Max(0, (ClientSize.Height - _keepLockButton.Height) / 2);
             _keepLockButton.Location = new Point(lockLeft, lockTop);

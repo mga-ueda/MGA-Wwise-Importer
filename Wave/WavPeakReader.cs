@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using MgaWwiseIMImporter.UI;
 
 namespace MgaWwiseIMImporter.Wave;
 
@@ -56,7 +57,7 @@ internal static class WavPeakReader
 
         if (!TryFindDataChunk(stream, reader, out var dataStart, out var dataSize))
         {
-            throw new InvalidDataException("data チャンクが見つかりません。");
+            throw new InvalidDataException(UiStrings.ErrDataChunkMissing);
         }
 
         var fileFrameCount = (long)Math.Min(info.FrameCount, dataSize / info.BlockAlign);
@@ -73,7 +74,7 @@ internal static class WavPeakReader
         var bytesPerSample = info.BitsPerSample / 8;
         if (bytesPerSample <= 0)
         {
-            throw new InvalidDataException("BitsPerSample が不正です。");
+            throw new InvalidDataException(UiStrings.ErrBitsPerSampleInvalid);
         }
 
         // 1 バケットあたりのフレーム数が少なければ、シークせず範囲全体を順次走査する方が圧倒的に速い
@@ -299,7 +300,7 @@ internal static class WavPeakReader
 
         if (info.AudioFormat is not (1 or 65534))
         {
-            throw new NotSupportedException($"AudioFormat={info.AudioFormat} は波形表示未対応です。");
+            throw new NotSupportedException(UiStrings.ErrAudioFormatUnsupported(info.AudioFormat));
         }
 
         switch (info.BitsPerSample)
@@ -420,7 +421,7 @@ internal static class WavPeakReader
             }
 
             default:
-                throw new NotSupportedException($"{info.BitsPerSample} bit PCM は未対応です。");
+                throw new NotSupportedException(UiStrings.ErrPcmBitUnsupported(info.BitsPerSample));
         }
     }
 
@@ -450,11 +451,11 @@ internal static class WavPeakReader
                     return value / 8388608f;
                 },
                 32 => (buffer, offset) => BitConverter.ToInt32(buffer, offset) / 2147483648f,
-                _ => throw new NotSupportedException($"{bitsPerSample} bit PCM は未対応です。"),
+                _ => throw new NotSupportedException(UiStrings.ErrPcmBitUnsupported(bitsPerSample)),
             };
         }
 
-        throw new NotSupportedException($"AudioFormat={audioFormat} は波形表示未対応です。");
+        throw new NotSupportedException(UiStrings.ErrAudioFormatUnsupported(audioFormat));
     }
 
     internal static bool TryFindDataChunk(

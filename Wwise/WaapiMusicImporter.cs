@@ -35,7 +35,7 @@ internal static class WaapiMusicImporter
     {
         if (wavInfo.SampleRate == 0 || wavInfo.BlockAlign == 0)
         {
-            throw new ArgumentException("サンプルレートまたは BlockAlign が不正です。");
+            throw new ArgumentException(UiStrings.ErrBadSampleRate);
         }
 
         var sampleRate = wavInfo.SampleRate;
@@ -49,15 +49,19 @@ internal static class WaapiMusicImporter
         }
 
         Log(UiStrings.LogWwiseImportHeader);
-        Log($"Target  : {parentPath}");
-        Log($"Mode    : {(plan.IsMultiPart ? "Music Switch Container" : "Music Playlist Container")}");
-        Log($"Name    : {plan.ContainerName}");
+        Log($"{UiStrings.KeyTarget} {parentPath}");
+        Log(
+            $"{UiStrings.KeyMode} "
+            + (plan.IsMultiPart
+                ? UiStrings.LabelMusicSwitchContainer
+                : UiStrings.LabelMusicPlaylistContainer));
+        Log($"{UiStrings.KeyName} {plan.ContainerName}");
 
         string? stateGroupPath = null;
         if (plan.IsMultiPart)
         {
             stateGroupPath = importSettings.ResolveStateGroupPath(plan.ContainerName);
-            Log($"StateGrp : {stateGroupPath}");
+            Log($"{UiStrings.KeyStateGrp} {stateGroupPath}");
             if (updateExistingStateGroup)
             {
                 // onNameConflict=merge により、State Group 自体を維持したまま
@@ -73,9 +77,7 @@ internal static class WaapiMusicImporter
         Dictionary<int, float>? partGains = null;
         if (loudnessNormalizeEnabled)
         {
-            Log(
-                $"Loudness: Normalize ON → target {loudnessTargetLkfs:0.##} LKFS"
-                + (loudnessPreserveGroupBalance ? " (Preserve Group Balance)" : string.Empty));
+            Log(UiStrings.LogLoudnessNormalizeOn(loudnessTargetLkfs, loudnessPreserveGroupBalance));
             partGains = LoudnessMeter.ComputePartGains(
                 sourceWavPath,
                 wavInfo,
@@ -87,11 +89,14 @@ internal static class WaapiMusicImporter
             if (autoVolumeEnabled)
             {
                 Log(
-                    $"Auto Volume: ON → {(autoVolumeTarget == AutoVolumeTarget.VoiceVolume ? "Voice Volume" : "Make-Up Gain")}");
+                    UiStrings.LogAutoVolumeOn(
+                        autoVolumeTarget == AutoVolumeTarget.VoiceVolume
+                            ? UiStrings.LabelVoiceVolume
+                            : UiStrings.LabelMakeUpGain));
             }
             else
             {
-                Log("Auto Volume: OFF");
+                Log(UiStrings.LogAutoVolumeOff);
             }
         }
 
@@ -122,7 +127,7 @@ internal static class WaapiMusicImporter
         {
             if (stateGroupPath is null || stateGroupPath.Length == 0)
             {
-                throw new InvalidOperationException("複数パート時は State Group パスが必要です。");
+                throw new InvalidOperationException(UiStrings.ErrStateGroupPathRequired);
             }
 
             Log(UiStrings.LogCreatingStateGroup);
@@ -233,7 +238,7 @@ internal static class WaapiMusicImporter
 
         foreach (var playlist in plan.Playlists)
         {
-            Log($"--- Playlist: {playlist.Name} ({playlist.Segments.Count} segments) ---");
+            Log(UiStrings.LogPlaylistSummary(playlist.Name, playlist.Segments.Count));
             foreach (var segment in playlist.Segments)
             {
                 var flags = new List<string>();
@@ -273,7 +278,7 @@ internal static class WaapiMusicImporter
             }
         }
 
-        Log($"Slices  : {segmentWavs.Count}");
+        Log($"{UiStrings.KeySlices} {segmentWavs.Count}");
         Log(UiStrings.LogWwiseImportComplete);
         Log();
         return sb.ToString();
@@ -469,7 +474,7 @@ internal static class WaapiMusicImporter
         Action<string> log)
     {
         Directory.CreateDirectory(outputDirectory);
-        log($"Output  : {outputDirectory}");
+        log($"{UiStrings.KeyOutput} {outputDirectory}");
 
         var partByPath = outputParts.ToDictionary(
             part => Path.GetFullPath(Path.Combine(outputDirectory, part.FileName)),
@@ -484,7 +489,7 @@ internal static class WaapiMusicImporter
             {
                 if (segment.Tracks.Count == 0)
                 {
-                    throw new InvalidOperationException($"トラックがありません: {segment.Name}");
+                    throw new InvalidOperationException(UiStrings.ErrNoTracks(segment.Name));
                 }
 
                 foreach (var track in segment.Tracks)
@@ -493,7 +498,7 @@ internal static class WaapiMusicImporter
                     if (!partByPath.TryGetValue(partPath, out var part))
                     {
                         throw new InvalidOperationException(
-                            $"出力パートを特定できません: {track.SourceWavPath}");
+                            UiStrings.ErrCannotResolveOutputPart(track.SourceWavPath));
                     }
 
                     var startSample = checked(
@@ -503,8 +508,10 @@ internal static class WaapiMusicImporter
                     if (endSample <= startSample)
                     {
                         throw new InvalidOperationException(
-                            $"トラック範囲が空です: {segment.Name}/{track.Name}"
-                            + $" ({track.ClipStartMs}..{track.ClipEndMs} ms)");
+                            UiStrings.ErrTrackRangeEmpty(
+                                segment.Name,
+                                track.Name,
+                                $"{track.ClipStartMs}..{track.ClipEndMs} ms"));
                     }
 
                     var gain = 1f;
@@ -530,8 +537,8 @@ internal static class WaapiMusicImporter
                         wavInfo);
                     map[TrackSliceKey(segment.Name, track.Name)] = dest;
                     log(Math.Abs(gain - 1f) < 0.000001f
-                        ? $"WAV: {fileName}"
-                        : $"WAV: {fileName} (gain {gain:0.000})");
+                        ? UiStrings.LogWavSliceWritten(fileName)
+                        : UiStrings.LogWavSliceWrittenWithGain(fileName, gain));
                 }
             }
         }
@@ -929,9 +936,7 @@ internal static class WaapiMusicImporter
 
         if (mismatched)
         {
-            log(
-                $"Auto Volume: playlist {playlist.Name} のレイヤーゲインが不一致のため"
-                + $" 先頭パート {playlist.SourcePartNumbers[0]} の補償を使用");
+            log(UiStrings.LogAutoVolumeGainMismatch(playlist.Name, playlist.SourcePartNumbers[0]));
         }
 
         return CompensationDb(firstGain.Value);
@@ -963,7 +968,7 @@ internal static class WaapiMusicImporter
             if (!trackWavs.TryGetValue(key, out var wavPath))
             {
                 throw new InvalidOperationException(
-                    $"切り出し WAV が見つかりません: {segment.Name}/{track.Name}");
+                    UiStrings.ErrSlicedWavMissing(segment.Name, track.Name));
             }
 
             // 先頭セグメント内の全トラック（グループ化レイヤー含む）を Zero latency にする。

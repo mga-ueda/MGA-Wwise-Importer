@@ -1,3 +1,5 @@
+using MgaWwiseIMImporter.UI;
+
 namespace MgaWwiseIMImporter.Wwise;
 
 /// <summary>WAAPI 接続確認と、Wwise 上の現在選択（作成先）の結果。</summary>
@@ -26,7 +28,7 @@ internal sealed class WaapiProbeResult
     {
         if (!Ok)
         {
-            return Message.Length > 0 ? Message : "未接続";
+            return Message.Length > 0 ? Message : UiStrings.StatusDisconnected;
         }
 
         var parts = new List<string>();
@@ -40,7 +42,7 @@ internal sealed class WaapiProbeResult
             parts.Add(ProjectName);
         }
 
-        parts.Add(HasSelection ? SelectedPath : "（未選択）");
+        parts.Add(HasSelection ? SelectedPath : UiStrings.StatusNoneSelected);
         return string.Join("  ·  ", parts);
     }
 
@@ -49,40 +51,40 @@ internal sealed class WaapiProbeResult
     {
         var lines = new List<string>
         {
-            "=== WAAPI ===",
-            $"Status  : {(Ok ? "OK" : "NG")}",
+            UiStrings.LogWaapiHeader,
+            $"{UiStrings.KeyStatus} {(Ok ? UiStrings.LogStatusOk : UiStrings.LogStatusNg)}",
         };
 
         if (Ok)
         {
             if (WwiseVersion.Length > 0)
             {
-                lines.Add($"Wwise   : {WwiseVersion}");
+                lines.Add($"{UiStrings.KeyWwise} {WwiseVersion}");
             }
 
             if (Project.Length > 0)
             {
-                lines.Add($"Project : {Project}");
+                lines.Add($"{UiStrings.KeyProject} {Project}");
             }
 
             lines.Add(HasSelection
-                ? $"Target  : {SelectedPath}"
-                : "Target  : （未選択）");
+                ? $"{UiStrings.KeyTarget} {SelectedPath}"
+                : UiStrings.LogTargetNoneSelected);
             if (SelectedType.Length > 0)
             {
-                lines.Add($"Type    : {SelectedType}");
+                lines.Add($"{UiStrings.KeyType} {SelectedType}");
             }
         }
         else
         {
             if (Message.Length > 0)
             {
-                lines.Add($"Message : {Message}");
+                lines.Add($"{UiStrings.KeyMessage} {Message}");
             }
 
             if (Detail.Length > 0)
             {
-                lines.Add($"Detail  : {Detail}");
+                lines.Add($"{UiStrings.KeyDetail} {Detail}");
             }
         }
 

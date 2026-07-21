@@ -216,99 +216,99 @@ internal static class UiColors
     public static Color ColorPanelInputBack { get; set; } = Color.FromArgb(28, 28, 30);
     public static Color ColorPanelInputFore => PrimaryFore;
 
-    /// <summary>パネル表示用の一覧（キー＝INI、日本語ラベル）。</summary>
+    /// <summary>パネル表示用の一覧（キー＝INI、表示名は UiStrings.ColorLabel で日英切替）。</summary>
     public static IReadOnlyList<UiColorEntry> Entries { get; } =
     [
-        new("PrimaryFore", "共通・標準文字／アイコン", () => PrimaryFore, c => PrimaryFore = c),
-        new("MutedFore", "共通・弱い文字／枠", () => MutedFore, c => MutedFore = c),
-        new("AccentCyan", "共通・シアンアクセント", () => AccentCyan, c => AccentCyan = c),
-        new("SurfaceBack", "共通・基本背景", () => SurfaceBack, c => SurfaceBack = c),
-        new("ChromeBack", "共通・クローム背景", () => ChromeBack, c => ChromeBack = c),
-        new("ChromeBorder", "共通・クローム境界線／ホバー", () => ChromeBorder, c => ChromeBorder = c),
-        new("ChromeMid", "共通・中間グレー（押下／つまみ）", () => ChromeMid, c => ChromeMid = c),
-        new("ChromeDim", "共通・やや明るいグレー（無効／ホバー）", () => ChromeDim, c => ChromeDim = c),
+        new("PrimaryFore", () => PrimaryFore, c => PrimaryFore = c),
+        new("MutedFore", () => MutedFore, c => MutedFore = c),
+        new("AccentCyan", () => AccentCyan, c => AccentCyan = c),
+        new("SurfaceBack", () => SurfaceBack, c => SurfaceBack = c),
+        new("ChromeBack", () => ChromeBack, c => ChromeBack = c),
+        new("ChromeBorder", () => ChromeBorder, c => ChromeBorder = c),
+        new("ChromeMid", () => ChromeMid, c => ChromeMid = c),
+        new("ChromeDim", () => ChromeDim, c => ChromeDim = c),
 
-        new("WaveformBack", "波形エリア背景", () => WaveformBack, c => WaveformBack = c),
-        new("EmptyHint", "空状態ヒント", () => EmptyHint, c => EmptyHint = c),
-        new("TempoBg", "テンポ・背景", () => TempoBg, c => TempoBg = c),
-        new("SignatureBg", "拍子・背景", () => SignatureBg, c => SignatureBg = c),
-        new("MarkerRowBg", "マーカー行・背景", () => MarkerRowBg, c => MarkerRowBg = c),
-        new("MarkerTriangle", "マーカー三角", () => MarkerTriangle, c => MarkerTriangle = c),
-        new("BarLine", "小節線", () => BarLine, c => BarLine = c),
-        new("BeatLine", "拍線", () => BeatLine, c => BeatLine = c),
-        new("TempoChangeLine", "テンポ変更線", () => TempoChangeLine, c => TempoChangeLine = c),
-        new("WaveFill", "波形", () => WaveFill, c => WaveFill = c),
-        new("WaveCenter", "波形センター線", () => WaveCenter, c => WaveCenter = c),
-        new("WaveformSourceMeterTrack", "波形メーター・トラック", () => WaveformSourceMeterTrack, c => WaveformSourceMeterTrack = c),
-        new("WaveformSourceMeterMinimum", "波形メーター・最小", () => WaveformSourceMeterMinimum, c => WaveformSourceMeterMinimum = c),
-        new("WaveformSourceMeterMaximum", "波形メーター・最大", () => WaveformSourceMeterMaximum, c => WaveformSourceMeterMaximum = c),
-        new("RegionWaveFillGray", "波形リージョン塗り（通常）", () => RegionWaveFillGray, c => RegionWaveFillGray = c),
-        new("RegionWaveFillExcluded", "波形リージョン塗り（-R）", () => RegionWaveFillExcluded, c => RegionWaveFillExcluded = c),
-        new("RegionWaveFillLoop", "波形リージョン塗り（-L）", () => RegionWaveFillLoop, c => RegionWaveFillLoop = c),
-        new("RegionWaveFillAnacrusis", "波形リージョン塗り（-A）", () => RegionWaveFillAnacrusis, c => RegionWaveFillAnacrusis = c),
-        new("RegionWaveFillExit", "波形リージョン塗り（-E）", () => RegionWaveFillExit, c => RegionWaveFillExit = c),
-        new("RegionBoundaryMarker", "リージョン境界マーカー", () => RegionBoundaryMarker, c => RegionBoundaryMarker = c),
-        new("EntryCueMarker", "Entry Cue マーカー", () => EntryCueMarker, c => EntryCueMarker = c),
-        new("ExitCueMarker", "Exit Cue マーカー", () => ExitCueMarker, c => ExitCueMarker = c),
-        new("OutputPartShadow", "出力パート名・影", () => OutputPartShadow, c => OutputPartShadow = c),
-        new("MusicSegmentLaneBg", "Music Segment Name・背景", () => MusicSegmentLaneBg, c => MusicSegmentLaneBg = c),
-        new("MusicPlaylistLaneBg", "Music Playlist Name・背景", () => MusicPlaylistLaneBg, c => MusicPlaylistLaneBg = c),
-        new("SeekExit", "Exit 二重再生ヘッド", () => SeekExit, c => SeekExit = c),
-        new("SeekAnacrusis", "アウフタクト先行再生ヘッド", () => SeekAnacrusis, c => SeekAnacrusis = c),
-        new("SeekFadeOut", "遷移元フェードアウトヘッド", () => SeekFadeOut, c => SeekFadeOut = c),
-        new("MouseGuide", "マウスガイド", () => MouseGuide, c => MouseGuide = c),
-        new("WaveformScrollTrack", "波形スクロール・トラック", () => WaveformScrollTrack, c => WaveformScrollTrack = c),
+        new("WaveformBack", () => WaveformBack, c => WaveformBack = c),
+        new("EmptyHint", () => EmptyHint, c => EmptyHint = c),
+        new("TempoBg", () => TempoBg, c => TempoBg = c),
+        new("SignatureBg", () => SignatureBg, c => SignatureBg = c),
+        new("MarkerRowBg", () => MarkerRowBg, c => MarkerRowBg = c),
+        new("MarkerTriangle", () => MarkerTriangle, c => MarkerTriangle = c),
+        new("BarLine", () => BarLine, c => BarLine = c),
+        new("BeatLine", () => BeatLine, c => BeatLine = c),
+        new("TempoChangeLine", () => TempoChangeLine, c => TempoChangeLine = c),
+        new("WaveFill", () => WaveFill, c => WaveFill = c),
+        new("WaveCenter", () => WaveCenter, c => WaveCenter = c),
+        new("WaveformSourceMeterTrack", () => WaveformSourceMeterTrack, c => WaveformSourceMeterTrack = c),
+        new("WaveformSourceMeterMinimum", () => WaveformSourceMeterMinimum, c => WaveformSourceMeterMinimum = c),
+        new("WaveformSourceMeterMaximum", () => WaveformSourceMeterMaximum, c => WaveformSourceMeterMaximum = c),
+        new("RegionWaveFillGray", () => RegionWaveFillGray, c => RegionWaveFillGray = c),
+        new("RegionWaveFillExcluded", () => RegionWaveFillExcluded, c => RegionWaveFillExcluded = c),
+        new("RegionWaveFillLoop", () => RegionWaveFillLoop, c => RegionWaveFillLoop = c),
+        new("RegionWaveFillAnacrusis", () => RegionWaveFillAnacrusis, c => RegionWaveFillAnacrusis = c),
+        new("RegionWaveFillExit", () => RegionWaveFillExit, c => RegionWaveFillExit = c),
+        new("RegionBoundaryMarker", () => RegionBoundaryMarker, c => RegionBoundaryMarker = c),
+        new("EntryCueMarker", () => EntryCueMarker, c => EntryCueMarker = c),
+        new("ExitCueMarker", () => ExitCueMarker, c => ExitCueMarker = c),
+        new("OutputPartShadow", () => OutputPartShadow, c => OutputPartShadow = c),
+        new("MusicSegmentLaneBg", () => MusicSegmentLaneBg, c => MusicSegmentLaneBg = c),
+        new("MusicPlaylistLaneBg", () => MusicPlaylistLaneBg, c => MusicPlaylistLaneBg = c),
+        new("SeekExit", () => SeekExit, c => SeekExit = c),
+        new("SeekAnacrusis", () => SeekAnacrusis, c => SeekAnacrusis = c),
+        new("SeekFadeOut", () => SeekFadeOut, c => SeekFadeOut = c),
+        new("MouseGuide", () => MouseGuide, c => MouseGuide = c),
+        new("WaveformScrollTrack", () => WaveformScrollTrack, c => WaveformScrollTrack = c),
 
-        new("TransportBadgeBack", "Transport・ズーム記号背景", () => TransportBadgeBack, c => TransportBadgeBack = c),
+        new("TransportBadgeBack", () => TransportBadgeBack, c => TransportBadgeBack = c),
 
-        new("LogDefault", "ログ文字（既定）", () => LogDefault, c => LogDefault = c),
-        new("LogHeader", "ログ文字（ヘッダ）", () => LogHeader, c => LogHeader = c),
-        new("LogWarning", "ログ文字（警告）", () => LogWarning, c => LogWarning = c),
-        new("LogError", "ログ文字（エラー）", () => LogError, c => LogError = c),
-        new("LogButtonHoverBack", "ログボタン・ホバー背景", () => LogButtonHoverBack, c => LogButtonHoverBack = c),
+        new("LogDefault", () => LogDefault, c => LogDefault = c),
+        new("LogHeader", () => LogHeader, c => LogHeader = c),
+        new("LogWarning", () => LogWarning, c => LogWarning = c),
+        new("LogError", () => LogError, c => LogError = c),
+        new("LogButtonHoverBack", () => LogButtonHoverBack, c => LogButtonHoverBack = c),
 
-        new("OptionGlyphCheckMark", "オプション・チェック線", () => OptionGlyphCheckMark, c => OptionGlyphCheckMark = c),
+        new("OptionGlyphCheckMark", () => OptionGlyphCheckMark, c => OptionGlyphCheckMark = c),
 
-        new("SectionHeaderBack", "セクション見出し・背景", () => SectionHeaderBack, c => SectionHeaderBack = c),
-        new("PlaylistAutoBack", "Playlist・自動再生開始フェード塗り", () => PlaylistAutoBack, c => PlaylistAutoBack = c),
-        new("PlaylistManualBack", "Playlist・手動再生開始フェード塗り", () => PlaylistManualBack, c => PlaylistManualBack = c),
-        new("PlaylistManualBorder", "Playlist・手動再生中枠", () => PlaylistManualBorder, c => PlaylistManualBorder = c),
-        new("MarkerCommentErrorFore", "Marker Comment・エラー文字", () => MarkerCommentErrorFore, c => MarkerCommentErrorFore = c),
+        new("SectionHeaderBack", () => SectionHeaderBack, c => SectionHeaderBack = c),
+        new("PlaylistAutoBack", () => PlaylistAutoBack, c => PlaylistAutoBack = c),
+        new("PlaylistManualBack", () => PlaylistManualBack, c => PlaylistManualBack = c),
+        new("PlaylistManualBorder", () => PlaylistManualBorder, c => PlaylistManualBorder = c),
+        new("MarkerCommentErrorFore", () => MarkerCommentErrorFore, c => MarkerCommentErrorFore = c),
 
-        new("ActionLinkFore", "Action Bar・リンク文字", () => ActionLinkFore, c => ActionLinkFore = c),
-        new("ReloadButtonFill", "RELOAD・塗り", () => ReloadButtonFill, c => ReloadButtonFill = c),
-        new("ReloadButtonHoverFill", "RELOAD・ホバー塗り", () => ReloadButtonHoverFill, c => ReloadButtonHoverFill = c),
-        new("ReloadButtonBack", "RELOAD・枠", () => ReloadButtonBack, c => ReloadButtonBack = c),
-        new("ReloadButtonHoverBack", "RELOAD・ホバー枠", () => ReloadButtonHoverBack, c => ReloadButtonHoverBack = c),
-        new("ReloadButtonPressedBack", "RELOAD・押下枠", () => ReloadButtonPressedBack, c => ReloadButtonPressedBack = c),
-        new("ClearButtonFill", "CLEAR・塗り", () => ClearButtonFill, c => ClearButtonFill = c),
-        new("ClearButtonHoverFill", "CLEAR・ホバー塗り", () => ClearButtonHoverFill, c => ClearButtonHoverFill = c),
-        new("ClearButtonBack", "CLEAR・枠", () => ClearButtonBack, c => ClearButtonBack = c),
-        new("ClearButtonHoverBack", "CLEAR・ホバー枠", () => ClearButtonHoverBack, c => ClearButtonHoverBack = c),
-        new("ClearButtonPressedBack", "CLEAR・押下枠", () => ClearButtonPressedBack, c => ClearButtonPressedBack = c),
-        new("ExportButtonFill", "EXPORT・塗り", () => ExportButtonFill, c => ExportButtonFill = c),
-        new("ExportButtonHoverFill", "EXPORT・ホバー塗り", () => ExportButtonHoverFill, c => ExportButtonHoverFill = c),
-        new("ExportButtonBack", "EXPORT・枠", () => ExportButtonBack, c => ExportButtonBack = c),
-        new("ExportButtonHoverBack", "EXPORT・ホバー枠", () => ExportButtonHoverBack, c => ExportButtonHoverBack = c),
-        new("ExportButtonPressedBack", "EXPORT・押下枠", () => ExportButtonPressedBack, c => ExportButtonPressedBack = c),
+        new("ActionLinkFore", () => ActionLinkFore, c => ActionLinkFore = c),
+        new("ReloadButtonFill", () => ReloadButtonFill, c => ReloadButtonFill = c),
+        new("ReloadButtonHoverFill", () => ReloadButtonHoverFill, c => ReloadButtonHoverFill = c),
+        new("ReloadButtonBack", () => ReloadButtonBack, c => ReloadButtonBack = c),
+        new("ReloadButtonHoverBack", () => ReloadButtonHoverBack, c => ReloadButtonHoverBack = c),
+        new("ReloadButtonPressedBack", () => ReloadButtonPressedBack, c => ReloadButtonPressedBack = c),
+        new("ClearButtonFill", () => ClearButtonFill, c => ClearButtonFill = c),
+        new("ClearButtonHoverFill", () => ClearButtonHoverFill, c => ClearButtonHoverFill = c),
+        new("ClearButtonBack", () => ClearButtonBack, c => ClearButtonBack = c),
+        new("ClearButtonHoverBack", () => ClearButtonHoverBack, c => ClearButtonHoverBack = c),
+        new("ClearButtonPressedBack", () => ClearButtonPressedBack, c => ClearButtonPressedBack = c),
+        new("ExportButtonFill", () => ExportButtonFill, c => ExportButtonFill = c),
+        new("ExportButtonHoverFill", () => ExportButtonHoverFill, c => ExportButtonHoverFill = c),
+        new("ExportButtonBack", () => ExportButtonBack, c => ExportButtonBack = c),
+        new("ExportButtonHoverBack", () => ExportButtonHoverBack, c => ExportButtonHoverBack = c),
+        new("ExportButtonPressedBack", () => ExportButtonPressedBack, c => ExportButtonPressedBack = c),
 
-        new("SpectrumBar", "スペアナ・バー", () => SpectrumBar, c => SpectrumBar = c),
+        new("SpectrumBar", () => SpectrumBar, c => SpectrumBar = c),
 
-        new("StatusBarBack", "WAAPI Status・背景", () => StatusBarBack, c => StatusBarBack = c),
-        new("StatusBarConnectedBadgeBack", "WAAPI Status・接続バッジ背景", () => StatusBarConnectedBadgeBack, c => StatusBarConnectedBadgeBack = c),
-        new("StatusBarDisconnectedBadgeBack", "WAAPI Status・切断バッジ背景", () => StatusBarDisconnectedBadgeBack, c => StatusBarDisconnectedBadgeBack = c),
-        new("StatusBarErrorDetailFore", "WAAPI Status・エラー詳細文字", () => StatusBarErrorDetailFore, c => StatusBarErrorDetailFore = c),
-        new("KeepTargetLockFore", "Keep Target・施錠", () => KeepTargetLockFore, c => KeepTargetLockFore = c),
-        new("KeepTargetLockHoverFore", "Keep Target・施錠ホバー", () => KeepTargetLockHoverFore, c => KeepTargetLockHoverFore = c),
-        new("KeepTargetUnlockFore", "Keep Target・開錠", () => KeepTargetUnlockFore, c => KeepTargetUnlockFore = c),
-        new("KeepTargetUnlockHoverFore", "Keep Target・開錠ホバー", () => KeepTargetUnlockHoverFore, c => KeepTargetUnlockHoverFore = c),
+        new("StatusBarBack", () => StatusBarBack, c => StatusBarBack = c),
+        new("StatusBarConnectedBadgeBack", () => StatusBarConnectedBadgeBack, c => StatusBarConnectedBadgeBack = c),
+        new("StatusBarDisconnectedBadgeBack", () => StatusBarDisconnectedBadgeBack, c => StatusBarDisconnectedBadgeBack = c),
+        new("StatusBarErrorDetailFore", () => StatusBarErrorDetailFore, c => StatusBarErrorDetailFore = c),
+        new("KeepTargetLockFore", () => KeepTargetLockFore, c => KeepTargetLockFore = c),
+        new("KeepTargetLockHoverFore", () => KeepTargetLockHoverFore, c => KeepTargetLockHoverFore = c),
+        new("KeepTargetUnlockFore", () => KeepTargetUnlockFore, c => KeepTargetUnlockFore = c),
+        new("KeepTargetUnlockHoverFore", () => KeepTargetUnlockHoverFore, c => KeepTargetUnlockHoverFore = c),
 
-        new("DialogBodyBack", "Go To Measure・背景", () => DialogBodyBack, c => DialogBodyBack = c),
-        new("DialogInputBack", "Go To Measure・入力背景", () => DialogInputBack, c => DialogInputBack = c),
-        new("DialogShadow", "Go To Measure・影", () => DialogShadow, c => DialogShadow = c),
-        new("ColorPanelBack", "色設定パネル・背景", () => ColorPanelBack, c => ColorPanelBack = c),
-        new("ColorPanelListBack", "色設定パネル・一覧背景", () => ColorPanelListBack, c => ColorPanelListBack = c),
-        new("ColorPanelInputBack", "色設定パネル・入力背景", () => ColorPanelInputBack, c => ColorPanelInputBack = c),
+        new("DialogBodyBack", () => DialogBodyBack, c => DialogBodyBack = c),
+        new("DialogInputBack", () => DialogInputBack, c => DialogInputBack = c),
+        new("DialogShadow", () => DialogShadow, c => DialogShadow = c),
+        new("ColorPanelBack", () => ColorPanelBack, c => ColorPanelBack = c),
+        new("ColorPanelListBack", () => ColorPanelListBack, c => ColorPanelListBack = c),
+        new("ColorPanelInputBack", () => ColorPanelInputBack, c => ColorPanelInputBack = c),
     ];
 
     private static readonly Dictionary<string, Color> Defaults = Entries
@@ -450,16 +450,18 @@ internal sealed class UiColorEntry
     private readonly Func<Color> _getter;
     private readonly Action<Color> _setter;
 
-    public UiColorEntry(string key, string label, Func<Color> getter, Action<Color> setter)
+    public UiColorEntry(string key, Func<Color> getter, Action<Color> setter)
     {
         Key = key;
-        Label = label;
         _getter = getter;
         _setter = setter;
     }
 
     public string Key { get; }
-    public string Label { get; }
+
+    /// <summary>色調整パネル用の表示名(現在の表示言語で解決)。</summary>
+    public string Label => UiStrings.ColorLabel(Key);
+
     public Color Get() => _getter();
     public void Set(Color color) => _setter(color);
 }

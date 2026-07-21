@@ -1,4 +1,5 @@
 using System.Text;
+using MgaWwiseIMImporter.UI;
 
 namespace MgaWwiseIMImporter.Wave;
 
@@ -56,8 +57,8 @@ internal static class LoudnessMeter
             loudnessByPart[part.Number] = lkfs;
             log?.Invoke(
                 double.IsInfinity(lkfs)
-                    ? $"Loudness: part {part.Number} = (silence)"
-                    : $"Loudness: part {part.Number} = {lkfs:0.00} LKFS");
+                    ? UiStrings.LogLoudnessPartSilence(part.Number)
+                    : UiStrings.LogLoudnessPartValue(part.Number, lkfs));
         }
 
         var gains = new Dictionary<int, float>(parts.Count);
@@ -122,8 +123,8 @@ internal static class LoudnessMeter
             var sharedGain = GainToTarget(maxLkfs, targetLkfs);
             log?.Invoke(
                 double.IsInfinity(maxLkfs)
-                    ? $"Loudness: group {groupId} peak = (silence) → gain {sharedGain:0.000}"
-                    : $"Loudness: group {groupId} peak = {maxLkfs:0.00} LKFS → gain {sharedGain:0.000}");
+                    ? UiStrings.LogLoudnessGroupSilence(groupId, sharedGain)
+                    : UiStrings.LogLoudnessGroupValue(groupId, maxLkfs, sharedGain));
             foreach (var partNumber in members)
             {
                 gains[partNumber] = sharedGain;
@@ -267,7 +268,7 @@ internal static class LoudnessMeter
         var bytesPerSample = info.BitsPerSample / 8;
         if (bytesPerSample <= 0 || info.BlockAlign != channels * bytesPerSample)
         {
-            throw new InvalidDataException("WAV のサンプル形式が不正です。");
+            throw new InvalidDataException(UiStrings.ErrSampleFormatInvalid);
         }
 
         using var source = File.OpenRead(sourcePath);
@@ -284,7 +285,7 @@ internal static class LoudnessMeter
             var read = source.Read(frameBytes, 0, frameBytes.Length);
             if (read != frameBytes.Length)
             {
-                throw new EndOfStreamException("data チャンクの読み取りが途中で終わりました。");
+                throw new EndOfStreamException(UiStrings.ErrDataChunkTruncated);
             }
 
             for (var c = 0; c < channels; c++)
@@ -301,13 +302,13 @@ internal static class LoudnessMeter
         source.Position = 0;
         if (ReadFourCc(reader) != "RIFF")
         {
-            throw new InvalidDataException("RIFF ヘッダーではありません。");
+            throw new InvalidDataException(UiStrings.ErrNotRiffHeader);
         }
 
         _ = reader.ReadUInt32();
         if (ReadFourCc(reader) != "WAVE")
         {
-            throw new InvalidDataException("WAVE 形式ではありません。");
+            throw new InvalidDataException(UiStrings.ErrNotWaveFormat);
         }
 
         while (source.Position + 8 <= source.Length)
@@ -317,7 +318,7 @@ internal static class LoudnessMeter
             var chunkDataStart = source.Position;
             if (chunkDataStart + size > source.Length)
             {
-                throw new InvalidDataException($"チャンクサイズが不正です: {id}");
+                throw new InvalidDataException(UiStrings.ErrChunkSizeInvalid(id));
             }
 
             if (id == "data")
@@ -330,7 +331,7 @@ internal static class LoudnessMeter
             source.Position = chunkDataStart + paddedSize;
         }
 
-        throw new InvalidDataException("data チャンクが見つかりません。");
+        throw new InvalidDataException(UiStrings.ErrDataChunkMissing);
     }
 
     internal static PcmSampleFormat ResolvePcmFormat(WavFileInfo info)
@@ -348,11 +349,11 @@ internal static class LoudnessMeter
                 24 => PcmSampleFormat.Pcm24,
                 32 => PcmSampleFormat.Pcm32,
                 _ => throw new NotSupportedException(
-                    $"未対応のビット深度です: {info.BitsPerSample}"),
+                    UiStrings.ErrUnsupportedBitDepth(info.BitsPerSample)),
             };
         }
 
-        throw new NotSupportedException($"未対応の WAV 形式です: {info.AudioFormatName}");
+        throw new NotSupportedException(UiStrings.ErrUnsupportedWavFormat(info.AudioFormatName));
     }
 
     internal static float DecodeSample(byte[] frame, int offset, PcmSampleFormat format) =>

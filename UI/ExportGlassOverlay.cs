@@ -28,7 +28,7 @@ internal sealed class ExportGlassOverlay : Form
     private Bitmap? _frostedSnapshot;
     private Font? _messageFont;
     private Font? _logFont;
-    private string _baseText = "Exporting";
+    private string _baseText = UiStrings.OverlayExporting;
     private int _dotCount = 1;
     private bool _fadePending;
     private bool _fading;
@@ -169,7 +169,7 @@ internal sealed class ExportGlassOverlay : Form
     }
 
     private static string NormalizeMessage(string baseText) =>
-        string.IsNullOrWhiteSpace(baseText) ? "Loading" : baseText.Trim();
+        string.IsNullOrWhiteSpace(baseText) ? UiStrings.OverlayLoading : baseText.Trim();
 
     /// <summary>書き出し中の進行ログを左下へ追加する。</summary>
     public void AppendLog(string text)
