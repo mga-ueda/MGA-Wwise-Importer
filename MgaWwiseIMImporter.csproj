@@ -11,10 +11,10 @@
     <Product>MGA Wwise IMImporter</Product>
     <ApplicationTitle>MGA Wwise IMImporter</ApplicationTitle>
     <ApplicationIcon>Assets\Branding\MgaWwiseIMImporter.ico</ApplicationIcon>
-    <Version>1.0.0-beta</Version>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
-    <InformationalVersion>1.00 β</InformationalVersion>
+    <Version>1.0.1-beta</Version>
+    <AssemblyVersion>1.0.1.0</AssemblyVersion>
+    <FileVersion>1.0.1.0</FileVersion>
+    <InformationalVersion>1.01 β</InformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>

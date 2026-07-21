@@ -1249,8 +1249,8 @@ internal static class UiStrings
 
     // Form1: フォームタイトル・著作権表記
     public static string FormTitle => Get(
-        "MGA Wwise IMImporter - Version 1.00 β",
-        "MGA Wwise IMImporter - Version 1.00 β");
+        "MGA Wwise IMImporter - Version 1.01 β",
+        "MGA Wwise IMImporter - Version 1.01 β");
 
     public static string CopyrightText => Get(
         "© 2026 MIYABI GAME AUDIO INC.  GitHub"

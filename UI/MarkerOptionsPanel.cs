@@ -291,6 +291,10 @@ internal sealed class MarkerOptionsPanel : UserControl
         {
             AutoSize = false,
             Checked = false,
+            Font = baseFont,
+            Location = new Point(autoVolumeX + autoVolumePadL, row1ContentTop),
+            Size = new Size(autoVolumeColW - autoVolumePadL - autoVolumePadR, RowHeight),
+            Text = UiStrings.LabelAutoVolume,
         };
         _autoVolumeCheckBox.CheckedChanged += (_, _) => OnLoudnessUiChanged();
 
