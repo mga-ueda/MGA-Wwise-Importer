@@ -601,6 +601,13 @@ internal static class UiStrings
         Environment.NewLine,
         name);
 
+    public static string LogProjectSwitched(string fromName, string toName) => Format(
+        "=== Project ==={0}Message : プロジェクト「{1}」から「{2}」に切り替えました。{0}{0}",
+        "=== Project ==={0}Message : Switched project from “{1}” to “{2}”.{0}{0}",
+        Environment.NewLine,
+        fromName,
+        toName);
+
     public static string DialogDeleteProjectFailedTitle => Get(
         "プロジェクトの削除に失敗",
         "Failed to delete project");

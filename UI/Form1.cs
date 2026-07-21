@@ -2212,9 +2212,12 @@ public partial class Form1 : Form
             return;
         }
 
+        var previousName = _loadedProjectName;
         ClearLoadedWaveAndSession();
         ApplyProjectProfile(_projectStore.GetRequired(selected), selectInCombo: false);
         _projectStore.SetActive(selected);
+        editorTextBox.Clear();
+        AppendReport(UiStrings.LogProjectSwitched(previousName, selected));
         RestoreKeepLastSessionIfEnabled();
         ReleaseProjectComboFocus();
     }
