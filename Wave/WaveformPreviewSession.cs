@@ -72,6 +72,8 @@ internal sealed class WaveformPreviewSession
     /// 以降はユーザー編集を上書きしない。個数が 2 以外になったらクリア。
     /// </summary>
     private bool _twoMarkerLoopCommentsMaterialized;
+    /// <summary>複数波形モード時、ファイル区間ごとに 2 マーカー特例を実体化済みか（VirtualStart をキー）。</summary>
+    private readonly HashSet<long> _multiTwoMarkerMaterializedSpanStarts = [];
     private readonly List<WaveOnlyModeProcessor.MarkerCommentRename> _pendingWaveMarkerRenames = [];
     private readonly Dictionary<int, WaveformOutputPart> _markerShareAnchorByPartNumber = [];
     private readonly List<IReadOnlyList<WaveformOutputPart>> _markerShareGroups = [];
@@ -205,7 +207,7 @@ internal sealed class WaveformPreviewSession
         if (partGroupIds is { Count: > 0 })
         {
             var groups = new Dictionary<int, List<WaveformOutputPart>>();
-            foreach (var part in Preview.OutputParts)
+            foreach (var part in EffectiveOutputParts)
             {
                 if (_disabledPartNumbers.Contains(part.Number)
                     || !partGroupIds.TryGetValue(part.Number, out var groupId))
@@ -621,13 +623,38 @@ internal sealed class WaveformPreviewSession
         _waveOnlyMarkers.Clear();
         _waveOnlyMarkers.AddRange(next);
         // サイドカー等からの復元コメントを、2 つ特例の再実体化で上書きしない。
-        _twoMarkerLoopCommentsMaterialized = next
-            .Where(marker =>
-                marker.SampleOffset >= 0
-                && marker.SampleOffset < Preview.WavInfo.FrameCount)
-            .Select(marker => marker.SampleOffset)
-            .Distinct()
-            .Count() == 2;
+        if (Preview.IsMultiWaveOnly)
+        {
+            _multiTwoMarkerMaterializedSpanStarts.Clear();
+            foreach (var span in Preview.SourceSpans)
+            {
+                var count = next
+                    .Where(marker =>
+                        marker.SampleOffset >= span.VirtualStartSample
+                        && marker.SampleOffset < span.VirtualEndSample)
+                    .Select(marker => marker.SampleOffset)
+                    .Distinct()
+                    .Count();
+                if (count == 2)
+                {
+                    _multiTwoMarkerMaterializedSpanStarts.Add(span.VirtualStartSample);
+                }
+            }
+
+            _twoMarkerLoopCommentsMaterialized = false;
+        }
+        else
+        {
+            _twoMarkerLoopCommentsMaterialized = next
+                .Where(marker =>
+                    marker.SampleOffset >= 0
+                    && marker.SampleOffset < Preview.WavInfo.FrameCount)
+                .Select(marker => marker.SampleOffset)
+                .Distinct()
+                .Count() == 2;
+            _multiTwoMarkerMaterializedSpanStarts.Clear();
+        }
+
         RebuildMarkerSnapshots();
         RebuildWaveOnlyRegions();
         return true;
@@ -644,12 +671,22 @@ internal sealed class WaveformPreviewSession
 
         MaterializeImplicitLoopComments();
 
-        _waveOnlyRegions = WaveOnlyModeProcessor.BuildRegionsFromMarkers(
-            _waveOnlyMarkers,
-            Preview.WavInfo.FrameCount);
-        _waveOnlyOutputParts = _waveOnlyRegions.Count == 0
-            ? []
-            : WaveformRegionBuilder.BuildOutputParts(_waveOnlyRegions, Preview.SourcePath);
+        if (Preview.IsMultiWaveOnly)
+        {
+            var built = MultiWaveOnlyRegionBuilder.Build(_waveOnlyMarkers, Preview.SourceSpans);
+            _waveOnlyRegions = built.Regions;
+            _waveOnlyOutputParts = built.Parts;
+        }
+        else
+        {
+            _waveOnlyRegions = WaveOnlyModeProcessor.BuildRegionsFromMarkers(
+                _waveOnlyMarkers,
+                Preview.WavInfo.FrameCount);
+            _waveOnlyOutputParts = _waveOnlyRegions.Count == 0
+                ? []
+                : WaveformRegionBuilder.BuildOutputParts(_waveOnlyRegions, Preview.SourcePath);
+        }
+
         _regionEdgeFades = RegionEdgeFade.RemapToRuns(_regionEdgeFades, _waveOnlyRegions);
     }
 
@@ -664,6 +701,12 @@ internal sealed class WaveformPreviewSession
         }
 
         _pendingWaveMarkerRenames.Clear();
+
+        if (Preview.IsMultiWaveOnly)
+        {
+            MaterializeImplicitLoopCommentsMulti();
+            return;
+        }
 
         var frameCount = Preview.WavInfo.FrameCount;
         var orderedCount = _waveOnlyMarkers
@@ -696,6 +739,97 @@ internal sealed class WaveformPreviewSession
     }
 
     /// <summary>
+    /// 複数波形: プレイリスト（ファイル区間）ごとに暗黙ループ実体化。
+    /// 連結タイムライン全体のマーカー数では判定しない（単体波形の「全体で 2 点」とは異なる）。
+    /// </summary>
+    private void MaterializeImplicitLoopCommentsMulti()
+    {
+        if (_waveOnlyMarkers is null)
+        {
+            return;
+        }
+
+        // 各 SourceSpan = 1 プレイリスト。区間内のマーカーがちょうど 2 つなら -L/-E 実体化。
+        foreach (var span in Preview.SourceSpans)
+        {
+            var localMarkers = new List<WaveformMarkerMark>();
+            var sourceIndexes = new List<int>();
+            for (var i = 0; i < _waveOnlyMarkers.Count; i++)
+            {
+                var marker = _waveOnlyMarkers[i];
+                if (marker.SampleOffset < span.VirtualStartSample
+                    || marker.SampleOffset >= span.VirtualEndSample)
+                {
+                    continue;
+                }
+
+                localMarkers.Add(marker with
+                {
+                    SampleOffset = marker.SampleOffset - span.VirtualStartSample,
+                });
+                sourceIndexes.Add(i);
+            }
+
+            var orderedCount = localMarkers
+                .Select(marker => marker.SampleOffset)
+                .Distinct()
+                .Count();
+            var spanStart = span.VirtualStartSample;
+
+            if (orderedCount == 2)
+            {
+                if (!_multiTwoMarkerMaterializedSpanStarts.Contains(spanStart))
+                {
+                    var renames = new List<WaveOnlyModeProcessor.MarkerCommentRename>();
+                    WaveOnlyModeProcessor.TryMaterializeImplicitLoopComments(
+                        localMarkers,
+                        span.FrameCount,
+                        allowTwoMarkerMaterialize: true,
+                        renames);
+                    WriteBackLocalMarkerComments(sourceIndexes, localMarkers);
+                    _pendingWaveMarkerRenames.AddRange(renames);
+                    _multiTwoMarkerMaterializedSpanStarts.Add(spanStart);
+                }
+
+                continue;
+            }
+
+            _multiTwoMarkerMaterializedSpanStarts.Remove(spanStart);
+            var keywordRenames = new List<WaveOnlyModeProcessor.MarkerCommentRename>();
+            WaveOnlyModeProcessor.TryMaterializeImplicitLoopComments(
+                localMarkers,
+                span.FrameCount,
+                allowTwoMarkerMaterialize: false,
+                keywordRenames);
+            WriteBackLocalMarkerComments(sourceIndexes, localMarkers);
+            _pendingWaveMarkerRenames.AddRange(keywordRenames);
+        }
+    }
+
+    private void WriteBackLocalMarkerComments(
+        IReadOnlyList<int> sourceIndexes,
+        IReadOnlyList<WaveformMarkerMark> localMarkers)
+    {
+        if (_waveOnlyMarkers is null)
+        {
+            return;
+        }
+
+        for (var i = 0; i < sourceIndexes.Count; i++)
+        {
+            var index = sourceIndexes[i];
+            var existing = _waveOnlyMarkers[index];
+            var local = localMarkers[i];
+            if (string.Equals(existing.Comment, local.Comment, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            _waveOnlyMarkers[index] = existing with { Comment = local.Comment };
+        }
+    }
+
+    /// <summary>
     /// 直近の暗黙リネーム（埋め込みマーカーの Loop→-L 等）を取り出し、キューを空にする。
     /// </summary>
     public IReadOnlyList<WaveOnlyModeProcessor.MarkerCommentRename> TakePendingWaveMarkerRenames()
@@ -716,7 +850,7 @@ internal sealed class WaveformPreviewSession
     private bool TryResolveSharedMarkerSample(long requestedSampleOffset, out long sampleOffset)
     {
         sampleOffset = requestedSampleOffset;
-        var part = Preview.OutputParts
+        var part = EffectiveOutputParts
             .Where(candidate =>
                 requestedSampleOffset >= candidate.StartSampleOffset
                 && requestedSampleOffset < candidate.EndSampleOffset)
@@ -746,7 +880,7 @@ internal sealed class WaveformPreviewSession
             return false;
         }
 
-        var hostPart = Preview.OutputParts
+        var hostPart = EffectiveOutputParts
             .Where(part =>
                 sampleOffset >= part.StartSampleOffset
                 && sampleOffset < part.EndSampleOffset)
@@ -762,7 +896,7 @@ internal sealed class WaveformPreviewSession
             return false;
         }
 
-        return !Preview.Regions.Any(region =>
+        return !EffectiveRegions.Any(region =>
             sampleOffset >= region.StartSampleOffset
             && sampleOffset < region.EndSampleOffset
             && (string.Equals(region.NameSuffix, "-A", StringComparison.OrdinalIgnoreCase)
@@ -829,7 +963,7 @@ internal sealed class WaveformPreviewSession
             .Select(part => part.Number)
             .ToHashSet();
         var sharedMarkers = baseMarkers
-            .Where(marker => !Preview.OutputParts.Any(part =>
+            .Where(marker => !EffectiveOutputParts.Any(part =>
                 groupedPartNumbers.Contains(part.Number)
                 && marker.SampleOffset >= part.StartSampleOffset
                 && marker.SampleOffset < part.EndSampleOffset))
@@ -881,7 +1015,7 @@ internal sealed class WaveformPreviewSession
             return false;
         }
 
-        return Preview.OutputParts.Any(part =>
+        return EffectiveOutputParts.Any(part =>
             _disabledPartNumbers.Contains(part.Number)
             && sampleOffset >= part.StartSampleOffset
             && sampleOffset < part.EndSampleOffset);
@@ -892,7 +1026,7 @@ internal sealed class WaveformPreviewSession
     /// </summary>
     private bool IsAuthoritativeUserMarkerSample(long sampleOffset)
     {
-        var part = Preview.OutputParts
+        var part = EffectiveOutputParts
             .Where(candidate =>
                 sampleOffset >= candidate.StartSampleOffset
                 && sampleOffset < candidate.EndSampleOffset)
@@ -916,9 +1050,9 @@ internal sealed class WaveformPreviewSession
     /// </summary>
     private int FindNumberingPartIndex(long sampleOffset)
     {
-        for (var i = 0; i < Preview.OutputParts.Count; i++)
+        for (var i = 0; i < EffectiveOutputParts.Count; i++)
         {
-            var part = Preview.OutputParts[i];
+            var part = EffectiveOutputParts[i];
             if (sampleOffset < part.StartSampleOffset || sampleOffset >= part.EndSampleOffset)
             {
                 continue;
@@ -926,9 +1060,9 @@ internal sealed class WaveformPreviewSession
 
             if (_markerShareAnchorByPartNumber.TryGetValue(part.Number, out var anchor))
             {
-                for (var j = 0; j < Preview.OutputParts.Count; j++)
+                for (var j = 0; j < EffectiveOutputParts.Count; j++)
                 {
-                    if (Preview.OutputParts[j].Number == anchor.Number)
+                    if (EffectiveOutputParts[j].Number == anchor.Number)
                     {
                         return j;
                     }

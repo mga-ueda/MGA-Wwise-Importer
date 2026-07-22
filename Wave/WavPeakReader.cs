@@ -499,6 +499,127 @@ internal static class WavPeakReader
         return false;
     }
 
+    /// <summary>複数ファイルの概要ピークを仮想タイムライン順に連結する。</summary>
+    public static WavPeakData Concatenate(
+        IReadOnlyList<WavPeakData> parts,
+        long totalFrameCount,
+        uint sampleRate)
+    {
+        if (parts.Count == 0 || totalFrameCount <= 0)
+        {
+            return WavPeakData.Empty;
+        }
+
+        var totalBuckets = 0;
+        foreach (var part in parts)
+        {
+            totalBuckets += part.Mins.Length;
+        }
+
+        if (totalBuckets == 0)
+        {
+            return WavPeakData.Empty;
+        }
+
+        var mins = new float[totalBuckets];
+        var maxs = new float[totalBuckets];
+        var offset = 0;
+        foreach (var part in parts)
+        {
+            Array.Copy(part.Mins, 0, mins, offset, part.Mins.Length);
+            Array.Copy(part.Maxs, 0, maxs, offset, part.Maxs.Length);
+            offset += part.Mins.Length;
+        }
+
+        return new WavPeakData(mins, maxs, totalFrameCount, sampleRate);
+    }
+
+    /// <summary>
+    /// 仮想タイムライン上の [startFrame, endFrame) を、ソース区間をまたいで peakCount バケットに読む。
+    /// </summary>
+    public static WavPeakData ReadVirtualRange(
+        IReadOnlyList<WaveformSourceSpan> spans,
+        long startFrame,
+        long endFrame,
+        int peakCount)
+    {
+        if (spans.Count == 0 || peakCount <= 0 || endFrame <= startFrame)
+        {
+            return WavPeakData.Empty;
+        }
+
+        var totalFrames = spans[^1].VirtualEndSample;
+        startFrame = Math.Clamp(startFrame, 0, totalFrames);
+        endFrame = Math.Clamp(endFrame, startFrame, totalFrames);
+        if (endFrame <= startFrame)
+        {
+            return WavPeakData.Empty;
+        }
+
+        var rangeFrames = endFrame - startFrame;
+        var mins = new float[peakCount];
+        var maxs = new float[peakCount];
+        for (var i = 0; i < peakCount; i++)
+        {
+            mins[i] = float.PositiveInfinity;
+            maxs[i] = float.NegativeInfinity;
+        }
+
+        var sampleRate = spans[0].WavInfo.SampleRate;
+        foreach (var span in spans)
+        {
+            var overlapStart = Math.Max(startFrame, span.VirtualStartSample);
+            var overlapEnd = Math.Min(endFrame, span.VirtualEndSample);
+            if (overlapEnd <= overlapStart)
+            {
+                continue;
+            }
+
+            var localStart = overlapStart - span.VirtualStartSample;
+            var localEnd = overlapEnd - span.VirtualStartSample;
+            var bucketStart = (int)((overlapStart - startFrame) * peakCount / rangeFrames);
+            var bucketEnd = (int)Math.Ceiling((overlapEnd - startFrame) * (double)peakCount / rangeFrames);
+            bucketStart = Math.Clamp(bucketStart, 0, peakCount);
+            bucketEnd = Math.Clamp(bucketEnd, bucketStart + 1, peakCount);
+            var bucketCount = bucketEnd - bucketStart;
+            if (bucketCount <= 0)
+            {
+                continue;
+            }
+
+            var slice = ReadRange(span.WavInfo, localStart, localEnd, bucketCount);
+            for (var i = 0; i < slice.Mins.Length; i++)
+            {
+                var dest = bucketStart + i;
+                if (dest >= peakCount)
+                {
+                    break;
+                }
+
+                if (slice.Mins[i] < mins[dest])
+                {
+                    mins[dest] = slice.Mins[i];
+                }
+
+                if (slice.Maxs[i] > maxs[dest])
+                {
+                    maxs[dest] = slice.Maxs[i];
+                }
+            }
+        }
+
+        for (var i = 0; i < peakCount; i++)
+        {
+            if (float.IsInfinity(mins[i]) || float.IsInfinity(maxs[i]))
+            {
+                mins[i] = 0f;
+                maxs[i] = 0f;
+            }
+        }
+
+        return new WavPeakData(mins, maxs, totalFrames, sampleRate);
+    }
+
     private static string ReadFourCc(BinaryReader reader)
     {
         return Encoding.ASCII.GetString(reader.ReadBytes(4));

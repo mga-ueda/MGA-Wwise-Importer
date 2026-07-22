@@ -27,7 +27,8 @@ internal static class WwiseMusicPlanBuilder
         IReadOnlyDictionary<int, string>? playlistNameOverrides = null,
         string? outputDirectory = null,
         IReadOnlyDictionary<int, PlaylistExitSourceMode>? partExitSourceModes = null,
-        PlaylistExitSourceMode defaultExitSourceAt = PlaylistExitSourceMode.Immediate)
+        PlaylistExitSourceMode defaultExitSourceAt = PlaylistExitSourceMode.Immediate,
+        string? containerNameOverride = null)
     {
         if (sampleRate == 0)
         {
@@ -44,6 +45,10 @@ internal static class WwiseMusicPlanBuilder
         {
             baseName = "wave";
         }
+
+        var containerName = string.IsNullOrWhiteSpace(containerNameOverride)
+            ? baseName
+            : containerNameOverride.Trim();
 
         var directory = string.IsNullOrWhiteSpace(outputDirectory)
             ? Path.GetDirectoryName(sourcePath) ?? string.Empty
@@ -92,7 +97,7 @@ internal static class WwiseMusicPlanBuilder
 
         return new WwiseMusicPlan
         {
-            ContainerName = baseName,
+            ContainerName = containerName,
             IsMultiPart = playlists.Count > 1,
             Playlists = playlists,
         };

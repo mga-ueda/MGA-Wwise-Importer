@@ -1,5 +1,6 @@
 using System.Text;
 using MgaWwiseIMImporter.UI;
+using MgaWwiseIMImporter.Wave;
 
 namespace MgaWwiseIMImporter.Processing;
 
@@ -33,6 +34,7 @@ internal static class DroppedFilesProcessor
         sb.AppendLine();
 
         var pairKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pairs = new List<(string WavPath, string XmlPath)>();
 
         foreach (var path in dropped.OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
         {
@@ -57,10 +59,53 @@ internal static class DroppedFilesProcessor
 
             var wavPath = Path.Combine(directory, baseName + ".wav");
             var xmlPath = Path.Combine(directory, baseName + ".xml");
+            pairs.Add((wavPath, xmlPath));
+        }
+
+        // XML なし・WAV 2 本以上 → 複数波形モード（既存単体／XML 経路には混ぜない）
+        if (TryGetMultiWaveOnlyPaths(pairs, out var multiWavPaths))
+        {
+            var multiPreview = MultiWaveOnlyProcessor.TryBuild(multiWavPaths, sb);
+            if (multiPreview is not null)
+            {
+                preview?.Invoke(multiPreview);
+            }
+
+            return sb.ToString();
+        }
+
+        foreach (var (wavPath, xmlPath) in pairs)
+        {
             ProcessPair(sb, wavPath, xmlPath, preview);
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// すべてのペアが「WAV あり・同名 XML なし」で、かつ WAV が 2 本以上なら複数波形モード候補。
+    /// </summary>
+    private static bool TryGetMultiWaveOnlyPaths(
+        IReadOnlyList<(string WavPath, string XmlPath)> pairs,
+        out List<string> wavPaths)
+    {
+        wavPaths = [];
+        if (pairs.Count < 2)
+        {
+            return false;
+        }
+
+        foreach (var (wavPath, xmlPath) in pairs)
+        {
+            if (!File.Exists(wavPath) || File.Exists(xmlPath))
+            {
+                return false;
+            }
+
+            wavPaths.Add(wavPath);
+        }
+
+        return wavPaths.Count >= 2;
     }
 
     private static void ProcessPair(

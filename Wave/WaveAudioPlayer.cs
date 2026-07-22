@@ -466,14 +466,36 @@ internal sealed class WaveAudioPlayer : IDisposable
         // 元 WAV を掴み続けないよう、再生用に一時コピーを開く。
         // （外部アプリが同じファイルへ上書き保存できるようにする）
         _playbackCopyPath = CreatePlaybackCopy(path);
+        OpenReadersFromPlaybackCopy(path);
+    }
+
+    /// <summary>
+    /// 複数波形の仮想タイムライン再生用。ソースを一時連結 WAV にして開く（Export 元には使わない）。
+    /// </summary>
+    public void LoadVirtualConcat(IReadOnlyList<WaveformSourceSpan> spans)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (spans.Count == 0)
+        {
+            throw new ArgumentException(UiStrings.ErrMultiWaveOnlyNoSpans);
+        }
+
+        StopAndRelease();
+        _path = spans[0].Path;
+        _playbackCopyPath = WavConcatWriter.WriteTempConcat(spans);
+        OpenReadersFromPlaybackCopy(_playbackCopyPath);
+    }
+
+    private void OpenReadersFromPlaybackCopy(string formatSourcePath)
+    {
         // AudioFileReader は多チャンネル Extensible の float 変換で
         // ACM（acmFormatSuggest）に頼り NoDriver で失敗するため、変換は自前で行う
-        var info = WavFileInfo.Read(path);
-        _reader = new WaveFileReader(_playbackCopyPath);
-        _exitReader = new WaveFileReader(_playbackCopyPath);
-        _playlistFadeReader = new WaveFileReader(_playbackCopyPath);
-        _playlistExitFadeReader = new WaveFileReader(_playbackCopyPath);
-        _playlistPreRollReader = new WaveFileReader(_playbackCopyPath);
+        var info = WavFileInfo.Read(formatSourcePath);
+        _reader = new WaveFileReader(_playbackCopyPath!);
+        _exitReader = new WaveFileReader(_playbackCopyPath!);
+        _playlistFadeReader = new WaveFileReader(_playbackCopyPath!);
+        _playlistExitFadeReader = new WaveFileReader(_playbackCopyPath!);
+        _playlistPreRollReader = new WaveFileReader(_playbackCopyPath!);
         _provider = new StereoFloatWaveProvider(
             _reader,
             _exitReader,

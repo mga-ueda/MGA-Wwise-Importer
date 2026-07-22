@@ -86,11 +86,13 @@ public partial class Form1 : Form, IMessageFilter
     private bool _suppressProjectUiEvents;
     private string _projectOutputDirectory = string.Empty;
     private string _lastWavePath = string.Empty;
+    /// <summary>最後に読み込んだ波形パス一覧（複数波形モードは全本）。INI の LastWavePaths と同期。</summary>
+    private IReadOnlyList<string> _lastWavePaths = [];
     /// <summary>
-    /// いまの作業中に実際に読み込んだ直前の波形パス。
+    /// いまの作業中に実際に読み込んだ直前の波形パス一覧。
     /// フェード等の復元可否はプロジェクトの LastWavePath ではなくこれとの一致で決める。
     /// </summary>
-    private string _sessionLoadedWavePath = string.Empty;
+    private IReadOnlyList<string> _sessionLoadedWavePaths = [];
     private WaapiProbeResult? _waapiLastResult;
     private string _waapiLoggedSelectionPath = string.Empty;
     private string _lastLoggedPreflightKey = string.Empty;
@@ -429,6 +431,18 @@ public partial class Form1 : Form, IMessageFilter
         editorTextBox.HandleCreated += (_, _) => ApplyDarkEditorChrome();
         playlistScrollPanel.HandleCreated += (_, _) => ApplyDarkScrollChrome(playlistScrollPanel);
         transportBar.HandleCreated += (_, _) => ApplyDarkScrollChrome(transportBar);
+        Resize += (_, _) => SyncBusyGlassOverlayBounds();
+    }
+
+    /// <summary>すりガラス表示中にリサイズへカバー範囲を合わせる（移動は子コントロールのため自動）。</summary>
+    private void SyncBusyGlassOverlayBounds()
+    {
+        if (_exportOverlay is not { IsShowingBusy: true })
+        {
+            return;
+        }
+
+        _exportOverlay.SyncBounds(GetBusyGlassCoverBounds());
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -505,7 +519,6 @@ public partial class Form1 : Form, IMessageFilter
             }
 
             Opacity = 1d;
-            _exportOverlay?.ReassertAboveOwner();
         }
         finally
         {
@@ -517,9 +530,8 @@ public partial class Form1 : Form, IMessageFilter
 
         Refresh();
         Update();
-        _exportOverlay?.ReassertAboveOwner();
         Activate();
-        _exportOverlay?.ReassertAboveOwner();
+        _exportOverlay?.BringToFront();
 
         // 起動時にプロジェクト名コンボが先頭フォーカス／全選択になるのを防ぐ。
         projectNameComboBox.DismissTransientSelection();
@@ -1345,13 +1357,6 @@ public partial class Form1 : Form, IMessageFilter
 
         if (keyData == (Keys.Control | Keys.Left))
         {
-            if (HasWaveOnlyMarkerNavigation())
-            {
-                PauseForBackwardSeekHold();
-                waveformView.SeekToPreviousMarker();
-                return true;
-            }
-
             if (!HasTransportPlaylistNavigation())
             {
                 return true;
@@ -1364,18 +1369,35 @@ public partial class Form1 : Form, IMessageFilter
 
         if (keyData == (Keys.Control | Keys.Right))
         {
-            if (HasWaveOnlyMarkerNavigation())
-            {
-                waveformView.SeekToNextMarker();
-                return true;
-            }
-
             if (!HasTransportPlaylistNavigation())
             {
                 return true;
             }
 
             waveformView.SeekToNextPlaylist();
+            return true;
+        }
+
+        if (keyData == (Keys.Control | Keys.Shift | Keys.Left))
+        {
+            if (!HasWaveOnlyMarkerNavigation())
+            {
+                return true;
+            }
+
+            PauseForBackwardSeekHold();
+            waveformView.SeekToPreviousMarker();
+            return true;
+        }
+
+        if (keyData == (Keys.Control | Keys.Shift | Keys.Right))
+        {
+            if (!HasWaveOnlyMarkerNavigation())
+            {
+                return true;
+            }
+
+            waveformView.SeekToNextMarker();
             return true;
         }
 
@@ -2221,6 +2243,7 @@ public partial class Form1 : Form, IMessageFilter
             keepLastSessionCheckBox.Checked = profile.KeepLastSession;
             keepLastSessionCheckBox.CheckedChanged += KeepLastSessionCheckBox_CheckedChanged;
             _lastWavePath = profile.LastWavePath?.Trim() ?? string.Empty;
+            _lastWavePaths = ResolveStoredLastWavePaths(profile.LastWavePath, profile.LastWavePaths);
 
             _keepTarget = profile.KeepTarget;
             _keptTargetPath = profile.KeptTargetPath?.Trim() ?? string.Empty;
@@ -2619,6 +2642,9 @@ public partial class Form1 : Form, IMessageFilter
         profile.MoreOptionsExpanded = markerOptionsPanel.MoreOptionsExpanded;
         profile.KeepLastSession = keepLastSessionCheckBox.Checked;
         profile.LastWavePath = _lastWavePath?.Trim() ?? string.Empty;
+        profile.LastWavePaths = _lastWavePaths.Count > 1
+            ? LastWaveSessionState.JoinWavePathsForIni(_lastWavePaths)
+            : string.Empty;
         profile.KeepTarget = _keepTarget;
         profile.KeptTargetPath = _keptTargetPath?.Trim() ?? string.Empty;
         profile.KeptTargetProjectFilePath = _keptTargetProjectFilePath?.Trim() ?? string.Empty;
@@ -2766,7 +2792,7 @@ public partial class Form1 : Form, IMessageFilter
         _sourceBaseNameOverride = null;
         _lastPlaybackStartProgress = null;
         _lastInputFiles = [];
-        _sessionLoadedWavePath = string.Empty;
+        _sessionLoadedWavePaths = [];
         reloadButton.Enabled = false;
         markerOptionsPanel.SetMarkerPlacementOptionsEnabled(true);
         UpdateWaveOnlyExitSourceOptionsEnabled();
@@ -5503,7 +5529,7 @@ public partial class Form1 : Form, IMessageFilter
     /// <summary>
     /// 書き出し／読み込み中はコントロールを無効化せず、WAAPI ステータスバーを除くフォーム全体を
     /// すりガラスで覆ってマウス操作を遮断する（ショートカットは <see cref="_uiInteractionLocks"/> 側で抑止）。
-    /// 解除は完了ログを短く見せたあと、子ウィンドウの Opacity フェードで行う。
+    /// 解除は完了ログを短く見せたあと、描画不透明度のフェードで行う。
     /// </summary>
     private void UpdateBusyGlassOverlay()
     {
@@ -5523,6 +5549,7 @@ public partial class Form1 : Form, IMessageFilter
             if (_exportOverlay.IsShowingBusy)
             {
                 _exportOverlay.SetMessage(message);
+                _exportOverlay.BringToFront();
             }
             else
             {
@@ -5609,11 +5636,27 @@ public partial class Form1 : Form, IMessageFilter
             .ThenBy(part => part.Number)
             .ToArray();
         var projected = new WaveformOutputPart[enabled.Length];
+        var multiWave = _loadedPreview?.IsMultiWaveOnly == true;
         for (var i = 0; i < enabled.Length; i++)
         {
             var part = enabled[i];
+            if (multiWave)
+            {
+                // 複数波形モード: ドロップ時のファイル名を改変しない。
+                projected[i] = part;
+                continue;
+            }
+
             var fileNumber = compactFileNumbersCheckBox.Checked ? i + 1 : part.Number;
-            projected[i] = part with { FileName = $"{baseName}_{fileNumber}.wav" };
+            var partBaseName = !string.IsNullOrEmpty(part.SourcePath)
+                ? Path.GetFileNameWithoutExtension(part.SourcePath)
+                : baseName;
+            if (string.IsNullOrEmpty(partBaseName))
+            {
+                partBaseName = baseName;
+            }
+
+            projected[i] = part with { FileName = $"{partBaseName}_{fileNumber}.wav" };
         }
 
         return projected;
@@ -5635,6 +5678,13 @@ public partial class Form1 : Form, IMessageFilter
     {
         if (_loadedPreview is not { } preview)
         {
+            return;
+        }
+
+        // 複数波形モードでは親名（Multi Wave）を編集不可。
+        if (preview.IsMultiWaveOnly)
+        {
+            waveformView.SetSourceDisplayName(WwiseObjectNames.MultiWaveContainerName);
             return;
         }
 
@@ -5677,6 +5727,18 @@ public partial class Form1 : Form, IMessageFilter
     private Dictionary<int, string> BuildPlaylistNameOverrides(
         IReadOnlyList<WaveformOutputPart> enabledParts)
     {
+        // 複数波形: Playlist 名もドロップファイル名（拡張子なし）をそのまま使う。
+        if (_loadedPreview?.IsMultiWaveOnly == true)
+        {
+            return enabledParts.ToDictionary(
+                part => part.Number,
+                part =>
+                {
+                    var name = Path.GetFileNameWithoutExtension(part.FileName);
+                    return string.IsNullOrWhiteSpace(name) ? part.FileName : name;
+                });
+        }
+
         // 除外が無い通常時、または番号を詰めるときは Playlist 単位の連番に任せる。
         // （パート単位の FileName を流用すると、グループの2つ目が _4 など欠番に見える）
         if (_disabledPlaylistPartNumbers.Count == 0
@@ -6049,30 +6111,88 @@ public partial class Form1 : Form, IMessageFilter
     /// <returns>読み込み処理を開始したら true（すりガラス解除は呼び出し側ではなく読み込み側が担当）。</returns>
     private bool RestoreKeepLastSessionIfEnabled()
     {
-        if (!keepLastSessionCheckBox.Checked || string.IsNullOrWhiteSpace(_lastWavePath))
+        if (!keepLastSessionCheckBox.Checked)
         {
             return false;
         }
 
-        string wavPath;
+        var candidatePaths = ResolveLastWavePathsForRestore();
+        if (candidatePaths.Count == 0)
+        {
+            return false;
+        }
+
+        var existingPaths = new List<string>(candidatePaths.Count);
+        foreach (var path in candidatePaths)
+        {
+            string wavPath;
+            try
+            {
+                wavPath = Path.GetFullPath(path);
+            }
+            catch (Exception ex)
+            {
+                AppendReport(UiStrings.LogLastWaveBadPath(ex.Message) + Environment.NewLine);
+                return false;
+            }
+
+            if (!File.Exists(wavPath))
+            {
+                AppendReport(UiStrings.LogLastWaveMissing(wavPath) + Environment.NewLine);
+                return false;
+            }
+
+            existingPaths.Add(wavPath);
+        }
+
+        ProcessDroppedFiles(existingPaths, isLastSessionLoad: true);
+        return true;
+    }
+
+    /// <summary>INI / サイドカーから復元用の波形パス一覧を得る。</summary>
+    private IReadOnlyList<string> ResolveLastWavePathsForRestore()
+    {
+        if (_lastWavePaths.Count > 0)
+        {
+            return _lastWavePaths;
+        }
+
+        if (_projectStore.TryReadLastWaveSession(_loadedProjectName, out var state)
+            && state is not null)
+        {
+            var fromSidecar = state.GetWavePaths();
+            if (fromSidecar.Count > 0)
+            {
+                return fromSidecar;
+            }
+        }
+
+        return ResolveStoredLastWavePaths(_lastWavePath, joinedPaths: null);
+    }
+
+    private static IReadOnlyList<string> ResolveStoredLastWavePaths(
+        string? primaryPath,
+        string? joinedPaths)
+    {
+        var fromJoined = LastWaveSessionState.SplitWavePathsFromIni(joinedPaths);
+        if (fromJoined.Count > 0)
+        {
+            return fromJoined;
+        }
+
+        if (string.IsNullOrWhiteSpace(primaryPath))
+        {
+            return [];
+        }
+
         try
         {
-            wavPath = Path.GetFullPath(_lastWavePath);
+            return [Path.GetFullPath(primaryPath.Trim())];
         }
-        catch (Exception ex)
+        catch
         {
-            AppendReport(UiStrings.LogLastWaveBadPath(ex.Message) + Environment.NewLine);
-            return false;
+            return [primaryPath.Trim()];
         }
-
-        if (!File.Exists(wavPath))
-        {
-            AppendReport(UiStrings.LogLastWaveMissing(wavPath) + Environment.NewLine);
-            return false;
-        }
-
-        ProcessDroppedFiles([wavPath], isLastSessionLoad: true);
-        return true;
     }
 
     private async void ProcessDroppedFiles(
@@ -6103,7 +6223,7 @@ public partial class Form1 : Form, IMessageFilter
 
         var exportGeneration = ++_exportGeneration;
         // 直前に実際に読み込んでいた波形（プロジェクトの LastWavePath は使わない）。
-        var previousWavePath = _sessionLoadedWavePath;
+        var previousWavePaths = _sessionLoadedWavePaths;
         var loadMessage = isLastSessionLoad ? UiStrings.OverlayLoadingLastSession : UiStrings.OverlayLoading;
         // 起動中すりガラスが既にあればスナップショットは維持し、メッセージだけ差し替える。
         SetUiInteractionLocked(UiInteractionLock.Load, locked: true, loadMessage);
@@ -6168,18 +6288,23 @@ public partial class Form1 : Form, IMessageFilter
             // 再生用一時コピーは大きな WAV だと数秒かかる（背景スレッド）。
             // ただし AsioOut は UI の SynchronizationContext が必要なため、
             // 出力デバイスの初期化は UI スレッドでやり直す。
+            // 複数波形の「マーカー 2 つ」特例はプレイリスト単位で既に反映された EffectiveRegions を使う
+            // （全マーカー＋総 FrameCount で再構築するとファイル横断の 2 点特例になる）。
+            var loopPlanRegions = _previewSession.EffectiveRegions;
             try
             {
                 await Task.Run(() =>
                 {
-                    _audioPlayer.Load(preview.SourcePath);
-                    _audioPlayer.SetLoopPlans(
-                        WaveAudioPlayer.BuildLoopPlans(
-                            preview.AllowsSessionMarkerEdit
-                                ? WaveOnlyModeProcessor.BuildRegionsFromMarkers(
-                                    preview.Markers,
-                                    preview.WavInfo.FrameCount)
-                                : preview.Regions));
+                    if (preview.IsMultiWaveOnly)
+                    {
+                        _audioPlayer.LoadVirtualConcat(preview.SourceSpans);
+                    }
+                    else
+                    {
+                        _audioPlayer.Load(preview.SourcePath);
+                    }
+
+                    _audioPlayer.SetLoopPlans(WaveAudioPlayer.BuildLoopPlans(loopPlanRegions));
                 });
 
                 // UI スレッド: 保存済み出力設定で ASIO/WASAPI を確実に開く
@@ -6218,20 +6343,30 @@ public partial class Form1 : Form, IMessageFilter
             preview.Cycles,
             _previewSession.EffectiveRegions,
             _previewSession.EffectiveOutputParts,
-            preview.AllowsSessionMarkerEdit);
+            preview.AllowsSessionMarkerEdit,
+            preview.SourceSpans,
+            sourceNameEditable: !preview.IsMultiWaveOnly);
+        if (preview.IsMultiWaveOnly)
+        {
+            waveformView.SetSourceDisplayName(WwiseObjectNames.MultiWaveContainerName);
+        }
         SyncRegionEdgeFadesToUi();
         waveformView.SetPlayhead(0, recordTrail: false);
 
         _loadedPreview = preview;
-        var loadedWavePath = Path.GetFullPath(preview.SourcePath);
-        // 初回（直前なし）はサイドカー復元可。直前があり別パスなら破棄のまま復元しない。
-        var sameAsPreviousWave = string.IsNullOrWhiteSpace(previousWavePath)
-            || string.Equals(
-                LastWaveSessionState.NormalizePath(previousWavePath),
-                LastWaveSessionState.NormalizePath(loadedWavePath),
-                StringComparison.OrdinalIgnoreCase);
-        _lastWavePath = loadedWavePath;
-        _sessionLoadedWavePath = loadedWavePath;
+        var loadedWavePaths = LastWaveSessionState.GetLoadedWavePaths(preview);
+        // 初回（直前なし）はサイドカー復元可。直前があり別セットなら破棄のまま復元しない。
+        var sameAsPreviousWave = previousWavePaths.Count == 0
+            || LastWaveSessionState.WavePathsEqual(previousWavePaths, loadedWavePaths);
+        _lastWavePaths = loadedWavePaths;
+        _lastWavePath = loadedWavePaths.Count > 0 ? loadedWavePaths[0] : string.Empty;
+        _sessionLoadedWavePaths = loadedWavePaths;
+        if (rememberInputFiles || isLastSessionLoad)
+        {
+            _lastInputFiles = loadedWavePaths;
+            reloadButton.Enabled = _lastInputFiles.Count > 0;
+        }
+
         PersistLastWavePathToProject();
         markerOptionsPanel.SetMarkerPlacementOptionsEnabled(!preview.AllowsSessionMarkerEdit);
         UpdateWaveOnlyExitSourceOptionsEnabled();
@@ -6311,8 +6446,7 @@ public partial class Form1 : Form, IMessageFilter
             return;
         }
 
-        var wavePath = LastWaveSessionState.NormalizePath(preview.SourcePath);
-        if (!string.Equals(state.WavePath, wavePath, StringComparison.OrdinalIgnoreCase))
+        if (!state.MatchesLoadedWave(preview))
         {
             return;
         }
@@ -6667,7 +6801,8 @@ public partial class Form1 : Form, IMessageFilter
             _playlistGroupFadeInSecondsByPart,
             _playlistGroupFadeOutSecondsByPart,
             session.GetWaveOnlySessionMarkers(),
-            session.RegionEdgeFades);
+            session.RegionEdgeFades,
+            _lastWavePaths.Count > 0 ? _lastWavePaths : LastWaveSessionState.GetLoadedWavePaths(preview));
         _projectStore.SaveLastWaveSession(_loadedProjectName, state);
     }
 
@@ -6856,6 +6991,9 @@ public partial class Form1 : Form, IMessageFilter
         try
         {
             ReportProgress(UiStrings.LogBuildingImportPlan);
+            var containerNameOverride = preview.IsMultiWaveOnly
+                ? WwiseObjectNames.MakeMultiWaveContainerName()
+                : null;
             plan = WwiseMusicPlanBuilder.Build(
                 BuildNamingSourcePath(preview.SourcePath),
                 preview.WavInfo.SampleRate,
@@ -6867,7 +7005,8 @@ public partial class Form1 : Form, IMessageFilter
                 snapshot.PlaylistNameOverrides,
                 outputDirectory,
                 snapshot.PartExitSourceModes,
-                _playlistExitSourceMode);
+                _playlistExitSourceMode,
+                containerNameOverride);
             ReportProgress(UiStrings.LogPlanReady(plan.Playlists.Count));
         }
         catch (Exception ex)
@@ -7232,9 +7371,9 @@ public partial class Form1 : Form, IMessageFilter
         transportBar.SetNavigationAvailability(
             jumpToBarEnabled: barNavigation,
             previousNextBarEnabled: barNavigation || waveOnlyNav,
-            playlistNavigationEnabled:
-                HasTransportPlaylistNavigation() || HasWaveOnlyMarkerNavigation(),
-            waveOnlyViewStepTips: waveOnlyNav);
+            playlistNavigationEnabled: HasTransportPlaylistNavigation(),
+            waveOnlyViewStepTips: waveOnlyNav,
+            waveOnlyMarkerTips: false);
     }
 
     private bool HasTransportBarNavigation() =>
@@ -7245,7 +7384,7 @@ public partial class Form1 : Form, IMessageFilter
         _previewSession is { AllowsSessionMarkerEdit: true }
         && _audioPlayer.HasSource;
 
-    /// <summary>Wave 単体モードで Ctrl+←/→ を前後マーカーへシークにする。</summary>
+    /// <summary>Wave 単体／複数波形で Ctrl+Shift+←/→ を前後マーカーへシークにする。</summary>
     private bool HasWaveOnlyMarkerNavigation() =>
         HasWaveOnlyViewStepNavigation();
 
@@ -7260,7 +7399,7 @@ public partial class Form1 : Form, IMessageFilter
             HasTransportBarNavigation() || HasWaveOnlyViewStepNavigation(),
         TransportCommand.PreviousPlaylist
             or TransportCommand.NextPlaylist =>
-            HasTransportPlaylistNavigation() || HasWaveOnlyMarkerNavigation(),
+            HasTransportPlaylistNavigation(),
         _ => true,
     };
 

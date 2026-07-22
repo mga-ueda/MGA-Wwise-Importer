@@ -155,60 +155,85 @@ internal sealed class WavPeakPyramid
         Array.Fill(mins, float.MaxValue);
         Array.Fill(maxs, float.MinValue);
 
-        stream.Position = dataStart;
-        const int ChunkFrames = 1 << 14;
-        var buffer = new byte[blockAlign * ChunkFrames];
-        var mono = new float[ChunkFrames];
-        long frame = 0;
-        // バケット境界は逐次カウンタで追う（フレームごとの除算を避ける）
-        var bucket = 0;
-        var framesLeftInBucket = baseBucket;
-        while (frame < frameCount)
+        FillBasePeaksFromStream(
+            stream,
+            dataStart,
+            info,
+            frameCount,
+            baseBucket,
+            mins,
+            maxs);
+
+        return FromBasePeaks(mins, maxs, frameCount, baseBucket, info.SampleRate);
+    }
+
+    /// <summary>
+    /// 複数ソースの仮想タイムライン向けピーク階層。各ファイルを順に読み、仮想座標へ詰める。
+    /// </summary>
+    public static WavPeakPyramid BuildFromSpans(IReadOnlyList<WaveformSourceSpan> spans)
+    {
+        if (spans.Count == 0)
         {
-            var framesToRead = (int)Math.Min(ChunkFrames, frameCount - frame);
-            var framesGot = WavPeakReader.ReadFrames(stream, buffer, framesToRead, blockAlign);
-            WavPeakReader.ConvertFramesToMono(buffer, framesGot, info, mono);
+            throw new ArgumentException(UiStrings.ErrMultiWaveOnlyNoSpans, nameof(spans));
+        }
 
-            var min = mins[bucket];
-            var max = maxs[bucket];
-            for (var i = 0; i < framesGot; i++)
+        if (spans.Count == 1)
+        {
+            return Build(spans[0].WavInfo);
+        }
+
+        var frameCount = spans[^1].VirtualEndSample;
+        if (frameCount <= 0)
+        {
+            throw new InvalidDataException(UiStrings.ErrEmptyData);
+        }
+
+        var sampleRate = spans[0].WavInfo.SampleRate;
+        var baseBucket = (int)Math.Max(1L, (frameCount + TargetBaseBuckets - 1) / TargetBaseBuckets);
+        var baseCount = (int)((frameCount + baseBucket - 1) / baseBucket);
+        var mins = new float[baseCount];
+        var maxs = new float[baseCount];
+        Array.Fill(mins, float.MaxValue);
+        Array.Fill(maxs, float.MinValue);
+
+        foreach (var span in spans)
+        {
+            var info = span.WavInfo;
+            if (info.FrameCount <= 0 || info.BlockAlign == 0 || info.Channels == 0)
             {
-                var value = mono[i];
-                if (value < min)
-                {
-                    min = value;
-                }
-
-                if (value > max)
-                {
-                    max = value;
-                }
-
-                if (--framesLeftInBucket == 0)
-                {
-                    mins[bucket] = min;
-                    maxs[bucket] = max;
-                    bucket++;
-                    framesLeftInBucket = baseBucket;
-                    if (bucket < baseCount)
-                    {
-                        min = mins[bucket];
-                        max = maxs[bucket];
-                    }
-                }
+                throw new InvalidDataException(UiStrings.ErrWaveFormatInvalid);
             }
 
-            if (bucket < baseCount)
+            using var stream = new FileStream(
+                info.Path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                1 << 16,
+                FileOptions.SequentialScan);
+            using var reader = new BinaryReader(stream, Encoding.ASCII, leaveOpen: false);
+
+            if (!WavPeakReader.TryFindDataChunk(stream, reader, out var dataStart, out var dataSize))
             {
-                mins[bucket] = min;
-                maxs[bucket] = max;
+                throw new InvalidDataException(UiStrings.ErrDataChunkMissing);
             }
 
-            frame += framesGot;
-            if (framesGot < framesToRead)
+            var localFrames = Math.Min(info.FrameCount, (long)(dataSize / info.BlockAlign));
+            localFrames = Math.Min(localFrames, span.FrameCount);
+            if (localFrames <= 0)
             {
-                break;
+                continue;
             }
+
+            FillBasePeaksFromStream(
+                stream,
+                dataStart,
+                info,
+                localFrames,
+                baseBucket,
+                mins,
+                maxs,
+                virtualFrameOffset: span.VirtualStartSample);
         }
 
         for (var i = 0; i < baseCount; i++)
@@ -220,6 +245,80 @@ internal sealed class WavPeakPyramid
             }
         }
 
+        return FromBasePeaks(mins, maxs, frameCount, baseBucket, sampleRate);
+    }
+
+    private static void FillBasePeaksFromStream(
+        Stream stream,
+        long dataStart,
+        WavFileInfo info,
+        long frameCount,
+        int baseBucket,
+        float[] mins,
+        float[] maxs,
+        long virtualFrameOffset = 0)
+    {
+        var blockAlign = info.BlockAlign;
+        stream.Position = dataStart;
+        const int ChunkFrames = 1 << 14;
+        var buffer = new byte[blockAlign * ChunkFrames];
+        var mono = new float[ChunkFrames];
+        long frame = 0;
+
+        while (frame < frameCount)
+        {
+            var framesToRead = (int)Math.Min(ChunkFrames, frameCount - frame);
+            var framesGot = WavPeakReader.ReadFrames(stream, buffer, framesToRead, blockAlign);
+            WavPeakReader.ConvertFramesToMono(buffer, framesGot, info, mono);
+
+            for (var i = 0; i < framesGot; i++)
+            {
+                var virtualFrame = virtualFrameOffset + frame + i;
+                var bucket = (int)(virtualFrame / baseBucket);
+                if ((uint)bucket >= (uint)mins.Length)
+                {
+                    continue;
+                }
+
+                var value = mono[i];
+                if (value < mins[bucket])
+                {
+                    mins[bucket] = value;
+                }
+
+                if (value > maxs[bucket])
+                {
+                    maxs[bucket] = value;
+                }
+            }
+
+            frame += framesGot;
+            if (framesGot < framesToRead)
+            {
+                break;
+            }
+        }
+
+        if (virtualFrameOffset == 0)
+        {
+            for (var i = 0; i < mins.Length; i++)
+            {
+                if (mins[i] > maxs[i])
+                {
+                    mins[i] = 0;
+                    maxs[i] = 0;
+                }
+            }
+        }
+    }
+
+    private static WavPeakPyramid FromBasePeaks(
+        float[] mins,
+        float[] maxs,
+        long frameCount,
+        int baseBucket,
+        uint sampleRate)
+    {
         // 上位レベル: 隣接 2 バケットを結合して半分に
         var minLevels = new List<float[]> { mins };
         var maxLevels = new List<float[]> { maxs };
@@ -247,6 +346,6 @@ internal sealed class WavPeakPyramid
             [.. maxLevels],
             frameCount,
             baseBucket,
-            info.SampleRate);
+            sampleRate);
     }
 }

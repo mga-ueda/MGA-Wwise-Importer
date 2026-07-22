@@ -73,6 +73,11 @@ internal sealed class ProjectProfile
     /// <summary>最後に正常に読み込んだ波形のフルパス。</summary>
     public string LastWavePath { get; set; } = string.Empty;
 
+    /// <summary>
+    /// 複数波形モード時の全ソース WAV（| 区切り）。空なら <see cref="LastWavePath"/> のみ。
+    /// </summary>
+    public string LastWavePaths { get; set; } = string.Empty;
+
     /// <summary>Wwise 作成先パスをこのプロジェクトで固定するか（既定オフ）。</summary>
     public bool KeepTarget { get; set; }
 
@@ -111,6 +116,7 @@ internal sealed class ProjectProfile
         MoreOptionsExpanded = MoreOptionsExpanded,
         KeepLastSession = KeepLastSession,
         LastWavePath = LastWavePath,
+        LastWavePaths = LastWavePaths,
         KeepTarget = KeepTarget,
         KeptTargetPath = KeptTargetPath,
         KeptTargetProjectFilePath = KeptTargetProjectFilePath,
@@ -194,6 +200,7 @@ internal sealed class ProjectSettingsStore
         MoreOptionsExpanded = true,
         KeepLastSession = true,
         LastWavePath = string.Empty,
+        LastWavePaths = string.Empty,
         KeepTarget = false,
         KeptTargetPath = string.Empty,
         KeptTargetProjectFilePath = string.Empty,
@@ -560,6 +567,7 @@ internal sealed class ProjectSettingsStore
             ["MoreOptionsExpanded"] = profile.MoreOptionsExpanded ? "1" : "0",
             ["KeepLastSession"] = profile.KeepLastSession ? "1" : "0",
             ["LastWavePath"] = profile.LastWavePath,
+            ["LastWavePaths"] = profile.LastWavePaths,
             ["KeepTarget"] = profile.KeepTarget ? "1" : "0",
             ["KeptTargetPath"] = profile.KeptTargetPath,
             ["KeptTargetProjectFilePath"] = profile.KeptTargetProjectFilePath,
@@ -691,6 +699,11 @@ internal sealed class ProjectSettingsStore
         if (values.TryGetValue("LastWavePath", out var lastWave))
         {
             profile.LastWavePath = lastWave.Trim().Trim('"');
+        }
+
+        if (values.TryGetValue("LastWavePaths", out var lastWaves))
+        {
+            profile.LastWavePaths = lastWaves.Trim().Trim('"');
         }
 
         profile.KeepTarget = ReadBool(

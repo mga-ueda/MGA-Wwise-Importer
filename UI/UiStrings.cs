@@ -224,6 +224,10 @@ internal static class UiStrings
         + Environment.NewLine
         + "Ctrl+Shift+R: シーク位置のマーカーをリネーム"
         + Environment.NewLine
+        + "Ctrl+← / →: 前後の Playlist 先頭／末尾、またはマーカーへ移動"
+        + Environment.NewLine
+        + "Ctrl+Shift+← / →: 前後のマーカーへ移動（Playlist 境界は飛ばす）"
+        + Environment.NewLine
         + "選択して Delete / Ctrl+Shift+Del: マーカーを削除（アプリ上のみ）"
         + Environment.NewLine
         + "Insert: シーク位置にマーカー追加（コメントなし）"
@@ -246,6 +250,10 @@ internal static class UiStrings
         + "Double-click ▼ / comment: edit comment"
         + Environment.NewLine
         + "Ctrl+Shift+R: rename marker at seek"
+        + Environment.NewLine
+        + "Ctrl+← / →: jump to previous / next Playlist start/end or marker"
+        + Environment.NewLine
+        + "Ctrl+Shift+← / →: jump to previous / next marker (skip Playlist edges)"
         + Environment.NewLine
         + "Select + Delete / Ctrl+Shift+Del: remove marker (app session only)"
         + Environment.NewLine
@@ -591,12 +599,12 @@ internal static class UiStrings
         "Previous view page  [Page Up]");
 
     public static string TipTransportPreviousPlaylist => WithKeyRepeat(
-        "前の Music Playlist へ移動  [Ctrl+←]",
-        "Previous Music Playlist  [Ctrl+←]");
+        "前の Music Playlist 先頭／末尾、またはマーカーへ移動  [Ctrl+←]",
+        "Previous Music Playlist start/end or marker  [Ctrl+←]");
 
     public static string TipTransportPreviousMarker => WithKeyRepeat(
-        "前のマーカーへ移動  [Ctrl+←]",
-        "Previous marker  [Ctrl+←]");
+        "前のマーカーへ移動  [Ctrl+Shift+←]",
+        "Previous marker  [Ctrl+Shift+←]");
 
     public static string TipTransportPreviousBar => WithKeyRepeat(
         "前の小節  [Home]",
@@ -615,12 +623,12 @@ internal static class UiStrings
         "Move forward about 5% of the view  [End]");
 
     public static string TipTransportNextPlaylist => WithKeyRepeat(
-        "次の Music Playlist へ移動  [Ctrl+→]",
-        "Next Music Playlist  [Ctrl+→]");
+        "次の Music Playlist 先頭／末尾、またはマーカーへ移動  [Ctrl+→]",
+        "Next Music Playlist start/end or marker  [Ctrl+→]");
 
     public static string TipTransportNextMarker => WithKeyRepeat(
-        "次のマーカーへ移動  [Ctrl+→]",
-        "Next marker  [Ctrl+→]");
+        "次のマーカーへ移動  [Ctrl+Shift+→]",
+        "Next marker  [Ctrl+Shift+→]");
 
     public static string TipTransportNextPage => WithKeyRepeat(
         "次の表示ページ  [Page Down]",
@@ -664,13 +672,14 @@ internal static class UiStrings
 
     public static string TipForTransportCommand(
         TransportCommand command,
-        bool waveOnlyViewStep = false) => command switch
+        bool waveOnlyViewStep = false,
+        bool waveOnlyMarkerNav = false) => command switch
     {
         TransportCommand.TogglePlayback => TipTransportPlayPause,
         TransportCommand.JumpToBar => TipTransportJumpToBar,
         TransportCommand.GoToStart => TipTransportGoToStart,
         TransportCommand.PreviousPage => TipTransportPreviousPage,
-        TransportCommand.PreviousPlaylist => waveOnlyViewStep
+        TransportCommand.PreviousPlaylist => waveOnlyMarkerNav
             ? TipTransportPreviousMarker
             : TipTransportPreviousPlaylist,
         TransportCommand.PreviousBar => waveOnlyViewStep
@@ -679,7 +688,7 @@ internal static class UiStrings
         TransportCommand.NextBar => waveOnlyViewStep
             ? TipTransportNextViewStep
             : TipTransportNextBar,
-        TransportCommand.NextPlaylist => waveOnlyViewStep
+        TransportCommand.NextPlaylist => waveOnlyMarkerNav
             ? TipTransportNextMarker
             : TipTransportNextPlaylist,
         TransportCommand.NextPage => TipTransportNextPage,
@@ -1286,6 +1295,75 @@ internal static class UiStrings
     public static string LogWaveOnlyModeNotImplemented => Get(
         "Message : このモードは未実装です（後続対応）。",
         "Message : This mode is not implemented yet.");
+
+    public static string LogMultiWaveOnlyHeader => Get(
+        "=== 複数波形モード（XML なし） ===",
+        "=== Multi-wave mode (no XML) ===");
+
+    public static string LogMultiWaveOnlyModeName(int waveCount) => Format(
+        "Mode : 複数 WAV を仮想タイムラインへ連結（{0} 本）",
+        "Mode : Concatenate multiple WAVs on a virtual timeline ({0} file(s))",
+        waveCount);
+
+    public static string LogMultiWaveOnlyFileHeader(int index, int total, string path) => Format(
+        "--- ファイル {0}/{1} : {2} ---",
+        "--- File {0}/{1} : {2} ---",
+        index,
+        total,
+        path);
+
+    public static string LogMultiWaveOnlySpanSummary(
+        long virtualStart,
+        long virtualEnd,
+        int partCount) => Format(
+        "Message : 仮想 samples=[{0:N0} .. {1:N0}) / 出力パート {2}",
+        "Message : Virtual samples=[{0:N0} .. {1:N0}) / output part(s) {2}",
+        virtualStart,
+        virtualEnd,
+        partCount);
+
+    public static string LogMultiWaveOnlyVirtualSource(int waveCount) => Format(
+        "仮想連結（{0} 本）",
+        "Virtual concat ({0} file(s))",
+        waveCount);
+
+    public static string LogMultiWaveOnlyFormatMismatch(string firstPath, string secondPath) => Format(
+        "Message : フォーマットが一致しないため複数波形モードを中止します。{0} と {1}",
+        "Message : Aborting multi-wave mode because formats do not match. {0} vs {1}",
+        firstPath,
+        secondPath);
+
+    public static string LogMultiWaveOnlyFormatDetail(
+        uint sampleRateA,
+        ushort channelsA,
+        ushort bitsA,
+        uint sampleRateB,
+        ushort channelsB,
+        ushort bitsB) => Format(
+        "Message : A={0} Hz / {1} ch / {2} bit  vs  B={3} Hz / {4} ch / {5} bit",
+        "Message : A={0} Hz / {1} ch / {2} bit  vs  B={3} Hz / {4} ch / {5} bit",
+        sampleRateA,
+        channelsA,
+        bitsA,
+        sampleRateB,
+        channelsB,
+        bitsB);
+
+    public static string LogMultiWaveOnlyEmptyWave => Get(
+        "Message : フレーム数が 0 の WAV は複数波形モードに含められません。",
+        "Message : A WAV with 0 frames cannot be included in multi-wave mode.");
+
+    public static string ErrMultiWaveOnlyTooLong => Get(
+        "連結後の波形が長すぎます（4 GiB 超）。",
+        "Concatenated wave is too long (over 4 GiB).");
+
+    public static string ErrMultiWaveOnlyNoSpans => Get(
+        "複数波形のソース区間がありません。",
+        "No multi-wave source spans.");
+
+    public static string ErrMultiWaveOnlyConcatRange => Get(
+        "複数波形の一時連結中にデータ範囲外へ達しました。",
+        "Reached out-of-range data while building multi-wave playback concat.");
 
     public static string LogOutsideWaveHeader => Get(
         "=== 波形範囲外（無視） ===",

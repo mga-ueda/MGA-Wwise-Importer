@@ -87,7 +87,9 @@ internal sealed class WaveformView : Control
     private WavPeakData? _peaks;
     private WavFileInfo? _wavInfo;
     private string _sourcePath = string.Empty;
+    private IReadOnlyList<WaveformSourceSpan> _sourceSpans = [];
     private string _sourceDisplayName = string.Empty;
+    private bool _sourceNameEditable = true;
     private TextBox? _sourceNameEditor;
     private bool _sourceNameHovered;
     private bool _endingSourceNameEdit;
@@ -165,6 +167,12 @@ internal sealed class WaveformView : Control
     private const double AmpZoomMax = 128.0;
     private const double AmpZoomStep = 1.09050773267;
     private const double AmpZoomWheelStep = 1.189207115;
+    /// <summary>
+    /// 1px あたりこのサンプル数以下なら縦棒ではなくサンプル折れ線にする。
+    /// キーボード拡縮（<see cref="TimeZoomStep"/>）おおよそ 6 段階手前まで詳細表示する狙い
+    /// （基準 4 × TimeZoomStep^6 ≒ 6.7、運用値は一段手前の 8）。
+    /// </summary>
+    private const int PolylineMaxSamplesPerPixel = 8;
     private double _ampZoom = AmpZoomMin;
 
     private double? _playheadProgress;
@@ -228,17 +236,29 @@ internal sealed class WaveformView : Control
         IReadOnlyList<WaveformCycleMark>? cycles = null,
         IReadOnlyList<WaveformRegionMark>? regions = null,
         IReadOnlyList<WaveformOutputPart>? outputParts = null,
-        bool allowsSessionMarkerEdit = false)
+        bool allowsSessionMarkerEdit = false,
+        IReadOnlyList<WaveformSourceSpan>? sourceSpans = null,
+        bool sourceNameEditable = true)
     {
         _peaks = peaks;
         _wavInfo = wavInfo;
         _sourcePath = sourcePath ?? string.Empty;
+        _sourceSpans = sourceSpans ?? [];
+        _sourceNameEditable = sourceNameEditable;
         _sourceDisplayName = string.IsNullOrWhiteSpace(sourcePath)
             ? string.Empty
             : Path.GetFileNameWithoutExtension(sourcePath);
         _outputLevel = 0f;
         ClearDetailPeaks();
-        StartPeakPyramidBuild(wavInfo);
+        if (_sourceSpans.Count > 1)
+        {
+            // 仮想タイムライン用のピーク階層を背景構築（ズーム時の概要↔精密ちらつきを防ぐ）
+            StartPeakPyramidBuildFromSpans(_sourceSpans);
+        }
+        else
+        {
+            StartPeakPyramidBuild(wavInfo);
+        }
         _bars = bars ?? [];
         _markers = markers ?? [];
         _cycles = cycles ?? [];
@@ -436,7 +456,9 @@ internal sealed class WaveformView : Control
         _peaks = null;
         _wavInfo = null;
         _sourcePath = string.Empty;
+        _sourceSpans = [];
         _sourceDisplayName = string.Empty;
+        _sourceNameEditable = true;
         EndSourceNameEdit(commit: false);
         ClearMarkerSessionEditState();
         _outputLevel = 0f;
@@ -891,11 +913,19 @@ internal sealed class WaveformView : Control
     /// <summary>再生位置を直後のマーカーへ。成功したら true。</summary>
     public bool SeekToNextMarker() => TrySeekAlongSamples(CollectMarkerSamples(), previous: false);
 
-    /// <summary>現在の Music Playlist の1つ前にある有効な Playlist の先頭へ。</summary>
-    public bool SeekToPreviousPlaylist() => TrySeekToAdjacentPlaylist(previous: true);
+    /// <summary>
+    /// 直前の Music Playlist 境界（先頭／末尾）またはマーカーへ。
+    /// Ctrl+← 用。Playlist 間ジャンプだけでなく、区間内のマーカーや末尾にも止まる。
+    /// </summary>
+    public bool SeekToPreviousPlaylist() =>
+        TrySeekAlongSamples(CollectPlaylistNavigationSamples(), previous: true);
 
-    /// <summary>現在の Music Playlist の1つ後にある有効な Playlist の先頭へ。</summary>
-    public bool SeekToNextPlaylist() => TrySeekToAdjacentPlaylist(previous: false);
+    /// <summary>
+    /// 直後の Music Playlist 境界（先頭／末尾）またはマーカーへ。
+    /// Ctrl+→ 用。
+    /// </summary>
+    public bool SeekToNextPlaylist() =>
+        TrySeekAlongSamples(CollectPlaylistNavigationSamples(), previous: false);
 
     private List<long> CollectBarSamples()
     {
@@ -951,55 +981,49 @@ internal sealed class WaveformView : Control
         return result;
     }
 
-    private bool TrySeekToAdjacentPlaylist(bool previous)
+    /// <summary>
+    /// Ctrl+←/→ 用: 有効 Playlist の先頭・末尾と、表示マーカー位置をまとめた停止点。
+    /// 隣接 Playlist 先頭だけだと区間内マーカー／末尾に止まらないため。
+    /// </summary>
+    private List<long> CollectPlaylistNavigationSamples()
     {
-        if (_peaks is null
-            || _peaks.IsEmpty
-            || _peaks.FrameCount <= 0
-            || _outputParts.Count == 0)
+        var result = new List<long>();
+        if (_peaks is null || _peaks.IsEmpty || _peaks.FrameCount <= 0)
         {
-            return false;
+            return result;
         }
 
         var frameCount = _peaks.FrameCount;
-        var parts = _outputParts
-            .Where(part =>
-                !_disabledPlaylistPartNumbers.Contains(part.Number)
-                && part.EndSampleOffset > part.StartSampleOffset)
-            .OrderBy(part => part.StartSampleOffset)
-            .ThenBy(part => part.Number)
-            .ToArray();
-        if (parts.Length == 0)
+        var seen = new HashSet<long>();
+
+        void Add(long sample)
         {
-            return false;
+            sample = Math.Clamp(sample, 0L, frameCount);
+            if (seen.Add(sample))
+            {
+                result.Add(sample);
+            }
         }
 
-        var currentSample = (long)Math.Round((_playheadProgress ?? 0d) * frameCount);
-        currentSample = Math.Clamp(currentSample, 0L, frameCount);
-
-        // 現在位置を含む Playlist を基準に、明示的に隣の Playlist を選ぶ。
-        // Playlist 間の空白にいる場合は、その位置の直前／直後を選ぶ。
-        var currentIndex = Array.FindIndex(
-            parts,
-            part =>
-                currentSample >= part.StartSampleOffset
-                && currentSample < part.EndSampleOffset);
-        var targetIndex = currentIndex >= 0
-            ? currentIndex + (previous ? -1 : 1)
-            : previous
-                ? Array.FindLastIndex(parts, part => part.StartSampleOffset < currentSample)
-                : Array.FindIndex(parts, part => part.StartSampleOffset > currentSample);
-        if (targetIndex < 0 || targetIndex >= parts.Length)
+        foreach (var part in _outputParts)
         {
-            return false;
+            if (_disabledPlaylistPartNumbers.Contains(part.Number)
+                || part.EndSampleOffset <= part.StartSampleOffset)
+            {
+                continue;
+            }
+
+            Add(part.StartSampleOffset);
+            // End は半開区間の終端（次 Playlist 先頭と一致し得る。その場合は 1 点にまとめる）。
+            Add(part.EndSampleOffset);
         }
 
-        var sample = Math.Clamp(parts[targetIndex].StartSampleOffset, 0L, frameCount);
-        var progress = Math.Clamp(sample / (double)frameCount, 0d, 1d);
-        _playheadProgress = progress;
-        EnsureAbsoluteVisible(progress);
-        SeekRequested?.Invoke(this, progress);
-        return true;
+        foreach (var markerSample in CollectMarkerSamples())
+        {
+            Add(markerSample);
+        }
+
+        return result;
     }
 
     private bool TrySeekAlongSamples(List<long> samples, bool previous)
@@ -1474,7 +1498,9 @@ internal sealed class WaveformView : Control
         if (Math.Abs(newZoom - _timeZoom) < 1e-9
             && (newZoom <= TimeZoomMin || newZoom >= TimeZoomMax))
         {
-            if (newZoom <= TimeZoomMin)
+            // これ以上縮小できないときも、表示窓が先頭以外なら先頭へ戻す。
+            // すでに先頭なら再描画しない（複数波形で精密ピークの破棄→再読込ちらつきが出る）。
+            if (newZoom <= TimeZoomMin && _viewStart > 1e-12)
             {
                 _viewStart = 0;
                 NotifyTimeViewChanged();
@@ -1945,7 +1971,7 @@ internal sealed class WaveformView : Control
         Capture = false;
         Cursor = Cursors.Default;
 
-        if (IsSourceNamePoint(e.Location))
+        if (_sourceNameEditable && IsSourceNamePoint(e.Location))
         {
             BeginSourceNameEdit();
             return;
@@ -2077,7 +2103,7 @@ internal sealed class WaveformView : Control
 
     private void BeginSourceNameEdit()
     {
-        if (!TryGetSourceNameBounds(out var bounds))
+        if (!_sourceNameEditable || !TryGetSourceNameBounds(out var bounds))
         {
             return;
         }
@@ -2749,7 +2775,7 @@ internal sealed class WaveformView : Control
         base.OnMouseMove(e);
 
         UpdateMouseGuide(e.X);
-        SetSourceNameHovered(IsSourceNamePoint(e.Location));
+        SetSourceNameHovered(_sourceNameEditable && IsSourceNamePoint(e.Location));
         UpdateTimelineToolTip(e.Location);
 
         if (_markerEditMode is not null)
@@ -3189,6 +3215,7 @@ internal sealed class WaveformView : Control
     {
         string? text = null;
         if (mouseLocation is { } sourceLocation
+            && _sourceNameEditable
             && IsSourceNamePoint(sourceLocation))
         {
             text = UiStrings.TipWaveformEditSourceName;
@@ -3859,7 +3886,8 @@ internal sealed class WaveformView : Control
     /// </summary>
     private void DrawSourceNameHoverChrome(Graphics g)
     {
-        if (!_sourceNameHovered
+        if (!_sourceNameEditable
+            || !_sourceNameHovered
             || _sourceNameEditor is { Visible: true }
             || !TryGetSourceNameBounds(out var available))
         {
@@ -4050,30 +4078,54 @@ internal sealed class WaveformView : Control
             var detail = EnsureDetailPeaks(wave);
             if (detail is not null && !detail.IsEmpty)
             {
-                var bucketCount = detail.Mins.Length;
-                for (var px = 0; px < wave.Width; px++)
+                var startFrame = (long)Math.Floor(_viewStart * frameCount);
+                var endFrame = (long)Math.Ceiling(ViewEnd * frameCount);
+                startFrame = Math.Clamp(startFrame, 0, frameCount);
+                endFrame = Math.Clamp(endFrame, startFrame, frameCount);
+                var rangeFrames = endFrame - startFrame;
+
+                // 表示内サンプルが疎〜中密度なら、DAW 定番のサンプル間直線折れ線。
+                // （曲線補間は実サンプルを偽るので使わない）
+                if (CanDrawSamplePolyline(detail, rangeFrames, wave.Width))
                 {
-                    var bucket = bucketCount == wave.Width
-                        ? Math.Clamp(px, 0, bucketCount - 1)
-                        : (int)Math.Clamp(
-                            Math.Floor((px + 0.5d) / wave.Width * bucketCount),
-                            0,
-                            bucketCount - 1);
-                    var abs = _viewStart + ((px + 0.5d) / wave.Width) * ViewSpan;
-                    var sample = (long)Math.Clamp(
-                        Math.Floor(abs * frameCount),
-                        0,
-                        Math.Max(0L, frameCount - 1));
-                    var gain = RegionEdgeFade.GainAt(sample, displayFades);
-                    DrawPeakColumn(
+                    DrawSamplePolyline(
                         g,
                         wavePen,
                         wave,
                         midY,
-                        amplitude * gain,
-                        wave.Left + px + 0.5f,
-                        detail.Mins[bucket],
-                        detail.Maxs[bucket]);
+                        amplitude,
+                        detail,
+                        startFrame,
+                        frameCount,
+                        displayFades);
+                }
+                else
+                {
+                    var bucketCount = detail.Mins.Length;
+                    for (var px = 0; px < wave.Width; px++)
+                    {
+                        var bucket = bucketCount == wave.Width
+                            ? Math.Clamp(px, 0, bucketCount - 1)
+                            : (int)Math.Clamp(
+                                Math.Floor((px + 0.5d) / wave.Width * bucketCount),
+                                0,
+                                bucketCount - 1);
+                        var abs = _viewStart + ((px + 0.5d) / wave.Width) * ViewSpan;
+                        var sample = (long)Math.Clamp(
+                            Math.Floor(abs * frameCount),
+                            0,
+                            Math.Max(0L, frameCount - 1));
+                        var gain = RegionEdgeFade.GainAt(sample, displayFades);
+                        DrawPeakColumn(
+                            g,
+                            wavePen,
+                            wave,
+                            midY,
+                            amplitude * gain,
+                            wave.Left + px + 0.5f,
+                            detail.Mins[bucket],
+                            detail.Maxs[bucket]);
+                    }
                 }
             }
             else
@@ -4109,6 +4161,132 @@ internal sealed class WaveformView : Control
         // -R だけ波形の上に重ねる（境界線・Cue 線は別描画）
         DrawExcludedRegionOverlays(g, wave);
     }
+
+    /// <summary>
+    /// 深いズーム用: 各サンプルを点として、隣同士を直線で結ぶ（線形補間表示）。
+    /// 振幅拡大時は表示矩形へ Y をピン留めせず、クリップで切る（辺張り付きによる破綻を防ぐ）。
+    /// 1px に複数サンプルある区間は全点接続せず 1px 1 点に間引き、塗りつぶし状の汚れを防ぐ。
+    /// </summary>
+    private void DrawSamplePolyline(
+        Graphics g,
+        Pen wavePen,
+        Rectangle wave,
+        float midY,
+        float amplitude,
+        WavPeakData detail,
+        long startFrame,
+        long frameCount,
+        IReadOnlyList<RegionEdgeFade> displayFades)
+    {
+        var count = detail.Mins.Length;
+        if (count <= 0 || frameCount <= 0)
+        {
+            return;
+        }
+
+        // GDI+ は極端な座標で線分が壊れることがあるため、クリップ外に十分な余白だけ残す。
+        const float YOverflow = 8192f;
+        float SampleY(float sample, float gain)
+        {
+            var y = midY - sample * amplitude * gain;
+            return Math.Clamp(y, wave.Top - YOverflow, wave.Bottom + YOverflow);
+        }
+
+        float SampleAt(int index)
+        {
+            // 1 フレーム＝1 バケットの精密読みでは min==max。
+            return detail.Mins[index];
+        }
+
+        var state = g.Save();
+        try
+        {
+            g.SetClip(wave, System.Drawing.Drawing2D.CombineMode.Intersect);
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+
+            using var linePen = new Pen(wavePen.Color, 1.2f)
+            {
+                LineJoin = System.Drawing.Drawing2D.LineJoin.Round,
+                StartCap = System.Drawing.Drawing2D.LineCap.Round,
+                EndCap = System.Drawing.Drawing2D.LineCap.Round,
+            };
+
+            if (count == 1)
+            {
+                var frame = startFrame;
+                var sample = SampleAt(0);
+                var gain = RegionEdgeFade.GainAt(frame, displayFades);
+                var x = AbsoluteToX(frame / (double)frameCount, wave);
+                var y = SampleY(sample, gain);
+                g.DrawLine(linePen, x, y - 2.5f, x, y + 2.5f);
+                return;
+            }
+
+            // サンプルが画面幅以下: 全点を結ぶ（真のサンプル表示）。
+            // それ以上: 1px あたり複数点が往復して線が汚くなるので、列ごとに代表点へ間引く。
+            PointF[] points;
+            if (count <= wave.Width)
+            {
+                points = new PointF[count];
+                for (var i = 0; i < count; i++)
+                {
+                    var frame = startFrame + i;
+                    var gain = RegionEdgeFade.GainAt(frame, displayFades);
+                    var x = AbsoluteToX(frame / (double)frameCount, wave);
+                    points[i] = new PointF(x, SampleY(SampleAt(i), gain));
+                }
+            }
+            else
+            {
+                points = new PointF[wave.Width];
+                for (var px = 0; px < wave.Width; px++)
+                {
+                    var i0 = (int)((long)px * count / wave.Width);
+                    var i1 = (int)((long)(px + 1) * count / wave.Width);
+                    if (i1 <= i0)
+                    {
+                        i1 = Math.Min(count, i0 + 1);
+                    }
+
+                    // 列内で |sample| 最大の点を代表にすると、ピークを落としにくく線も一本に保たれる。
+                    var bestIndex = i0;
+                    var bestAbs = Math.Abs(SampleAt(i0));
+                    for (var i = i0 + 1; i < i1; i++)
+                    {
+                        var abs = Math.Abs(SampleAt(i));
+                        if (abs > bestAbs)
+                        {
+                            bestAbs = abs;
+                            bestIndex = i;
+                        }
+                    }
+
+                    var frame = startFrame + bestIndex;
+                    var gain = RegionEdgeFade.GainAt(frame, displayFades);
+                    var x = wave.Left + px + 0.5f;
+                    points[px] = new PointF(x, SampleY(SampleAt(bestIndex), gain));
+                }
+            }
+
+            g.DrawLines(linePen, points);
+        }
+        finally
+        {
+            g.Restore(state);
+        }
+    }
+
+    /// <summary>表示窓がサンプル折れ線向きか（縦棒 min/max だと点描に見える密度）。</summary>
+    private static bool IsPolylineZoom(long rangeFrames, int width) =>
+        rangeFrames > 0
+        && width > 0
+        && rangeFrames <= (long)width * PolylineMaxSamplesPerPixel;
+
+    private bool CanDrawSamplePolyline(WavPeakData detail, long rangeFrames, int width) =>
+        !_detailIsApproximate
+        && IsPolylineZoom(rangeFrames, width)
+        && detail.Mins.Length == rangeFrames;
 
     /// <summary>
     /// 除外で区切られた連続リージョン固まりごとに:
@@ -4502,12 +4680,26 @@ internal sealed class WaveformView : Control
         }
 
         var viewEnd = ViewEnd;
+        var frameCount = _peaks.FrameCount;
+        var startFrame = (long)Math.Floor(_viewStart * frameCount);
+        var endFrame = (long)Math.Ceiling(viewEnd * frameCount);
+        startFrame = Math.Clamp(startFrame, 0, frameCount);
+        endFrame = Math.Clamp(endFrame, startFrame, frameCount);
+        var rangeFrames = endFrame - startFrame;
+        var polylineZoom = IsPolylineZoom(rangeFrames, wave.Width);
+
         if (_detailPeaks is not null
             && !_detailPeaks.IsEmpty
             && _detailPixelWidth == wave.Width
             && Math.Abs(_detailViewStart - _viewStart) < 1e-12
             && Math.Abs(_detailViewEnd - viewEnd) < 1e-12)
         {
+            if (polylineZoom && (_detailIsApproximate || _detailPeaks.Mins.Length != rangeFrames))
+            {
+                RequestRawDetail(_viewStart, viewEnd, wave.Width);
+                return null;
+            }
+
             if (_detailIsApproximate)
             {
                 RequestRawDetail(_viewStart, viewEnd, wave.Width);
@@ -4516,25 +4708,39 @@ internal sealed class WaveformView : Control
             return _detailPeaks;
         }
 
-        var frameCount = _peaks.FrameCount;
-        var startFrame = (long)Math.Floor(_viewStart * frameCount);
-        var endFrame = (long)Math.Ceiling(viewEnd * frameCount);
-        startFrame = Math.Clamp(startFrame, 0, frameCount);
-        endFrame = Math.Clamp(endFrame, startFrame, frameCount);
-        if (endFrame <= startFrame)
+        if (rangeFrames <= 0)
         {
             ClearDetailPeaks();
             return null;
         }
 
         var pyramid = _peakPyramid;
+        if (polylineZoom)
+        {
+            // 折れ線は表示内の全サンプル点が必要。幅バケットのピラミッド集計では足りない。
+            RequestRawDetail(_viewStart, viewEnd, wave.Width);
+            if (pyramid is not null
+                && pyramid.HasFullDetailFor(startFrame, endFrame, (int)rangeFrames))
+            {
+                _detailPeaks = pyramid.ReadRange(startFrame, endFrame, (int)rangeFrames);
+                _detailViewStart = _viewStart;
+                _detailViewEnd = viewEnd;
+                _detailPixelWidth = wave.Width;
+                _detailIsApproximate = false;
+                return _detailPeaks;
+            }
+
+            return null;
+        }
+
         if (pyramid is not null)
         {
+            var fullDetail = pyramid.HasFullDetailFor(startFrame, endFrame, wave.Width);
             _detailPeaks = pyramid.ReadRange(startFrame, endFrame, wave.Width);
             _detailViewStart = _viewStart;
             _detailViewEnd = viewEnd;
             _detailPixelWidth = wave.Width;
-            _detailIsApproximate = !pyramid.HasFullDetailFor(startFrame, endFrame, wave.Width);
+            _detailIsApproximate = !fullDetail;
             if (_detailIsApproximate)
             {
                 RequestRawDetail(_viewStart, viewEnd, wave.Width);
@@ -4544,8 +4750,6 @@ internal sealed class WaveformView : Control
         }
 
         // 階層構築中: 概要ピークのフォールバック描画で即応答する。
-        // 概要の粒度で足りない深さなら精密読みだけ背景に依頼する。
-        var rangeFrames = endFrame - startFrame;
         var overviewFramesPerBucket = frameCount / (double)Math.Max(1, _peaks.Mins.Length);
         if (rangeFrames / (double)wave.Width < overviewFramesPerBucket)
         {
@@ -4581,29 +4785,40 @@ internal sealed class WaveformView : Control
 
         _rawDetailWanted = null;
 
-        // 既に同じ表示窓の精密ピークを持っているなら読み直さない
+        var frameCount = peaks.FrameCount;
+        var startFrame = Math.Clamp((long)Math.Floor(wanted.ViewStart * frameCount), 0, frameCount);
+        var endFrame = Math.Clamp((long)Math.Ceiling(wanted.ViewEnd * frameCount), startFrame, frameCount);
+        var rangeFrames = endFrame - startFrame;
+        var polylineZoom = IsPolylineZoom(rangeFrames, wanted.Width);
+
+        // 既に同じ表示窓の、必要な粒度の精密ピークを持っているなら読み直さない
         if (!_detailIsApproximate
             && _detailPeaks is not null
             && !_detailPeaks.IsEmpty
             && _detailPixelWidth == wanted.Width
             && Math.Abs(_detailViewStart - wanted.ViewStart) < 1e-12
-            && Math.Abs(_detailViewEnd - wanted.ViewEnd) < 1e-12)
+            && Math.Abs(_detailViewEnd - wanted.ViewEnd) < 1e-12
+            && (!polylineZoom || _detailPeaks.Mins.Length == rangeFrames))
         {
             return;
         }
 
         _rawDetailReading = true;
         var generation = _pyramidGeneration;
-        var frameCount = peaks.FrameCount;
-        var startFrame = Math.Clamp((long)Math.Floor(wanted.ViewStart * frameCount), 0, frameCount);
-        var endFrame = Math.Clamp((long)Math.Ceiling(wanted.ViewEnd * frameCount), startFrame, frameCount);
+        var sourceSpans = _sourceSpans;
+        // 折れ線領域では表示内の全サンプルを 1 点ずつ読む。
+        var peakCount = polylineZoom && rangeFrames > 0
+            ? (int)rangeFrames
+            : wanted.Width;
 
         Task.Run(() =>
         {
             WavPeakData? data = null;
             try
             {
-                data = WavPeakReader.ReadRange(info, startFrame, endFrame, wanted.Width);
+                data = sourceSpans.Count > 1
+                    ? WavPeakReader.ReadVirtualRange(sourceSpans, startFrame, endFrame, peakCount)
+                    : WavPeakReader.ReadRange(info, startFrame, endFrame, peakCount);
             }
             catch
             {
@@ -4680,27 +4895,60 @@ internal sealed class WaveformView : Control
                 return;
             }
 
+            ApplyPeakPyramidOnUi(generation, pyramid);
+        });
+    }
+
+    /// <summary>複数波形の仮想タイムライン向けピーク階層を背景構築する。</summary>
+    private void StartPeakPyramidBuildFromSpans(IReadOnlyList<WaveformSourceSpan> spans)
+    {
+        _peakPyramid = null;
+        var generation = ++_pyramidGeneration;
+        if (spans.Count == 0)
+        {
+            return;
+        }
+
+        // BeginInvoke 後も壊れないようスナップショットを渡す
+        var spansCopy = spans.ToArray();
+        Task.Run(() =>
+        {
+            WavPeakPyramid pyramid;
             try
             {
-                BeginInvoke(() =>
-                {
-                    if (generation != _pyramidGeneration || IsDisposed)
-                    {
-                        return;
-                    }
-
-                    _peakPyramid = pyramid;
-                    // 初回表示は概要の間引きピークのまま焼き付いていることがある。
-                    // 階層完成後に再構築しないと、初回ズーム時に初めて真のピークへ切り替わり
-                    // 「縦が少し大きくなった」ように見える。
-                    RebuildPresentationLayers(clearDetailPeaks: true);
-                });
+                pyramid = WavPeakPyramid.BuildFromSpans(spansCopy);
             }
-            catch (InvalidOperationException)
+            catch
             {
-                // ハンドル破棄後などは無視（次回 SetPreview で再構築）
+                return;
             }
+
+            ApplyPeakPyramidOnUi(generation, pyramid);
         });
+    }
+
+    private void ApplyPeakPyramidOnUi(int generation, WavPeakPyramid pyramid)
+    {
+        try
+        {
+            BeginInvoke(() =>
+            {
+                if (generation != _pyramidGeneration || IsDisposed)
+                {
+                    return;
+                }
+
+                _peakPyramid = pyramid;
+                // 初回表示は概要の間引きピークのまま焼き付いていることがある。
+                // 階層完成後に再構築しないと、初回ズーム時に初めて真のピークへ切り替わり
+                // 「縦が少し大きくなった」ように見える。
+                RebuildPresentationLayers(clearDetailPeaks: true);
+            });
+        }
+        catch (InvalidOperationException)
+        {
+            // ハンドル破棄後などは無視（次回 SetPreview で再構築）
+        }
     }
 
     private void DrawRegionBackgrounds(Graphics g, Rectangle wave)

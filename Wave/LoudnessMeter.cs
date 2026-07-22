@@ -49,11 +49,18 @@ internal static class LoudnessMeter
         var loudnessByPart = new Dictionary<int, double>(parts.Count);
         foreach (var part in parts)
         {
+            var partSource = part.ResolveSourcePath(sourcePath);
+            var localStart = part.ResolveLocalStart();
+            var localEnd = part.ResolveLocalEnd();
+            var partInfo = part.HasDedicatedSource
+                ? WavFileInfo.Read(partSource)
+                : info;
+
             var lkfs = MeasureIntegratedLkfs(
-                sourcePath,
-                info,
-                part.StartSampleOffset,
-                part.EndSampleOffset);
+                partSource,
+                partInfo,
+                localStart,
+                localEnd);
             loudnessByPart[part.Number] = lkfs;
             log?.Invoke(
                 double.IsInfinity(lkfs)

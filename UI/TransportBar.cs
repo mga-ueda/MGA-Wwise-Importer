@@ -48,6 +48,7 @@ internal sealed class TransportBar : UserControl
     private TransportIconButton? _heldButton;
     private bool _repeatStarted;
     private bool _waveOnlyViewStepTips;
+    private bool _waveOnlyMarkerTips;
 
     public TransportBar()
     {
@@ -151,7 +152,8 @@ internal sealed class TransportBar : UserControl
         bool jumpToBarEnabled,
         bool previousNextBarEnabled,
         bool playlistNavigationEnabled,
-        bool waveOnlyViewStepTips = false)
+        bool waveOnlyViewStepTips = false,
+        bool waveOnlyMarkerTips = false)
     {
         SetCommandEnabled(TransportCommand.JumpToBar, jumpToBarEnabled);
         SetCommandEnabled(TransportCommand.PreviousBar, previousNextBarEnabled);
@@ -159,12 +161,14 @@ internal sealed class TransportBar : UserControl
         SetCommandEnabled(TransportCommand.PreviousPlaylist, playlistNavigationEnabled);
         SetCommandEnabled(TransportCommand.NextPlaylist, playlistNavigationEnabled);
 
-        if (_waveOnlyViewStepTips == waveOnlyViewStepTips)
+        if (_waveOnlyViewStepTips == waveOnlyViewStepTips
+            && _waveOnlyMarkerTips == waveOnlyMarkerTips)
         {
             return;
         }
 
         _waveOnlyViewStepTips = waveOnlyViewStepTips;
+        _waveOnlyMarkerTips = waveOnlyMarkerTips;
         ApplyLocalizedToolTips();
     }
 
@@ -183,7 +187,10 @@ internal sealed class TransportBar : UserControl
         _toolTip.ApplyTheme();
         foreach (var (command, button) in _commandButtons)
         {
-            var tip = UiStrings.TipForTransportCommand(command, _waveOnlyViewStepTips);
+            var tip = UiStrings.TipForTransportCommand(
+                command,
+                _waveOnlyViewStepTips,
+                _waveOnlyMarkerTips);
             button.AccessibleName = tip;
             _toolTip.SetToolTip(button, tip);
         }
@@ -426,7 +433,10 @@ internal sealed class TransportBar : UserControl
         TransportIconButton? first = null;
         foreach (var definition in definitions)
         {
-            var tip = UiStrings.TipForTransportCommand(definition.Command, _waveOnlyViewStepTips);
+            var tip = UiStrings.TipForTransportCommand(
+                definition.Command,
+                _waveOnlyViewStepTips,
+                _waveOnlyMarkerTips);
             var button = new TransportIconButton(definition.Icon)
             {
                 AccessibleName = tip,

@@ -205,6 +205,7 @@ internal static class WaveOnlyModeProcessor
     /// モード A: マーカー位置で波形を区切り、特殊コメントからリージョンを作る。
     /// <list type="bullet">
     /// <item>マーカーが無い → 全体を 1 リージョン（冒頭 Entry Cue / 末尾 Exit Cue）。</item>
+    /// <item>マーカーはあるが特殊コメントも 2 点特例も無い → 同上（マーカーは表示・編集用）。</item>
     /// <item>マーカーがちょうど 2 つで、まだ <c>-L</c>/<c>-R</c>/<c>-E</c>/<c>-A</c> が無い → その間を <c>-L</c> 範囲とする。</item>
     /// <item>コメントが <c>-L</c> のみ → 次マーカー（または終端）まで無限ループ。</item>
     /// <item>コメントに <c>Loop</c> を含む → <c>-L</c> と同等。2 つある場合はその間をループ範囲とする（奇数個の余りは単独 <c>-L</c>）。</item>
@@ -213,6 +214,11 @@ internal static class WaveOnlyModeProcessor
     /// <item>コメントが <c>-A</c> のみ → 次マーカー（または終端）まで Entry Cue 前（アウフタクト）。</item>
     /// </list>
     /// 既存仕様と同様、連続 <c>-L</c> の直後（接尾辞なし）には自動で Exit 用 <c>-E</c> 接尾辞を付ける。
+    /// <para>
+    /// 「マーカー 2 つ」判定の範囲は、呼び出し側が渡す <paramref name="markers"/> と
+    /// <paramref name="frameCount"/> が決める。単体波形では波形全体、
+    /// 複数波形では 1 プレイリスト（ファイル区間）ごとに呼ぶこと。
+    /// </para>
     /// </summary>
     public static IReadOnlyList<WaveformRegionMark> BuildRegionsFromMarkers(
         IReadOnlyList<WaveformMarkerMark> markers,
@@ -299,7 +305,10 @@ internal static class WaveOnlyModeProcessor
             && exitStartSamples.Count == 0
             && anacrusisStartSamples.Count == 0)
         {
-            return [];
+            // 特殊コメント無しのマーカーは表示・編集用。出力はマーカー無しと同様に全体 1 リージョン。
+            return frameCount < 2
+                ? []
+                : [new WaveformRegionMark(0, frameCount)];
         }
 
         // 特殊コメントがあるとき全区間を隣接リージョン化する（自動 Exit -E のため）。

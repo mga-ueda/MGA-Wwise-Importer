@@ -12,6 +12,11 @@ internal sealed class LastWaveSessionState
 {
     public string WavePath { get; set; } = string.Empty;
 
+    /// <summary>
+    /// 複数波形モード時の全ソース WAV（順序付き）。空なら <see cref="WavePath"/> のみ（旧サイドカー互換）。
+    /// </summary>
+    public List<string> WavePaths { get; set; } = [];
+
     public List<LastWavePartSignature> Parts { get; set; } = [];
 
     /// <summary>パート番号 → グループ ID。</summary>
@@ -102,11 +107,14 @@ internal sealed class LastWaveSessionState
         IReadOnlyDictionary<int, double> partGroupFadeInSeconds,
         IReadOnlyDictionary<int, double> partGroupFadeOutSeconds,
         IReadOnlyList<WaveformMarkerMark>? waveOnlySessionMarkers = null,
-        IReadOnlyList<RegionEdgeFade>? regionEdgeFades = null)
+        IReadOnlyList<RegionEdgeFade>? regionEdgeFades = null,
+        IReadOnlyList<string>? wavePaths = null)
     {
+        var normalizedPaths = NormalizeWavePaths(wavePaths, wavePath);
         return new LastWaveSessionState
         {
-            WavePath = NormalizePath(wavePath),
+            WavePath = normalizedPaths.Count > 0 ? normalizedPaths[0] : NormalizePath(wavePath),
+            WavePaths = normalizedPaths.Count > 1 ? normalizedPaths.ToList() : [],
             Parts = parts
                 .Select(part => new LastWavePartSignature
                 {
@@ -173,6 +181,98 @@ internal sealed class LastWaveSessionState
                 .ThenBy(fade => fade.OutSample)
                 .ToList(),
         };
+    }
+
+    /// <summary>保存済みの波形パス一覧（複数優先、なければ <see cref="WavePath"/>）。</summary>
+    public IReadOnlyList<string> GetWavePaths() => NormalizeWavePaths(WavePaths, WavePath);
+
+    public bool MatchesLoadedWave(WaveformPreviewData preview)
+    {
+        var saved = GetWavePaths();
+        var loaded = GetLoadedWavePaths(preview);
+        return WavePathsEqual(saved, loaded);
+    }
+
+    public static IReadOnlyList<string> GetLoadedWavePaths(WaveformPreviewData preview)
+    {
+        if (preview.IsMultiWaveOnly)
+        {
+            return preview.SourceSpans
+                .Select(span => NormalizePath(span.Path))
+                .Where(path => path.Length > 0)
+                .ToArray();
+        }
+
+        var single = NormalizePath(preview.SourcePath);
+        return string.IsNullOrWhiteSpace(single) ? [] : [single];
+    }
+
+    public static bool WavePathsEqual(
+        IReadOnlyList<string> left,
+        IReadOnlyList<string> right)
+    {
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Count; i++)
+        {
+            if (!string.Equals(left[i], right[i], StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public static string JoinWavePathsForIni(IReadOnlyList<string> paths) =>
+        string.Join("|", NormalizeWavePaths(paths, primaryPath: null));
+
+    public static IReadOnlyList<string> SplitWavePathsFromIni(string? joined) =>
+        string.IsNullOrWhiteSpace(joined)
+            ? []
+            : NormalizeWavePaths(
+                joined.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                primaryPath: null);
+
+    private static IReadOnlyList<string> NormalizeWavePaths(
+        IReadOnlyList<string>? wavePaths,
+        string? primaryPath)
+    {
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Add(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            var normalized = NormalizePath(path);
+            if (normalized.Length == 0 || !seen.Add(normalized))
+            {
+                return;
+            }
+
+            result.Add(normalized);
+        }
+
+        if (wavePaths is not null)
+        {
+            foreach (var path in wavePaths)
+            {
+                Add(path);
+            }
+        }
+
+        if (result.Count == 0)
+        {
+            Add(primaryPath);
+        }
+
+        return result;
     }
 
     public static string NormalizePath(string path)

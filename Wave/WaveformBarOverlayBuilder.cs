@@ -72,14 +72,51 @@ internal readonly record struct WaveformRegionMark(
 /// 連続する着色リージョンをまとめた、1 つの出力波形ファイル候補（表示用の計画ラベル）。
 /// </summary>
 /// <param name="Number">1 始まりの通し（ファイル名の _n）。</param>
-/// <param name="StartSampleOffset">開始サンプル（含む）。</param>
-/// <param name="EndSampleOffset">終了サンプル（含まない）。</param>
+/// <param name="StartSampleOffset">開始サンプル（含む）。仮想タイムライン座標。</param>
+/// <param name="EndSampleOffset">終了サンプル（含まない）。仮想タイムライン座標。</param>
 /// <param name="FileName">例: a_1.wav（ディレクトリ無し）。</param>
+/// <param name="SourcePath">
+/// 切り出し元 WAV。空ならプレビューの単一 <c>SourcePath</c> を使う（単体／XML 互換）。
+/// </param>
+/// <param name="LocalStartSample">
+/// ソース WAV ローカル開始。負なら <see cref="StartSampleOffset"/> をローカルとみなす。
+/// </param>
+/// <param name="LocalEndSample">
+/// ソース WAV ローカル終了（含まない）。負なら <see cref="EndSampleOffset"/> をローカルとみなす。
+/// </param>
 internal readonly record struct WaveformOutputPart(
     int Number,
     long StartSampleOffset,
     long EndSampleOffset,
-    string FileName);
+    string FileName,
+    string SourcePath = "",
+    long LocalStartSample = -1,
+    long LocalEndSample = -1)
+{
+    /// <summary>パート固有のソースとローカル範囲が付いているか。</summary>
+    public bool HasDedicatedSource =>
+        !string.IsNullOrEmpty(SourcePath)
+        && LocalStartSample >= 0
+        && LocalEndSample > LocalStartSample;
+
+    public string ResolveSourcePath(string fallback) =>
+        string.IsNullOrEmpty(SourcePath) ? fallback : SourcePath;
+
+    public long ResolveLocalStart() => HasDedicatedSource ? LocalStartSample : StartSampleOffset;
+
+    public long ResolveLocalEnd() => HasDedicatedSource ? LocalEndSample : EndSampleOffset;
+
+    /// <summary>仮想タイムライン座標 → ソースローカル座標。</summary>
+    public long VirtualToLocal(long virtualSample)
+    {
+        if (!HasDedicatedSource)
+        {
+            return virtualSample;
+        }
+
+        return virtualSample - (StartSampleOffset - LocalStartSample);
+    }
+}
 
 /// <summary>Wwise に作られる予定の Music Segment 名と、ソース波形上の範囲。</summary>
 /// <param name="Name">例: song_a / part_1_a。</param>

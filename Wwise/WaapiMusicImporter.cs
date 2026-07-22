@@ -543,15 +543,27 @@ internal static class WaapiMusicImporter
                         $"{track.Name}.wav",
                         usedFileNames);
                     var dest = Path.Combine(outputDirectory, fileName);
+
+                    var sliceSourcePath = part.ResolveSourcePath(sourceWavPath);
+                    var localStart = part.VirtualToLocal(startSample);
+                    var localEnd = part.VirtualToLocal(endSample);
+                    var sliceInfo = part.HasDedicatedSource
+                        ? WavFileInfo.Read(sliceSourcePath)
+                        : wavInfo;
+                    var sliceBlockAlign = sliceInfo.BlockAlign != 0
+                        ? sliceInfo.BlockAlign
+                        : blockAlign;
+                    var localFades = RemapFadesToLocal(regionEdgeFades, part);
+
                     WriteSegmentSafely(
-                        sourceWavPath,
+                        sliceSourcePath,
                         dest,
-                        startSample,
-                        endSample,
-                        blockAlign,
+                        localStart,
+                        localEnd,
+                        sliceBlockAlign,
                         gain,
-                        wavInfo,
-                        regionEdgeFades);
+                        sliceInfo,
+                        localFades);
                     map[TrackSliceKey(segment.Name, track.Name)] = dest;
                     log(Math.Abs(gain - 1f) < 0.000001f
                         ? UiStrings.LogWavSliceWritten(fileName)
@@ -561,6 +573,40 @@ internal static class WaapiMusicImporter
         }
 
         return map;
+    }
+
+    private static IReadOnlyList<RegionEdgeFade>? RemapFadesToLocal(
+        IReadOnlyList<RegionEdgeFade>? regionEdgeFades,
+        WaveformOutputPart part)
+    {
+        if (regionEdgeFades is null || regionEdgeFades.Count == 0 || !part.HasDedicatedSource)
+        {
+            return regionEdgeFades;
+        }
+
+        var offset = part.StartSampleOffset - part.LocalStartSample;
+        if (offset == 0)
+        {
+            return regionEdgeFades;
+        }
+
+        var remapped = new List<RegionEdgeFade>(regionEdgeFades.Count);
+        foreach (var fade in regionEdgeFades)
+        {
+            remapped.Add(fade with
+            {
+                InSample = fade.InSample - offset,
+                OutSample = fade.OutSample - offset,
+                FadeInEndSample = fade.FadeInEndSample is long fadeIn
+                    ? fadeIn - offset
+                    : null,
+                FadeOutStartSample = fade.FadeOutStartSample is long fadeOut
+                    ? fadeOut - offset
+                    : null,
+            });
+        }
+
+        return remapped;
     }
 
     private static void WriteSegmentSafely(
