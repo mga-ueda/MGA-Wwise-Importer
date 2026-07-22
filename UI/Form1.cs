@@ -86,6 +86,11 @@ public partial class Form1 : Form, IMessageFilter
     private bool _suppressProjectUiEvents;
     private string _projectOutputDirectory = string.Empty;
     private string _lastWavePath = string.Empty;
+    /// <summary>
+    /// いまの作業中に実際に読み込んだ直前の波形パス。
+    /// フェード等の復元可否はプロジェクトの LastWavePath ではなくこれとの一致で決める。
+    /// </summary>
+    private string _sessionLoadedWavePath = string.Empty;
     private WaapiProbeResult? _waapiLastResult;
     private string _waapiLoggedSelectionPath = string.Empty;
     private string _lastLoggedPreflightKey = string.Empty;
@@ -2739,6 +2744,7 @@ public partial class Form1 : Form, IMessageFilter
         _sourceBaseNameOverride = null;
         _lastPlaybackStartProgress = null;
         _lastInputFiles = [];
+        _sessionLoadedWavePath = string.Empty;
         reloadButton.Enabled = false;
         markerOptionsPanel.SetMarkerPlacementOptionsEnabled(true);
         UpdateWaveOnlyExitSourceOptionsEnabled();
@@ -3734,7 +3740,8 @@ public partial class Form1 : Form, IMessageFilter
         _populatingPlaylistChoices = true;
         try
         {
-            DisposePlaylistChoiceControls();
+            // ボタン再生成のみ。フェード／グループ等のセッション記憶は消さない。
+            DisposePlaylistChoiceControls(clearSessionMemory: false);
 
             if (parts.Count == 0)
             {
@@ -3822,7 +3829,8 @@ public partial class Form1 : Form, IMessageFilter
         _populatingPlaylistChoices = true;
         try
         {
-            DisposePlaylistChoiceControls();
+            // 波形卸し／読込失敗など、一覧ごと捨てるときはセッション記憶も消す。
+            DisposePlaylistChoiceControls(clearSessionMemory: true);
             AddPlaylistStatusLabel(message);
         }
         finally
@@ -3833,7 +3841,11 @@ public partial class Form1 : Form, IMessageFilter
         }
     }
 
-    private void DisposePlaylistChoiceControls()
+    /// <param name="clearSessionMemory">
+    /// true: 無効化／グループ／トランジション設定も捨てる（波形クリア・読込開始時）。
+    /// false: UI コントロールだけ作り直す（復元後の再描画・マーカー編集後など）。
+    /// </param>
+    private void DisposePlaylistChoiceControls(bool clearSessionMemory)
     {
         _automaticPlaylistPlayback = false;
         _activeAutomaticPlaylistPartNumber = null;
@@ -3842,9 +3854,13 @@ public partial class Form1 : Form, IMessageFilter
         _hoveredPlaylistPartNumber = null;
         _hoveredPlaylistListPartNumber = null;
         _lastAutoScrolledPlaylistPartNumber = null;
-        ClearPlaylistDisableState();
-        ClearPlaylistGroupState();
-        ClearPlaylistTransitionSettingsState();
+        if (clearSessionMemory)
+        {
+            ClearPlaylistDisableState();
+            ClearPlaylistGroupState();
+            ClearPlaylistTransitionSettingsState();
+        }
+
         ClearPlaylistTransitionGlow();
         waveformView.SetPlaylistHoverHighlight(null);
         var controls = playlistListLayout.Controls.Cast<Control>().ToArray();
@@ -6029,6 +6045,8 @@ public partial class Form1 : Form, IMessageFilter
         }
 
         var exportGeneration = ++_exportGeneration;
+        // 直前に実際に読み込んでいた波形（プロジェクトの LastWavePath は使わない）。
+        var previousWavePath = _sessionLoadedWavePath;
         var loadMessage = isLastSessionLoad ? UiStrings.OverlayLoadingLastSession : UiStrings.OverlayLoading;
         // 起動中すりガラスが既にあればスナップショットは維持し、メッセージだけ差し替える。
         SetUiInteractionLocked(UiInteractionLock.Load, locked: true, loadMessage);
@@ -6041,6 +6059,9 @@ public partial class Form1 : Form, IMessageFilter
             _previewSession = null;
             _waveOnlyMarkerHistory.Clear();
             _exportBusy = false;
+            // パート未設定時のグループ内フェード仮値は波形を跨いで残さない。
+            _playlistGroupFadeInSeconds = 0d;
+            _playlistGroupFadeOutSeconds = 0d;
             UpdateTransportPosition();
             ClearPendingPlaylistUiTransition();
             ClearPlaylistChoices(UiStrings.PlaylistLoading);
@@ -6137,19 +6158,34 @@ public partial class Form1 : Form, IMessageFilter
         waveformView.SetPlayhead(0, recordTrail: false);
 
         _loadedPreview = preview;
-        _lastWavePath = Path.GetFullPath(preview.SourcePath);
+        var loadedWavePath = Path.GetFullPath(preview.SourcePath);
+        // 初回（直前なし）はサイドカー復元可。直前があり別パスなら破棄のまま復元しない。
+        var sameAsPreviousWave = string.IsNullOrWhiteSpace(previousWavePath)
+            || string.Equals(
+                LastWaveSessionState.NormalizePath(previousWavePath),
+                LastWaveSessionState.NormalizePath(loadedWavePath),
+                StringComparison.OrdinalIgnoreCase);
+        _lastWavePath = loadedWavePath;
+        _sessionLoadedWavePath = loadedWavePath;
         PersistLastWavePathToProject();
         markerOptionsPanel.SetMarkerPlacementOptionsEnabled(!preview.AllowsSessionMarkerEdit);
         UpdateWaveOnlyExitSourceOptionsEnabled();
 
         UpdateTransportPosition();
         PopulatePlaylistChoices(_previewSession.EffectiveOutputParts);
-        TryRestoreLastWaveSession(preview);
+        // 直前と同じ波形の再ドロップ／Reload だけ復元。一度でも別波形なら破棄のまま。
+        if (sameAsPreviousWave)
+        {
+            TryRestoreLastWaveSession(preview);
+        }
+
         if (_previewSession is { AllowsSessionMarkerEdit: true } waveOnlySession)
         {
+            // 復元済みのフェード／グループは Populate(clearSessionMemory: false) で残る。
             ApplyWaveOnlySessionPresentation(waveOnlySession);
         }
 
+        // 別波形なら空セッションでサイドカーを置き換え、以降も復元しない。
         PersistLastWaveSessionIfPossible();
         WritePlaybackDiagnostic(
             "source.loaded",
@@ -7541,12 +7577,16 @@ public partial class Form1 : Form, IMessageFilter
             return false;
         }
 
+        var beforeParts = session.EffectiveOutputParts.ToArray();
         if (!session.TryReplaceWaveOnlySessionMarkers(restored))
         {
             return false;
         }
 
-        ApplyWaveOnlySessionPresentation(session);
+        // マーカー Undo 専用。パート構成が変わったときだけ Playlist UI を作り直す。
+        ApplyWaveOnlySessionPresentation(
+            session,
+            refreshPlaylists: !AreOutputPartsEquivalent(beforeParts, session.EffectiveOutputParts));
         waveformView.SetSelectedMarkerSampleOffset(null);
         PersistLastWaveSessionIfPossible();
         WritePlaybackDiagnostic(
@@ -7569,12 +7609,15 @@ public partial class Form1 : Form, IMessageFilter
             return false;
         }
 
+        var beforeParts = session.EffectiveOutputParts.ToArray();
         if (!session.TryReplaceWaveOnlySessionMarkers(restored))
         {
             return false;
         }
 
-        ApplyWaveOnlySessionPresentation(session);
+        ApplyWaveOnlySessionPresentation(
+            session,
+            refreshPlaylists: !AreOutputPartsEquivalent(beforeParts, session.EffectiveOutputParts));
         waveformView.SetSelectedMarkerSampleOffset(null);
         PersistLastWaveSessionIfPossible();
         WritePlaybackDiagnostic(
