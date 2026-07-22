@@ -16,13 +16,26 @@ internal enum WaveOnlyMode
     Regions,
 }
 
-/// <summary>Wave 単体モードの判定と、モード A（マーカーのみ）の表示データ構築。</summary>
+/// <summary>Wave 単体モードの判定と、マーカーのみ／smpl ループの表示データ構築。</summary>
 internal static class WaveOnlyModeProcessor
 {
     private const string LoopKeyword = "Loop";
 
     /// <summary>埋め込みマーカーコメントの自動／手動リネーム 1 件。</summary>
     internal readonly record struct MarkerCommentRename(string FromComment, string ToComment);
+
+    /// <summary>smpl モードで破棄した埋め込みマーカー／リージョン 1 件。</summary>
+    internal readonly record struct DiscardedEmbeddedMark(
+        string Kind,
+        long SampleOffset,
+        string Comment);
+
+    /// <summary>smpl ループから構築したマーカーと、破棄した埋め込みの一覧。</summary>
+    internal readonly record struct SmplLoopBuildResult(
+        IReadOnlyList<WaveformMarkerMark> Markers,
+        int AcceptedLoopCount,
+        int SkippedLoopCount,
+        IReadOnlyList<DiscardedEmbeddedMark> DiscardedMarks);
 
     public static WaveOnlyMode Resolve(WavEmbeddedMarkerInfo embedded)
     {
@@ -117,6 +130,75 @@ internal static class WaveOnlyModeProcessor
         }
 
         return markers;
+    }
+
+    /// <summary>
+    /// モード B: smpl ループの Start / End を <c>-L</c> / <c>-E</c> マーカーへ差し替える。
+    /// cue / adtl の単発マーカーとリージョンはすべて破棄対象として返す（表示・出力には使わない）。
+    /// </summary>
+    public static SmplLoopBuildResult BuildMarkersFromSmplLoops(
+        WavEmbeddedMarkerInfo embedded,
+        long frameCount)
+    {
+        var discarded = new List<DiscardedEmbeddedMark>(
+            embedded.PointMarkers.Count + embedded.Regions.Count);
+        foreach (var point in embedded.PointMarkers)
+        {
+            discarded.Add(new DiscardedEmbeddedMark(
+                "marker",
+                point.SampleOffset,
+                point.DisplayComment));
+        }
+
+        foreach (var region in embedded.Regions)
+        {
+            var comment = region.Note.Trim();
+            if (comment.Length == 0)
+            {
+                comment = region.Label.Trim();
+            }
+
+            discarded.Add(new DiscardedEmbeddedMark(
+                "region",
+                region.StartSampleOffset,
+                comment));
+        }
+
+        if (frameCount <= 0 || embedded.SmplLoops.Count == 0)
+        {
+            return new SmplLoopBuildResult([], 0, embedded.SmplLoops.Count, discarded);
+        }
+
+        var markers = new List<WaveformMarkerMark>();
+        var accepted = 0;
+        var skipped = 0;
+        foreach (var loop in embedded.SmplLoops)
+        {
+            long start = loop.StartSample;
+            long end = loop.EndSample;
+            if (end <= start
+                || start < 0
+                || end < 0
+                || start >= frameCount
+                || end >= frameCount)
+            {
+                skipped++;
+                continue;
+            }
+
+            markers.Add(new WaveformMarkerMark(
+                start,
+                WaveformRegionBuilder.LoopLeftSuffix,
+                IsFromWaveEmbedded: true));
+            markers.Add(new WaveformMarkerMark(
+                end,
+                WaveformRegionBuilder.LoopEndSuffix,
+                IsFromWaveEmbedded: true));
+            accepted++;
+        }
+
+        markers.Sort((a, b) => a.SampleOffset.CompareTo(b.SampleOffset));
+        return new SmplLoopBuildResult(markers, accepted, skipped, discarded);
     }
 
     /// <summary>

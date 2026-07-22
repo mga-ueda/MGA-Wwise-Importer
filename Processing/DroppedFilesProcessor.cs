@@ -124,16 +124,35 @@ internal static class DroppedFilesProcessor
                 sb.AppendLine(UiStrings.LogWaveOnlyHeader);
                 sb.AppendLine(UiStrings.LogWaveOnlyModeName(waveOnlyMode));
 
-                if (waveOnlyMode == WaveOnlyMode.MarkersOnly)
+                if (waveOnlyMode == WaveOnlyMode.MarkersOnly
+                    || waveOnlyMode == WaveOnlyMode.SmplLoop)
                 {
-                    markers = WaveOnlyModeProcessor.BuildMarkersOnly(embedded, wavInfo.FrameCount);
-                    var sessionMarkers = markers.ToList();
                     var materializeRenames = new List<WaveOnlyModeProcessor.MarkerCommentRename>();
-                    WaveOnlyModeProcessor.TryMaterializeImplicitLoopComments(
-                        sessionMarkers,
-                        wavInfo.FrameCount,
-                        renames: materializeRenames);
-                    markers = sessionMarkers;
+
+                    if (waveOnlyMode == WaveOnlyMode.MarkersOnly)
+                    {
+                        markers = WaveOnlyModeProcessor.BuildMarkersOnly(embedded, wavInfo.FrameCount);
+                        var sessionMarkers = markers.ToList();
+                        WaveOnlyModeProcessor.TryMaterializeImplicitLoopComments(
+                            sessionMarkers,
+                            wavInfo.FrameCount,
+                            renames: materializeRenames);
+                        markers = sessionMarkers;
+                        sb.AppendLine(UiStrings.LogWaveOnlyMarkersOnlySummary(markers.Count));
+                    }
+                    else
+                    {
+                        var smplBuild = WaveOnlyModeProcessor.BuildMarkersFromSmplLoops(
+                            embedded,
+                            wavInfo.FrameCount);
+                        markers = smplBuild.Markers;
+                        sb.AppendLine(
+                            UiStrings.LogWaveOnlySmplLoopSummary(
+                                smplBuild.AcceptedLoopCount,
+                                smplBuild.SkippedLoopCount));
+                        AppendDiscardedEmbeddedMarks(sb, smplBuild.DiscardedMarks);
+                    }
+
                     regions = WaveOnlyModeProcessor.BuildRegionsFromMarkers(
                         markers,
                         wavInfo.FrameCount);
@@ -143,7 +162,6 @@ internal static class DroppedFilesProcessor
                     }
 
                     allowsSessionMarkerEdit = true;
-                    sb.AppendLine(UiStrings.LogWaveOnlyMarkersOnlySummary(markers.Count));
                     foreach (var rename in materializeRenames)
                     {
                         sb.AppendLine(
@@ -151,40 +169,8 @@ internal static class DroppedFilesProcessor
                                 rename.FromComment,
                                 rename.ToComment));
                     }
-                    var loopRegionCount = markers.Count == 2
-                        ? 1
-                        : markers.Count(marker =>
-                            WaveOnlyModeProcessor.IsLoopRelatedComment(marker.Comment));
-                    if (loopRegionCount > 0)
-                    {
-                        sb.AppendLine(UiStrings.LogWaveOnlyLoopRegions(loopRegionCount));
-                    }
 
-                    var removeRegionCount = markers.Count(marker =>
-                        WaveOnlyModeProcessor.IsRemoveOnlyComment(marker.Comment));
-                    if (removeRegionCount > 0)
-                    {
-                        sb.AppendLine(UiStrings.LogWaveOnlyRemoveRegions(removeRegionCount));
-                    }
-
-                    var exitRegionCount = markers.Count(marker =>
-                        WaveOnlyModeProcessor.IsExitOnlyComment(marker.Comment));
-                    if (exitRegionCount > 0)
-                    {
-                        sb.AppendLine(UiStrings.LogWaveOnlyExitRegions(exitRegionCount));
-                    }
-
-                    var anacrusisRegionCount = markers.Count(marker =>
-                        WaveOnlyModeProcessor.IsAnacrusisOnlyComment(marker.Comment));
-                    if (anacrusisRegionCount > 0)
-                    {
-                        sb.AppendLine(UiStrings.LogWaveOnlyAnacrusisRegions(anacrusisRegionCount));
-                    }
-
-                    if (outputParts.Count > 0)
-                    {
-                        sb.AppendLine(UiStrings.LogWaveOnlyOutputParts(outputParts.Count));
-                    }
+                    AppendWaveOnlyRegionSummary(sb, markers, outputParts.Count);
                 }
                 else
                 {
@@ -261,6 +247,67 @@ internal static class DroppedFilesProcessor
         catch (Exception ex)
         {
             AppendError(sb, wavPath, ex);
+        }
+    }
+
+    private static void AppendWaveOnlyRegionSummary(
+        StringBuilder sb,
+        IReadOnlyList<WaveformMarkerMark> markers,
+        int outputPartCount)
+    {
+        var loopRegionCount = markers.Count == 2
+            ? 1
+            : markers.Count(marker =>
+                WaveOnlyModeProcessor.IsLoopRelatedComment(marker.Comment));
+        if (loopRegionCount > 0)
+        {
+            sb.AppendLine(UiStrings.LogWaveOnlyLoopRegions(loopRegionCount));
+        }
+
+        var removeRegionCount = markers.Count(marker =>
+            WaveOnlyModeProcessor.IsRemoveOnlyComment(marker.Comment));
+        if (removeRegionCount > 0)
+        {
+            sb.AppendLine(UiStrings.LogWaveOnlyRemoveRegions(removeRegionCount));
+        }
+
+        var exitRegionCount = markers.Count(marker =>
+            WaveOnlyModeProcessor.IsExitOnlyComment(marker.Comment));
+        if (exitRegionCount > 0)
+        {
+            sb.AppendLine(UiStrings.LogWaveOnlyExitRegions(exitRegionCount));
+        }
+
+        var anacrusisRegionCount = markers.Count(marker =>
+            WaveOnlyModeProcessor.IsAnacrusisOnlyComment(marker.Comment));
+        if (anacrusisRegionCount > 0)
+        {
+            sb.AppendLine(UiStrings.LogWaveOnlyAnacrusisRegions(anacrusisRegionCount));
+        }
+
+        if (outputPartCount > 0)
+        {
+            sb.AppendLine(UiStrings.LogWaveOnlyOutputParts(outputPartCount));
+        }
+    }
+
+    private static void AppendDiscardedEmbeddedMarks(
+        StringBuilder sb,
+        IReadOnlyList<WaveOnlyModeProcessor.DiscardedEmbeddedMark> discardedMarks)
+    {
+        if (discardedMarks.Count == 0)
+        {
+            return;
+        }
+
+        sb.AppendLine(UiStrings.LogWaveOnlyDiscardedEmbeddedSummary(discardedMarks.Count));
+        foreach (var mark in discardedMarks)
+        {
+            sb.AppendLine(
+                UiStrings.LogWaveOnlyDiscardedEmbeddedItem(
+                    mark.Kind,
+                    mark.SampleOffset,
+                    mark.Comment));
         }
     }
 

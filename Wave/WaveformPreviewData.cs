@@ -34,7 +34,7 @@ internal sealed class WaveformPreviewData
     public IReadOnlyList<WaveformOutputPart> OutputParts { get; }
 
     /// <summary>
-    /// Wave 単体・マーカーのみ／無しモードで、アプリ上のマーカー編集（コメント／削除）を許す。
+    /// Wave 単体（マーカーのみ／無し、または smpl ループ）で、アプリ上のマーカー編集（コメント／削除）を許す。
     /// WAV ファイル自体は書き換えない。
     /// </summary>
     public bool AllowsSessionMarkerEdit { get; }

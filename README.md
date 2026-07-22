@@ -237,8 +237,8 @@ csproj の `<Version>`（SemVer）を表示・比較・GitHub タグ照合に共
 
 | 項目 | 場所 | 例 |
 |------|------|------|
-| 版番号 | csproj の `<Version>`（Metadata `AppVersion` / `InformationalVersion`） | `1.0.3-beta` |
-| GitHub | Release タグ（先頭 `v` 可） | `v1.0.3-beta` |
+| 版番号 | csproj の `<Version>`（Metadata `AppVersion` / `InformationalVersion`） | `1.0.4-beta` |
+| GitHub | Release タグ（先頭 `v` 可） | `v1.0.4-beta` |
 
 起動時に GitHub Releases を照合し、新しい版があればログ（オレンジ）とダイアログで案内します（自動ダウンロードなし。「後で」でその版の再案内をスキップ）。リリース時は **csproj の Version とタグを一致**させてください。
 

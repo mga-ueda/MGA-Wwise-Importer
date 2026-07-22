@@ -1194,6 +1194,52 @@ internal static class UiStrings
             "Message : Showing embedded markers ({0}).",
             markerCount);
 
+    public static string LogWaveOnlySmplLoopSummary(int acceptedLoopCount, int skippedLoopCount)
+    {
+        if (acceptedLoopCount == 0 && skippedLoopCount == 0)
+        {
+            return Get(
+                "Message : smpl ループはありません。",
+                "Message : No smpl loops.");
+        }
+
+        if (skippedLoopCount == 0)
+        {
+            return Format(
+                "Message : smpl ループの Start / End を -L / -E マーカーへ差し替えました（ループ {0} 件）。",
+                "Message : Replaced smpl loop Start / End with -L / -E markers ({0} loop(s)).",
+                acceptedLoopCount);
+        }
+
+        return Format(
+            "Message : smpl ループの Start / End を -L / -E マーカーへ差し替えました（採用 {0} 件、範囲外／無効でスキップ {1} 件）。",
+            "Message : Replaced smpl loop Start / End with -L / -E markers ({0} accepted, {1} skipped as out of range / invalid).",
+            acceptedLoopCount,
+            skippedLoopCount);
+    }
+
+    public static string LogWaveOnlyDiscardedEmbeddedSummary(int count) => Format(
+        "Message : smpl ループ以外の埋め込みマーカー類を破棄しました（{0} 件）。",
+        "Message : Discarded embedded markers other than smpl loops ({0}).",
+        count);
+
+    public static string LogWaveOnlyDiscardedEmbeddedItem(
+        string kind,
+        long sampleOffset,
+        string comment)
+    {
+        var kindLabel = kind.Equals("region", StringComparison.OrdinalIgnoreCase)
+            ? Get("リージョン", "region")
+            : Get("マーカー", "marker");
+        var name = FormatMarkerNameForLog(comment);
+        return Format(
+            "  - 破棄 {0} sample={1:N0} 「{2}」",
+            "  - Discarded {0} sample={1:N0} “{2}”",
+            kindLabel,
+            sampleOffset,
+            name);
+    }
+
     public static string LogWaveOnlyLoopRegions(int regionCount) => Format(
         "Message : コメントが -L のみのマーカーから無限ループリージョンを {0} 区画構築しました。",
         "Message : Built {0} infinite-loop region(s) from markers whose comment is only -L.",
