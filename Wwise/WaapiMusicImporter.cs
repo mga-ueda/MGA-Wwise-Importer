@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using MgaWwiseIMImporter.UI;
+using MgaWwiseIMImporter.Wave;
 
 namespace MgaWwiseIMImporter.Wwise;
 
@@ -10,6 +11,7 @@ namespace MgaWwiseIMImporter.Wwise;
 /// 1. 各 Music Segment 用にリージョン範囲だけを切り出した WAV を用意する。
 /// 2. 複数パート時は State Group／State を作成または更新し、Music Switch Container に割当。
 /// 3. object.set で Playlist／Segment／Track（＋切り出し WAV）と Cue を作成。
+/// 4. リージョン端フェードがあれば切り出し WAV へ焼き込む（MusicClip プロパティは触らない）。
 /// </para>
 /// </summary>
 internal static class WaapiMusicImporter
@@ -30,6 +32,7 @@ internal static class WaapiMusicImporter
         bool autoVolumeEnabled = true,
         AutoVolumeTarget autoVolumeTarget = AutoVolumeTarget.MakeUpGain,
         bool updateExistingStateGroup = false,
+        IReadOnlyList<RegionEdgeFade>? regionEdgeFades = null,
         IProgress<string>? progress = null,
         CancellationToken cancellationToken = default)
     {
@@ -103,6 +106,11 @@ internal static class WaapiMusicImporter
         var applyAutoVolume = loudnessNormalizeEnabled && autoVolumeEnabled && partGains is not null;
 
         // 中間パート WAV は作らず、元 WAV から最終セグメント WAV を直接切り出す。
+        var fadesForBake = regionEdgeFades?
+            .Select(fade => fade.Normalized())
+            .Where(fade => fade.HasAnyFade)
+            .ToList() ?? [];
+
         var segmentWavs = SliceSegmentWavs(
             plan,
             sourceWavPath,
@@ -112,6 +120,7 @@ internal static class WaapiMusicImporter
             blockAlign,
             wavInfo,
             partGains,
+            fadesForBake,
             Log);
 
         // タイムアウトは import を含むので長めに取る
@@ -471,6 +480,7 @@ internal static class WaapiMusicImporter
         ushort blockAlign,
         WavFileInfo wavInfo,
         IReadOnlyDictionary<int, float>? partGains,
+        IReadOnlyList<RegionEdgeFade>? regionEdgeFades,
         Action<string> log)
     {
         Directory.CreateDirectory(outputDirectory);
@@ -501,10 +511,16 @@ internal static class WaapiMusicImporter
                             UiStrings.ErrCannotResolveOutputPart(track.SourceWavPath));
                     }
 
-                    var startSample = checked(
-                        part.StartSampleOffset + MsToSample(track.ClipStartMs, sampleRate));
-                    var endSample = checked(
-                        part.StartSampleOffset + MsToSample(track.ClipEndMs, sampleRate));
+                    var startSample = track.AbsoluteStartSample;
+                    var endSample = track.AbsoluteEndSample;
+                    if (endSample <= startSample)
+                    {
+                        startSample = checked(
+                            part.StartSampleOffset + MsToSample(track.ClipStartMs, sampleRate));
+                        endSample = checked(
+                            part.StartSampleOffset + MsToSample(track.ClipEndMs, sampleRate));
+                    }
+
                     if (endSample <= startSample)
                     {
                         throw new InvalidOperationException(
@@ -534,7 +550,8 @@ internal static class WaapiMusicImporter
                         endSample,
                         blockAlign,
                         gain,
-                        wavInfo);
+                        wavInfo,
+                        regionEdgeFades);
                     map[TrackSliceKey(segment.Name, track.Name)] = dest;
                     log(Math.Abs(gain - 1f) < 0.000001f
                         ? UiStrings.LogWavSliceWritten(fileName)
@@ -553,7 +570,8 @@ internal static class WaapiMusicImporter
         long endSample,
         ushort blockAlign,
         float gain,
-        WavFileInfo wavInfo)
+        WavFileInfo wavInfo,
+        IReadOnlyList<RegionEdgeFade>? regionEdgeFades)
     {
         if (!string.Equals(
                 Path.GetFullPath(sourcePath),
@@ -567,7 +585,8 @@ internal static class WaapiMusicImporter
                 endSample,
                 blockAlign,
                 gain,
-                wavInfo);
+                wavInfo,
+                regionEdgeFades);
             return;
         }
 
@@ -581,7 +600,8 @@ internal static class WaapiMusicImporter
                 endSample,
                 blockAlign,
                 gain,
-                wavInfo);
+                wavInfo,
+                regionEdgeFades);
             File.Move(temporaryPath, destinationPath, overwrite: true);
         }
         finally

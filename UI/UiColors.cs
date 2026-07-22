@@ -60,6 +60,8 @@ internal static class UiColors
     public static Color MusicPlaylistLaneBg { get; set; } = Color.FromArgb(53, 55, 70);
     public static Color ExportPartGlow => AccentCyan;
     public static Color SeekCyan => AccentCyan;
+    /// <summary>リージョン端フェード曲線（SeekCyan 系）。</summary>
+    public static Color RegionFadeCurve { get; set; } = Color.FromArgb(220, 0, 245, 255);
     public static Color SeekExit { get; set; } = Color.FromArgb(255, 220, 45, 45);
     public static Color SeekAnacrusis { get; set; } = Color.FromArgb(80, 220, 110);
     public static Color SeekFadeOut { get; set; } = Color.White;
@@ -253,6 +255,7 @@ internal static class UiColors
         new("RegionBoundaryMarker", () => RegionBoundaryMarker, c => RegionBoundaryMarker = c),
         new("EntryCueMarker", () => EntryCueMarker, c => EntryCueMarker = c),
         new("ExitCueMarker", () => ExitCueMarker, c => ExitCueMarker = c),
+        new("RegionFadeCurve", () => RegionFadeCurve, c => RegionFadeCurve = c),
         new("OutputPartShadow", () => OutputPartShadow, c => OutputPartShadow = c),
         new("MusicSegmentLaneBg", () => MusicSegmentLaneBg, c => MusicSegmentLaneBg = c),
         new("MusicPlaylistLaneBg", () => MusicPlaylistLaneBg, c => MusicPlaylistLaneBg = c),

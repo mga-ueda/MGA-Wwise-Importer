@@ -378,8 +378,15 @@ internal sealed class ExportGlassOverlay : Form
         var first = _logLines.Count - visibleCount;
         var y = maximumBottom - visibleCount * lineHeight;
 
-        for (var i = first; i < _logLines.Count; i++, y += lineHeight)
+        var section = Form1.LogColorSection.None;
+        for (var i = 0; i < _logLines.Count; i++)
         {
+            section = Form1.AdvanceLogColorSection(_logLines[i], section);
+            if (i < first)
+            {
+                continue;
+            }
+
             var bounds = new Rectangle(LogMargin, y, maximumWidth, lineHeight);
             TextRenderer.DrawText(
                 g,
@@ -393,8 +400,9 @@ internal sealed class ExportGlassOverlay : Form
                 _logLines[i],
                 _logFont,
                 bounds,
-                Form1.ColorForLogLine(_logLines[i]),
+                Form1.ColorForLogLine(_logLines[i], section),
                 flags);
+            y += lineHeight;
         }
     }
 

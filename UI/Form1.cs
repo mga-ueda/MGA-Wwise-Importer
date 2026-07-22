@@ -120,6 +120,9 @@ public partial class Form1 : Form, IMessageFilter
     private WaveformPreviewData? _loadedPreview;
     private WaveformPreviewSession? _previewSession;
     private readonly WaveOnlyMarkerHistory _waveOnlyMarkerHistory = new();
+    private readonly RegionEdgeFadeHistory _regionEdgeFadeHistory = new();
+    /// <summary>ログ行の色分け用。直近の === 警告／エラー === ブロックを引き継ぐ。</summary>
+    private LogColorSection _logColorSection;
     private IReadOnlyList<string> _lastInputFiles = [];
     private string? _sourceBaseNameOverride;
     private bool _exportBusy;
@@ -417,6 +420,7 @@ public partial class Form1 : Form, IMessageFilter
             SetUiInteractionLocked(UiInteractionLock.MarkerCommentEdit, e.IsEditing);
         waveformView.MarkerSessionDeleteRequested += WaveformView_MarkerSessionDeleteRequested;
         waveformView.MarkerSessionMoveRequested += WaveformView_MarkerSessionMoveRequested;
+        waveformView.RegionFadeChanged += WaveformView_RegionFadeChanged;
         waveformView.PlaylistHoverChanged += (_, partNumber) =>
         {
             _hoveredPlaylistPartNumber = partNumber;
@@ -1138,14 +1142,14 @@ public partial class Form1 : Form, IMessageFilter
         }
 
         if (keyData == (Keys.Control | Keys.Z)
-            && TryUndoWaveOnlyMarkerEdit())
+            && (TryUndoRegionEdgeFade() || TryUndoWaveOnlyMarkerEdit()))
         {
             return true;
         }
 
         if ((keyData == (Keys.Control | Keys.Shift | Keys.Z)
                 || keyData == (Keys.Control | Keys.Y))
-            && TryRedoWaveOnlyMarkerEdit())
+            && (TryRedoRegionEdgeFade() || TryRedoWaveOnlyMarkerEdit()))
         {
             return true;
         }
@@ -2651,7 +2655,7 @@ public partial class Form1 : Form, IMessageFilter
         ClearLoadedWaveAndSession();
         ApplyProjectProfile(_projectStore.GetRequired(selected), selectInCombo: false);
         _projectStore.SetActive(selected);
-        editorTextBox.Clear();
+        ClearLogText();
         AppendReport(UiStrings.LogProjectSwitched(previousName, selected));
         RestoreKeepLastSessionIfEnabled();
         ReleaseProjectComboFocus();
@@ -2728,7 +2732,7 @@ public partial class Form1 : Form, IMessageFilter
                 _projectStore.GetRequired(savedName),
                 selectInCombo: true,
                 asNewDraft: false);
-            editorTextBox.Clear();
+            ClearLogText();
             AppendReport(UiStrings.LogProjectCreated(savedName));
         }
         catch (Exception ex)
@@ -2758,6 +2762,7 @@ public partial class Form1 : Form, IMessageFilter
         _loadedPreview = null;
         _previewSession = null;
         _waveOnlyMarkerHistory.Clear();
+        _regionEdgeFadeHistory.Clear();
         _sourceBaseNameOverride = null;
         _lastPlaybackStartProgress = null;
         _lastInputFiles = [];
@@ -2821,7 +2826,7 @@ public partial class Form1 : Form, IMessageFilter
         }
 
         ApplyProjectProfile(profile, selectInCombo: true, asNewDraft: false);
-        editorTextBox.Clear();
+        ClearLogText();
         AppendReport(UiStrings.LogProjectCleared(name));
     }
 
@@ -5770,7 +5775,7 @@ public partial class Form1 : Form, IMessageFilter
     private void LogClearButton_Click(object? sender, EventArgs e)
     {
         WritePlaybackDiagnostic("log.cleared");
-        editorTextBox.Clear();
+        ClearLogText();
         ReleaseFocusToWaveform();
     }
 
@@ -5844,7 +5849,7 @@ public partial class Form1 : Form, IMessageFilter
             return;
         }
 
-        editorTextBox.Clear();
+        ClearLogText();
         ProcessDroppedFiles(_lastInputFiles, rememberInputFiles: false);
         ReleaseFocusToWaveform();
     }
@@ -6110,6 +6115,7 @@ public partial class Form1 : Form, IMessageFilter
             _loadedPreview = null;
             _previewSession = null;
             _waveOnlyMarkerHistory.Clear();
+            _regionEdgeFadeHistory.Clear();
             _exportBusy = false;
             // パート未設定時のグループ内フェード仮値は波形を跨いで残さない。
             _playlistGroupFadeInSeconds = 0d;
@@ -6213,6 +6219,7 @@ public partial class Form1 : Form, IMessageFilter
             _previewSession.EffectiveRegions,
             _previewSession.EffectiveOutputParts,
             preview.AllowsSessionMarkerEdit);
+        SyncRegionEdgeFadesToUi();
         waveformView.SetPlayhead(0, recordTrail: false);
 
         _loadedPreview = preview;
@@ -6337,7 +6344,8 @@ public partial class Form1 : Form, IMessageFilter
             || savedFadeIns.Count > 0
             || savedFadeOuts.Count > 0
             || savedGroupFadeIns.Count > 0
-            || savedGroupFadeOuts.Count > 0;
+            || savedGroupFadeOuts.Count > 0
+            || state.RegionEdgeFades.Count > 0;
         if (!hasAny)
         {
             return;
@@ -6358,6 +6366,9 @@ public partial class Form1 : Form, IMessageFilter
             waveOnlySession.TryReplaceWaveOnlySessionMarkers(restored);
             waveOnlyMarkerApplied = waveOnlySession.EffectiveMarkers.Count;
         }
+
+        // リージョン端フェードは In/Out サンプルキー。マーカー復元後のリージョンへ再マップする。
+        RestoreRegionEdgeFadesFromState(state);
 
         var partsForMatch = _previewSession?.EffectiveOutputParts ?? preview.OutputParts;
         var loadedByNumber = partsForMatch.ToDictionary(part => part.Number);
@@ -6408,10 +6419,14 @@ public partial class Form1 : Form, IMessageFilter
                 + Environment.NewLine
                 + Environment.NewLine);
 
-            // パートは不一致でも Wave 単体マーカーは復元済みなので表示へ反映する。
+            // パートは不一致でも Wave 単体マーカー／端フェードは復元済みなので表示へ反映する。
             if (_previewSession is { AllowsSessionMarkerEdit: true } sessionAfterMismatch)
             {
                 ApplyWaveOnlySessionPresentation(sessionAfterMismatch);
+            }
+            else
+            {
+                SyncRegionEdgeFadesToUi();
             }
 
             return;
@@ -6595,6 +6610,7 @@ public partial class Form1 : Form, IMessageFilter
 
         ApplyPlaylistDisableUi();
         ApplyPlaylistGroupColorsOnly();
+        SyncRegionEdgeFadesToUi();
 
         AppendReport(
             $"{UiStrings.LogSessionHeader}{Environment.NewLine}"
@@ -6650,9 +6666,37 @@ public partial class Form1 : Form, IMessageFilter
             _playlistFadeOutSecondsByPart,
             _playlistGroupFadeInSecondsByPart,
             _playlistGroupFadeOutSecondsByPart,
-            session.GetWaveOnlySessionMarkers());
+            session.GetWaveOnlySessionMarkers(),
+            session.RegionEdgeFades);
         _projectStore.SaveLastWaveSession(_loadedProjectName, state);
     }
+
+    /// <summary>
+    /// サイドカーのリージョン端フェードをセッションへ戻す（現行リージョンへ再マップ）。
+    /// </summary>
+    private void RestoreRegionEdgeFadesFromState(LastWaveSessionState state)
+    {
+        if (_previewSession is null || state.RegionEdgeFades.Count == 0)
+        {
+            return;
+        }
+
+        var fades = state.RegionEdgeFades
+            .Select(saved => new RegionEdgeFade(
+                saved.InSample,
+                saved.OutSample,
+                saved.FadeInEndSample,
+                saved.FadeOutStartSample,
+                ParseFadeCurve(saved.FadeInCurve, RegionFadeCurveKind.SCurve),
+                ParseFadeCurve(saved.FadeOutCurve, RegionFadeCurveKind.SCurve)))
+            .ToArray();
+        _previewSession.SetRegionEdgeFades(fades);
+    }
+
+    private static RegionFadeCurveKind ParseFadeCurve(string? name, RegionFadeCurveKind fallback) =>
+        Enum.TryParse<RegionFadeCurveKind>(name, ignoreCase: true, out var kind)
+            ? kind
+            : fallback;
 
     /// <summary>EXPORT 開始時に再生・遷移予約を止める（位置は保持）。</summary>
     private void StopPlaybackForExport()
@@ -6895,6 +6939,7 @@ public partial class Form1 : Form, IMessageFilter
                 markerOptionsPanel.AutoVolumeEnabled,
                 markerOptionsPanel.AutoVolumeTarget,
                 updateExistingStateGroup,
+                _previewSession?.RegionEdgeFades,
                 progress));
         }
         catch (Exception ex)
@@ -7722,6 +7767,7 @@ public partial class Form1 : Form, IMessageFilter
         waveformView.SetMarkers(session.EffectiveMarkers);
         waveformView.SetRegions(session.EffectiveRegions);
         waveformView.SetOutputParts(session.EffectiveOutputParts);
+        SyncRegionEdgeFadesToUi(session);
         _audioPlayer.SetLoopPlans(WaveAudioPlayer.BuildLoopPlans(session.EffectiveRegions));
         if (refreshPlaylists)
         {
@@ -7731,6 +7777,68 @@ public partial class Form1 : Form, IMessageFilter
         UpdateExportButtonState();
         UpdateTransportNavigationAvailability();
         AppendPendingWaveOnlyMarkerRenameLogs(session);
+    }
+
+    private void SyncRegionEdgeFadesToUi(WaveformPreviewSession? session = null)
+    {
+        session ??= _previewSession;
+        var fades = session?.RegionEdgeFades ?? [];
+        waveformView.SetRegionEdgeFades(fades);
+        if (_audioPlayer.HasSource)
+        {
+            _audioPlayer.SetRegionEdgeFades(fades);
+        }
+    }
+
+    private void WaveformView_RegionFadeChanged(object? sender, RegionFadeChangedEventArgs e)
+    {
+        if (_previewSession is null)
+        {
+            return;
+        }
+
+        _regionEdgeFadeHistory.PushBeforeChange(_previewSession.RegionEdgeFades);
+        _previewSession.UpsertRegionEdgeFade(e.Fade);
+        SyncRegionEdgeFadesToUi(_previewSession);
+        PersistLastWaveSessionIfPossible();
+    }
+
+    private bool TryUndoRegionEdgeFade()
+    {
+        if (_previewSession is null)
+        {
+            return false;
+        }
+
+        var current = _previewSession.RegionEdgeFades;
+        if (!_regionEdgeFadeHistory.TryUndo(current, out var restored))
+        {
+            return false;
+        }
+
+        _previewSession.SetRegionEdgeFades(restored);
+        SyncRegionEdgeFadesToUi(_previewSession);
+        PersistLastWaveSessionIfPossible();
+        return true;
+    }
+
+    private bool TryRedoRegionEdgeFade()
+    {
+        if (_previewSession is null)
+        {
+            return false;
+        }
+
+        var current = _previewSession.RegionEdgeFades;
+        if (!_regionEdgeFadeHistory.TryRedo(current, out var restored))
+        {
+            return false;
+        }
+
+        _previewSession.SetRegionEdgeFades(restored);
+        SyncRegionEdgeFadesToUi(_previewSession);
+        PersistLastWaveSessionIfPossible();
+        return true;
     }
 
     /// <summary>
@@ -8139,12 +8247,53 @@ public partial class Form1 : Form, IMessageFilter
         editorTextBox.SelectionStart = editorTextBox.TextLength;
         editorTextBox.SelectionLength = 0;
         ApplyFixedLogLineSpacing();
-        editorTextBox.SelectionColor = ColorForLogLine(line);
+        _logColorSection = AdvanceLogColorSection(line, _logColorSection);
+        editorTextBox.SelectionColor = ColorForLogLine(line, _logColorSection);
         editorTextBox.AppendText(line + "\n");
     }
 
+    private void ClearLogText()
+    {
+        editorTextBox.Clear();
+        _logColorSection = LogColorSection.None;
+    }
+
+    /// <summary>ログの === 警告／エラー === ブロック種別。</summary>
+    internal enum LogColorSection
+    {
+        None,
+        Warning,
+        Error,
+    }
+
+    /// <summary>
+    /// ヘッダ行で警告／エラーブロックへ入り、別の === ヘッダで抜ける。
+    /// </summary>
+    internal static LogColorSection AdvanceLogColorSection(string line, LogColorSection current)
+    {
+        var t = line.TrimStart();
+        if (t.StartsWith("=== 警告", StringComparison.Ordinal)
+            || t.StartsWith("=== Warning", StringComparison.OrdinalIgnoreCase))
+        {
+            return LogColorSection.Warning;
+        }
+
+        if (t.StartsWith("=== エラー", StringComparison.Ordinal)
+            || t.StartsWith("=== Error", StringComparison.OrdinalIgnoreCase))
+        {
+            return LogColorSection.Error;
+        }
+
+        if (t.StartsWith("===", StringComparison.Ordinal))
+        {
+            return LogColorSection.None;
+        }
+
+        return current;
+    }
+
     /// <summary>通常ログとエクスポートオーバーレイで共有するログ行の色定義。</summary>
-    internal static Color ColorForLogLine(string line)
+    internal static Color ColorForLogLine(string line, LogColorSection section = LogColorSection.None)
     {
         var t = line.TrimStart();
         if (t.Length == 0)
@@ -8165,10 +8314,21 @@ public partial class Form1 : Form, IMessageFilter
             return UiColors.LogWarning;
         }
 
+        // 警告／エラーブロック内の本文はヘッダと同じ色（(なし) や Message の文言で誤ってエラー色にしない）。
+        if (section == LogColorSection.Warning)
+        {
+            return UiColors.LogWarning;
+        }
+
+        if (section == LogColorSection.Error)
+        {
+            return UiColors.LogError;
+        }
+
         if (t.StartsWith("[警告]", StringComparison.Ordinal)
             || t.StartsWith("=== 警告", StringComparison.Ordinal)
             || t.StartsWith("[Warning]", StringComparison.OrdinalIgnoreCase)
-            || t.StartsWith("=== Warnings", StringComparison.OrdinalIgnoreCase))
+            || t.StartsWith("=== Warning", StringComparison.OrdinalIgnoreCase))
         {
             return UiColors.LogWarning;
         }
@@ -8183,8 +8343,9 @@ public partial class Form1 : Form, IMessageFilter
             || t.StartsWith("Auto-load target was not found", StringComparison.OrdinalIgnoreCase)
             || t.StartsWith("Target  : （未選択）", StringComparison.Ordinal)
             || t.StartsWith("Target  : (none selected)", StringComparison.OrdinalIgnoreCase)
-            || t.Contains("(なし)", StringComparison.Ordinal)
-            || t.Contains("(missing)", StringComparison.OrdinalIgnoreCase)
+            || t.StartsWith("Wave :", StringComparison.Ordinal)
+                && (t.Contains("(なし)", StringComparison.Ordinal)
+                    || t.Contains("(missing)", StringComparison.OrdinalIgnoreCase))
             || IsErrorMessageLine(t))
         {
             return UiColors.LogError;

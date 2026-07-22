@@ -88,18 +88,6 @@ internal static class UiStrings
     public static string LabelAudioApiWasapi => Get("WASAPI", "WASAPI");
     public static string LabelAudioApiAsio => Get("ASIO", "ASIO");
 
-    public static string LabelAudioDeviceDefault => Get(
-        "Default",
-        "Default");
-
-    public static string LabelAudioDeviceWaveMapper => Get(
-        "Wave Mapper (Default)",
-        "Wave Mapper (Default)");
-
-    public static string LabelAudioDeviceDefaultSuffix => Get(
-        " (Default)",
-        " (Default)");
-
     public static string ButtonAudioSettingsOk => Get("OK", "OK");
     public static string ButtonAudioSettingsCancel => Get("CANSEL", "CANSEL");
 
@@ -270,6 +258,58 @@ internal static class UiStrings
         + "Number keys 0–9: jump to 0%–90% within the current view"
         + Environment.NewLine
         + "C / .: center the view on the seek position (seek unchanged)");
+
+    public static string TipWaveformRegionFadeHandle => Get(
+        "白三角をドラッグ: リージョン端フェード（非破壊プレビュー）"
+        + Environment.NewLine
+        + "フェード範囲を右クリック: カーブを選択（Wwise と同じ名前・並び）"
+        + Environment.NewLine
+        + "EXPORT 時に分割 WAV へ焼き込み（破壊編集。MusicClip プロパティは変更しません）"
+        + Environment.NewLine
+        + "Playlist 遷移フェードとは別物で、重ねがけされます"
+        + Environment.NewLine
+        + "Ctrl+Z / Ctrl+Y: Undo / Redo",
+        "Drag white triangle: region-edge fade (non-destructive preview)"
+        + Environment.NewLine
+        + "Right-click fade area: choose curve (same names/order as Wwise)"
+        + Environment.NewLine
+        + "On EXPORT, baked into sliced WAVs (destructive; MusicClip props unchanged)"
+        + Environment.NewLine
+        + "Independent from Playlist transition fades; gains multiply"
+        + Environment.NewLine
+        + "Ctrl+Z / Ctrl+Y: Undo / Redo");
+
+    public static string LabelRegionFadeCurve(RegionFadeCurveKind kind) => kind switch
+    {
+        RegionFadeCurveKind.LogarithmicBase3 => Get(
+            "Logarithmic (Base 3)",
+            "Logarithmic (Base 3)"),
+        RegionFadeCurveKind.SineConstantPowerFadeIn => Get(
+            "Sine (Constant Power Fade In)",
+            "Sine (Constant Power Fade In)"),
+        RegionFadeCurveKind.LogarithmicBase141 => Get(
+            "Logarithmic (Base 1.41)",
+            "Logarithmic (Base 1.41)"),
+        RegionFadeCurveKind.InvertedSCurve => Get(
+            "Inverted S-Curve",
+            "Inverted S-Curve"),
+        RegionFadeCurveKind.Linear => Get(
+            "Linear",
+            "Linear"),
+        RegionFadeCurveKind.SCurve => Get(
+            "S-Curve",
+            "S-Curve"),
+        RegionFadeCurveKind.ExponentialBase141 => Get(
+            "Exponential (Base 1.41)",
+            "Exponential (Base 1.41)"),
+        RegionFadeCurveKind.SineConstantPowerFadeOut => Get(
+            "Sine (Constant Power Fade Out)",
+            "Sine (Constant Power Fade Out)"),
+        RegionFadeCurveKind.ExponentialBase3 => Get(
+            "Exponential (Base 3)",
+            "Exponential (Base 3)"),
+        _ => kind.ToString(),
+    };
 
     /// <summary>全モード共通の波形シーク系ショートカット（タイムラインツールチップ用）。</summary>
     public static string TipWaveformCommonKeys => Get(
@@ -1838,6 +1878,7 @@ internal static class UiStrings
         "RegionBoundaryMarker" => Get("リージョン境界マーカー", "Region Boundary Marker"),
         "EntryCueMarker" => Get("Entry Cue マーカー", "Entry Cue Marker"),
         "ExitCueMarker" => Get("Exit Cue マーカー", "Exit Cue Marker"),
+        "RegionFadeCurve" => Get("リージョン端フェード曲線", "Region Edge Fade Curve"),
         "OutputPartShadow" => Get("出力パート名・影", "Output Part Name - Shadow"),
         "MusicSegmentLaneBg" => Get("Music Segment Name・背景", "Music Segment Name - Background"),
         "MusicPlaylistLaneBg" => Get("Music Playlist Name・背景", "Music Playlist Name - Background"),

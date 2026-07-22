@@ -159,6 +159,15 @@ internal sealed class WaveAudioPlayer : IDisposable
     }
 
     /// <summary>
+    /// リージョン端フェード（プレビュー用）。Playlist 遷移フェードと乗算で重ねがけする。
+    /// </summary>
+    public void SetRegionEdgeFades(IReadOnlyList<RegionEdgeFade>? fades)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _provider?.SetRegionEdgeFades(fades);
+    }
+
+    /// <summary>
     /// 現在位置がループ区間内ならその区間だけを有効化。外ならループ／Exit 解除。
     /// シークで別位置へ飛んだときは必ず呼び、区間外なら二重再生の Exit も直ちに止める。
     /// </summary>
@@ -957,6 +966,7 @@ internal sealed class WaveAudioPlayer : IDisposable
         private long _playlistRequestGeneration;
         private long _playlistStartedGeneration;
         private long _playlistStartedTargetSample;
+        private IReadOnlyList<RegionEdgeFade> _regionEdgeFades = [];
         private float _outputPeak;
         /// <summary>スペアナ用の直近出力モノラルサンプル（リングバッファ）。</summary>
         private readonly float[] _monitorRing = new float[8192];
@@ -1017,6 +1027,16 @@ internal sealed class WaveAudioPlayer : IDisposable
                 _activePlan = plan;
                 // アーム／解除だけでは Exit を始めない（ループ折り返しで開始）
                 _exitPlaying = false;
+            }
+        }
+
+        public void SetRegionEdgeFades(IReadOnlyList<RegionEdgeFade>? fades)
+        {
+            lock (_gate)
+            {
+                _regionEdgeFades = fades is null || fades.Count == 0
+                    ? []
+                    : fades.ToArray();
             }
         }
 
@@ -1534,31 +1554,39 @@ internal sealed class WaveAudioPlayer : IDisposable
                     break;
                 }
 
+                ApplyRegionEdgeGain(_mainFloat, gotFrames, samplePos);
+
                 // Exit レイヤ（同時長）。停止／終了後は 0。
                 // このチャンク読了後に折り返す場合は、折り返し後の続きで Exit が乗る。
                 EnsureBuffer(ref _exitFloat, gotFrames * 8);
                 Array.Clear(_exitFloat, 0, gotFrames * 8);
                 if (exitPlaying)
                 {
+                    var exitPos = CurrentSample(_exitSource);
                     MixExitLayer(_exitFloat, 0, gotFrames, exitStart, exitEnd);
+                    ApplyRegionEdgeGain(_exitFloat, gotFrames, exitPos);
                 }
 
                 EnsureBuffer(ref _playlistFadeFloat, gotFrames * 8);
                 Array.Clear(_playlistFadeFloat, 0, gotFrames * 8);
                 if (playlistFadePlaying)
                 {
+                    var fadePos = CurrentSample(_playlistFadeSource);
                     MixPlaylistFade(_playlistFadeFloat, 0, gotFrames);
+                    ApplyRegionEdgeGain(_playlistFadeFloat, gotFrames, fadePos);
                 }
 
                 EnsureBuffer(ref _playlistPreRollFloat, gotFrames * 8);
                 Array.Clear(_playlistPreRollFloat, 0, gotFrames * 8);
                 if (playlistPreRollPlaying)
                 {
+                    var preRollPos = CurrentSample(_playlistPreRollSource);
                     _ = ReadDecodedFrames(
                         _playlistPreRollSource,
                         _playlistPreRollFloat,
                         0,
                         gotFrames);
+                    ApplyRegionEdgeGain(_playlistPreRollFloat, gotFrames, preRollPos);
                 }
 
                 ApplyFadeIn(
@@ -1866,6 +1894,37 @@ internal sealed class WaveAudioPlayer : IDisposable
                 _playlistFadeIncomingFramesRead = 0;
                 _playlistFadeIncomingFrameCount = 0;
                 _playlistExitFadePlaying = false;
+            }
+        }
+
+        private void ApplyRegionEdgeGain(byte[] buffer, int frames, long startSample)
+        {
+            IReadOnlyList<RegionEdgeFade> fades;
+            lock (_gate)
+            {
+                fades = _regionEdgeFades;
+            }
+
+            if (fades.Count == 0 || frames <= 0)
+            {
+                return;
+            }
+
+            for (var i = 0; i < frames; i++)
+            {
+                var gain = RegionEdgeFade.GainAt(startSample + i, fades);
+                if (Math.Abs(gain - 1f) < 1e-6f)
+                {
+                    continue;
+                }
+
+                var at = i * 8;
+                BitConverter.TryWriteBytes(
+                    buffer.AsSpan(at, 4),
+                    BitConverter.ToSingle(buffer, at) * gain);
+                BitConverter.TryWriteBytes(
+                    buffer.AsSpan(at + 4, 4),
+                    BitConverter.ToSingle(buffer, at + 4) * gain);
             }
         }
 

@@ -11,10 +11,10 @@
     <Product>MGA Wwise IMImporter</Product>
     <ApplicationTitle>MGA Wwise IMImporter</ApplicationTitle>
     <ApplicationIcon>Assets\Branding\MgaWwiseIMImporter.ico</ApplicationIcon>
-    <!-- 表示・比較・GitHub タグ共通の SemVer（例: 1.0.2-beta ↔ tag v1.0.2-beta） -->
-    <Version>1.0.2-beta</Version>
-    <AssemblyVersion>1.0.2.0</AssemblyVersion>
-    <FileVersion>1.0.2.0</FileVersion>
+    <!-- 表示・比較・GitHub タグ共通の SemVer（例: 1.0.3-beta ↔ tag v1.0.3-beta） -->
+    <Version>1.0.3-beta</Version>
+    <AssemblyVersion>1.0.3.0</AssemblyVersion>
+    <FileVersion>1.0.3.0</FileVersion>
     <InformationalVersion>$(Version)</InformationalVersion>
   </PropertyGroup>
 

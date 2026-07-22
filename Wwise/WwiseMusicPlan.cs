@@ -81,6 +81,12 @@ internal sealed class WwiseTrackPlan
 
     /// <summary>ソース WAV 内の可聴終了（切り出し終了）。</summary>
     public required double ClipEndMs { get; init; }
+
+    /// <summary>元ファイル絶対サンプル（切り出し開始、フェード照合用）。</summary>
+    public required long AbsoluteStartSample { get; init; }
+
+    /// <summary>元ファイル絶対サンプル（切り出し終了・排他、フェード照合用）。</summary>
+    public required long AbsoluteEndSample { get; init; }
 }
 
 /// <summary>Custom Cue 1 つ。</summary>

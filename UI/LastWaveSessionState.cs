@@ -49,6 +49,9 @@ internal sealed class LastWaveSessionState
     /// <summary>パート番号 → 同一グループ内遷移用 Fade Out 秒数。</summary>
     public Dictionary<string, double> PartGroupFadeOutSeconds { get; set; } = new(StringComparer.Ordinal);
 
+    /// <summary>連続リージョン固まりのイン／アウト端フェード（プレビュー用）。</summary>
+    public List<LastWaveRegionEdgeFadeState> RegionEdgeFades { get; set; } = [];
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -98,7 +101,8 @@ internal sealed class LastWaveSessionState
         IReadOnlyDictionary<int, double> partFadeOutSeconds,
         IReadOnlyDictionary<int, double> partGroupFadeInSeconds,
         IReadOnlyDictionary<int, double> partGroupFadeOutSeconds,
-        IReadOnlyList<WaveformMarkerMark>? waveOnlySessionMarkers = null)
+        IReadOnlyList<WaveformMarkerMark>? waveOnlySessionMarkers = null,
+        IReadOnlyList<RegionEdgeFade>? regionEdgeFades = null)
     {
         return new LastWaveSessionState
         {
@@ -154,6 +158,20 @@ internal sealed class LastWaveSessionState
                 pair => pair.Key.ToString(),
                 pair => pair.Value,
                 StringComparer.Ordinal),
+            RegionEdgeFades = (regionEdgeFades ?? [])
+                .Where(fade => fade.HasAnyFade)
+                .Select(fade => new LastWaveRegionEdgeFadeState
+                {
+                    InSample = fade.InSample,
+                    OutSample = fade.OutSample,
+                    FadeInEndSample = fade.FadeInEndSample,
+                    FadeOutStartSample = fade.FadeOutStartSample,
+                    FadeInCurve = fade.FadeInCurve.ToString(),
+                    FadeOutCurve = fade.FadeOutCurve.ToString(),
+                })
+                .OrderBy(fade => fade.InSample)
+                .ThenBy(fade => fade.OutSample)
+                .ToList(),
         };
     }
 
@@ -310,4 +328,19 @@ internal sealed class LastWaveOnlyMarkerState
 
     /// <summary>WAV 埋め込み由来なら true（アプリ追加マーカーは false）。</summary>
     public bool IsFromWaveEmbedded { get; set; }
+}
+
+internal sealed class LastWaveRegionEdgeFadeState
+{
+    public long InSample { get; set; }
+
+    public long OutSample { get; set; }
+
+    public long? FadeInEndSample { get; set; }
+
+    public long? FadeOutStartSample { get; set; }
+
+    public string? FadeInCurve { get; set; }
+
+    public string? FadeOutCurve { get; set; }
 }

@@ -399,6 +399,8 @@ internal static class WwiseMusicPlanBuilder
                     SourceWavPath = member.WavPath,
                     ClipStartMs = draft.ClipStartMs,
                     ClipEndMs = draft.ClipEndMs,
+                    AbsoluteStartSample = draft.AbsoluteStartSample,
+                    AbsoluteEndSample = draft.AbsoluteEndSample,
                 });
             }
 
@@ -467,6 +469,8 @@ internal static class WwiseMusicPlanBuilder
                     SourceWavPath = sourceWavPath,
                     ClipStartMs = draft.ClipStartMs,
                     ClipEndMs = draft.ClipEndMs,
+                    AbsoluteStartSample = draft.AbsoluteStartSample,
+                    AbsoluteEndSample = draft.AbsoluteEndSample,
                 },
             ],
         };
@@ -483,6 +487,8 @@ internal static class WwiseMusicPlanBuilder
         public required int TimeSignatureUpper { get; init; }
         public required int TimeSignatureLower { get; init; }
         public required IReadOnlyList<WwiseCustomCue> CustomCues { get; init; }
+        public required long AbsoluteStartSample { get; init; }
+        public required long AbsoluteEndSample { get; init; }
     }
 
     private static PartSegmentDraft BuildPartSegment(
@@ -533,6 +539,8 @@ internal static class WwiseMusicPlanBuilder
             TimeSignatureUpper = upper,
             TimeSignatureLower = lower,
             CustomCues = customCues,
+            AbsoluteStartSample = first.StartSampleOffset,
+            AbsoluteEndSample = last.EndSampleOffset,
         };
     }
 

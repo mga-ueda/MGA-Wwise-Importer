@@ -52,6 +52,11 @@ internal sealed class MarkerSessionMoveRequestedEventArgs(
     public bool ShiftPreviousMarker { get; } = shiftPreviousMarker;
 }
 
+internal sealed class RegionFadeChangedEventArgs(RegionEdgeFade fade) : EventArgs
+{
+    public RegionEdgeFade Fade { get; } = fade;
+}
+
 /// <summary>
 /// 読み込んだ Wave のピーク波形と再生位置（シークバー）を描画する。
 /// </summary>
@@ -97,6 +102,18 @@ internal sealed class WaveformView : Control
     private int _markerDragStartX;
     private bool _markerDragMoved;
     private readonly List<MarkerHitRegion> _markerHitRegions = [];
+    private IReadOnlyList<RegionEdgeFade> _regionEdgeFades = [];
+    private readonly List<FadeHandleHitRegion> _fadeHandleHitRegions = [];
+    private readonly List<FadeAreaHitRegion> _fadeAreaHitRegions = [];
+    private ContextMenuStrip? _fadeCurveMenu;
+    private bool _isDraggingFadeHandle;
+    private bool _fadeDragIsIn;
+    private long _fadeDragInSample;
+    private long _fadeDragOutSample;
+    private long? _fadeDragOtherHandleSample;
+    private RegionEdgeFade? _fadeDragPreview;
+    private int _fadeDragStartX;
+    private bool _fadeDragMoved;
     private int _infoLaneWidth = 120;
     private float _outputLevel;
     private WavPeakData? _detailPeaks;
@@ -229,6 +246,8 @@ internal sealed class WaveformView : Control
         _outputParts = outputParts ?? [];
         _allowsSessionMarkerEdit = allowsSessionMarkerEdit;
         ClearMarkerSessionEditState();
+        ClearFadeDragState();
+        _regionEdgeFades = [];
         TabStop = allowsSessionMarkerEdit;
         _playlistDisplayNames = new Dictionary<int, string>();
         _playlistPartGroupIds = new Dictionary<int, int>();
@@ -281,7 +300,20 @@ internal sealed class WaveformView : Control
     public void SetRegions(IReadOnlyList<WaveformRegionMark> regions)
     {
         _regions = regions ?? [];
+        _regionEdgeFades = RegionEdgeFade.RemapToRuns(_regionEdgeFades, _regions);
         RebuildSegmentNameMarks();
+        RebuildPresentationLayers(clearDetailPeaks: false);
+    }
+
+    /// <summary>連続リージョン固まりの端フェードを差し替える。</summary>
+    public void SetRegionEdgeFades(IReadOnlyList<RegionEdgeFade> fades)
+    {
+        _regionEdgeFades = RegionEdgeFade.RemapToRuns(fades ?? [], _regions);
+        if (!_isDraggingFadeHandle)
+        {
+            _fadeDragPreview = null;
+        }
+
         RebuildPresentationLayers(clearDetailPeaks: false);
     }
 
@@ -416,6 +448,8 @@ internal sealed class WaveformView : Control
         _cycles = [];
         _regions = [];
         _outputParts = [];
+        _regionEdgeFades = [];
+        ClearFadeDragState();
         _allowsSessionMarkerEdit = false;
         TabStop = false;
         _playlistDisplayNames = new Dictionary<int, string>();
@@ -1594,6 +1628,9 @@ internal sealed class WaveformView : Control
     /// <summary>Wave 単体モードでマーカーのドラッグ移動が要求された。</summary>
     public event EventHandler<MarkerSessionMoveRequestedEventArgs>? MarkerSessionMoveRequested;
 
+    /// <summary>リージョン端フェード（白三角）が変更された。</summary>
+    public event EventHandler<RegionFadeChangedEventArgs>? RegionFadeChanged;
+
     /// <summary>Wave 単体モードで選択中のマーカー位置。未選択は null。</summary>
     public long? SelectedMarkerSampleOffset => _selectedMarkerSampleOffset;
 
@@ -1813,6 +1850,7 @@ internal sealed class WaveformView : Control
             _exportGlowTimer.Stop();
             _exportGlowTimer.Dispose();
             _timelineToolTip.Dispose();
+            _fadeCurveMenu?.Dispose();
             DisposeStaticLayer();
         }
 
@@ -1824,6 +1862,16 @@ internal sealed class WaveformView : Control
         base.OnMouseDown(e);
 
         UpdateMouseGuide(e.X);
+        if (e.Button == MouseButtons.Right)
+        {
+            if (TryShowFadeCurveMenu(e.Location))
+            {
+                return;
+            }
+
+            return;
+        }
+
         if (e.Button != MouseButtons.Left)
         {
             return;
@@ -1853,6 +1901,11 @@ internal sealed class WaveformView : Control
         if (_allowsSessionMarkerEdit && _selectedMarkerSampleOffset is not null)
         {
             SetSelectedMarker(null);
+        }
+
+        if (TryBeginFadeHandleDrag(e.Location))
+        {
+            return;
         }
 
         if (!TryGetProgressFromX(e.X, out var progress))
@@ -1888,6 +1941,7 @@ internal sealed class WaveformView : Control
         _isDraggingSeek = false;
         _seekMovedDuringDrag = false;
         ClearMarkerDragState();
+        ClearFadeDragState();
         Capture = false;
         Cursor = Cursors.Default;
 
@@ -2386,6 +2440,310 @@ internal sealed class WaveformView : Control
         RectangleF TriangleBounds,
         RectangleF CommentBounds);
 
+    private readonly record struct FadeHandleHitRegion(
+        long InSample,
+        long OutSample,
+        bool IsFadeIn,
+        RectangleF TriangleBounds);
+
+    private readonly record struct FadeAreaHitRegion(
+        long InSample,
+        long OutSample,
+        bool IsFadeIn,
+        RectangleF AreaBounds);
+
+    private bool TryBeginFadeHandleDrag(Point location)
+    {
+        if (!TryHitFadeHandle(location, out var hit))
+        {
+            return false;
+        }
+
+        EndMarkerCommentEdit(commit: true);
+        var existing = FindFade(hit.InSample, hit.OutSample);
+        _isDraggingFadeHandle = true;
+        _fadeDragIsIn = hit.IsFadeIn;
+        _fadeDragInSample = hit.InSample;
+        _fadeDragOutSample = hit.OutSample;
+        _fadeDragOtherHandleSample = hit.IsFadeIn
+            ? existing?.EffectiveFadeOutStart
+            : existing?.EffectiveFadeInEnd;
+        _fadeDragPreview = existing ?? new RegionEdgeFade(hit.InSample, hit.OutSample, null, null);
+        _fadeDragStartX = location.X;
+        _fadeDragMoved = false;
+        Capture = true;
+        Cursor = Cursors.SizeWE;
+        return true;
+    }
+
+    private bool TryShowFadeCurveMenu(Point location)
+    {
+        if (!TryHitFadeArea(location, out var area))
+        {
+            return false;
+        }
+
+        var existing = FindFade(area.InSample, area.OutSample);
+        if (existing is null
+            || (area.IsFadeIn && !existing.Value.HasFadeIn)
+            || (!area.IsFadeIn && !existing.Value.HasFadeOut))
+        {
+            return false;
+        }
+
+        EndMarkerCommentEdit(commit: true);
+        ShowFadeCurveContextMenu(location, existing.Value, area.IsFadeIn);
+        return true;
+    }
+
+    private bool TryHitFadeArea(Point location, out FadeAreaHitRegion hit)
+    {
+        for (var i = _fadeAreaHitRegions.Count - 1; i >= 0; i--)
+        {
+            var candidate = _fadeAreaHitRegions[i];
+            if (candidate.AreaBounds.Contains(location))
+            {
+                hit = candidate;
+                return true;
+            }
+        }
+
+        hit = default;
+        return false;
+    }
+
+    private void ShowFadeCurveContextMenu(Point location, RegionEdgeFade fade, bool isFadeIn)
+    {
+        _fadeCurveMenu?.Dispose();
+        var menu = new ContextMenuStrip
+        {
+            ShowImageMargin = true,
+            BackColor = UiColors.ForControlBack(UiColors.SurfaceBack),
+            ForeColor = UiColors.PrimaryFore,
+            Renderer = new DarkFadeCurveMenuRenderer(),
+            Padding = new Padding(2, 2, 2, 2),
+            ImageScalingSize = new Size(30, 18),
+        };
+        _fadeCurveMenu = menu;
+
+        var current = isFadeIn ? fade.FadeInCurve : fade.FadeOutCurve;
+        var order = isFadeIn
+            ? RegionEdgeFade.MenuOrderFadeIn
+            : RegionEdgeFade.MenuOrderFadeOut;
+        foreach (var kind in order)
+        {
+            var item = new ToolStripMenuItem(UiStrings.LabelRegionFadeCurve(kind))
+            {
+                // Checked だと ImageRectangle 全体（余白込み）に枠が付くため使わない
+                Tag = kind,
+                Image = CreateFadeCurveIcon(kind, isFadeIn, selected: kind == current),
+                ImageScaling = ToolStripItemImageScaling.None,
+                Padding = new Padding(2, 1, 2, 1),
+            };
+            var capturedKind = kind;
+            item.Click += (_, _) => ApplyFadeCurve(fade, isFadeIn, capturedKind);
+            menu.Items.Add(item);
+        }
+
+        menu.Show(this, location);
+    }
+
+    private void ApplyFadeCurve(RegionEdgeFade fade, bool isFadeIn, RegionFadeCurveKind kind)
+    {
+        var next = isFadeIn
+            ? fade.WithCurves(kind, fade.FadeOutCurve)
+            : fade.WithCurves(fade.FadeInCurve, kind);
+        RegionFadeChanged?.Invoke(this, new RegionFadeChangedEventArgs(next.Normalized()));
+    }
+
+    /// <summary>
+    /// 左余白＋18×18 アイコン。背景は透明にしてホバーハイライトが透けるようにする。
+    /// イン側は立ち上がり（谷→山の順のメニュー）、アウト側は立ち下がり（山→谷の順）。
+    /// </summary>
+    private static Image CreateFadeCurveIcon(
+        RegionFadeCurveKind kind,
+        bool isFadeIn,
+        bool selected)
+    {
+        const int size = 18;
+        const int leftMargin = 12;
+        var bmp = new Bitmap(
+            size + leftMargin,
+            size,
+            System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        using var g = Graphics.FromImage(bmp);
+        g.Clear(Color.Transparent);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+
+        using var pen = new Pen(Color.FromArgb(220, 220, 220), 1.4f);
+        var points = new PointF[17];
+        for (var i = 0; i < points.Length; i++)
+        {
+            var t = i / (double)(points.Length - 1);
+            var yGain = isFadeIn
+                ? RegionEdgeFade.EvaluateRising(kind, t)
+                : RegionEdgeFade.EvaluateFalling(kind, t);
+            points[i] = new PointF(
+                leftMargin + 1.5f + (float)t * (size - 3f),
+                size - 2f - yGain * (size - 4f));
+        }
+
+        g.DrawLines(pen, points);
+
+        if (selected)
+        {
+            using var selectPen = new Pen(Color.FromArgb(80, 170, 255), 1f);
+            g.DrawRectangle(selectPen, leftMargin, 0, size - 1, size - 1);
+        }
+
+        return bmp;
+    }
+
+    private sealed class DarkFadeCurveMenuRenderer : ToolStripProfessionalRenderer
+    {
+        public DarkFadeCurveMenuRenderer()
+            : base(new DarkFadeCurveColorTable())
+        {
+        }
+
+        protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e)
+        {
+            // 選択表示はアイコンビットマップ側で行う
+        }
+    }
+
+    private sealed class DarkFadeCurveColorTable : ProfessionalColorTable
+    {
+        public override Color MenuItemSelected => Color.FromArgb(70, 70, 74);
+        public override Color MenuItemSelectedGradientBegin => MenuItemSelected;
+        public override Color MenuItemSelectedGradientEnd => MenuItemSelected;
+        public override Color MenuItemBorder => Color.FromArgb(90, 90, 94);
+        public override Color ToolStripDropDownBackground => Color.FromArgb(30, 30, 30);
+        public override Color ImageMarginGradientBegin => ToolStripDropDownBackground;
+        public override Color ImageMarginGradientMiddle => ToolStripDropDownBackground;
+        public override Color ImageMarginGradientEnd => ToolStripDropDownBackground;
+        public override Color SeparatorDark => Color.FromArgb(60, 60, 64);
+        public override Color SeparatorLight => SeparatorDark;
+    }
+
+    private bool TryHitFadeHandle(Point location, out FadeHandleHitRegion hit)
+    {
+        for (var i = _fadeHandleHitRegions.Count - 1; i >= 0; i--)
+        {
+            var candidate = _fadeHandleHitRegions[i];
+            if (candidate.TriangleBounds.Contains(location))
+            {
+                hit = candidate;
+                return true;
+            }
+        }
+
+        hit = default;
+        return false;
+    }
+
+    private RegionEdgeFade? FindFade(long inSample, long outSample)
+    {
+        foreach (var fade in _regionEdgeFades)
+        {
+            if (fade.InSample == inSample && fade.OutSample == outSample)
+            {
+                return fade;
+            }
+        }
+
+        return null;
+    }
+
+    private IReadOnlyList<RegionEdgeFade> GetDisplayRegionEdgeFades()
+    {
+        if (_fadeDragPreview is not { } preview)
+        {
+            return _regionEdgeFades;
+        }
+
+        var list = new List<RegionEdgeFade>(_regionEdgeFades.Count + 1);
+        foreach (var fade in _regionEdgeFades)
+        {
+            if (fade.InSample == preview.InSample && fade.OutSample == preview.OutSample)
+            {
+                continue;
+            }
+
+            list.Add(fade);
+        }
+
+        if (preview.HasAnyFade
+            || (_isDraggingFadeHandle
+                && preview.InSample == _fadeDragInSample
+                && preview.OutSample == _fadeDragOutSample))
+        {
+            list.Add(preview.Normalized());
+        }
+
+        return list;
+    }
+
+    private void ClearFadeDragState()
+    {
+        _isDraggingFadeHandle = false;
+        _fadeDragMoved = false;
+        _fadeDragPreview = null;
+        _fadeDragOtherHandleSample = null;
+    }
+
+    private void UpdateFadeDragPreview(long sampleOffset)
+    {
+        var inSample = _fadeDragInSample;
+        var outSample = _fadeDragOutSample;
+        if (outSample <= inSample)
+        {
+            return;
+        }
+
+        RegionEdgeFade next;
+        var inCurve = _fadeDragPreview?.FadeInCurve ?? RegionFadeCurveKind.SCurve;
+        var outCurve = _fadeDragPreview?.FadeOutCurve ?? RegionFadeCurveKind.SCurve;
+        if (_fadeDragIsIn)
+        {
+            var maxEnd = _fadeDragOtherHandleSample is { } other && other > inSample
+                ? other
+                : outSample;
+            var fadeInEnd = Math.Clamp(sampleOffset, inSample, maxEnd);
+            next = RegionEdgeFade.WithFadeInEnd(
+                inSample,
+                outSample,
+                fadeInEnd,
+                _fadeDragOtherHandleSample is { } o && o < outSample ? o : null,
+                inCurve,
+                outCurve);
+        }
+        else
+        {
+            var minStart = _fadeDragOtherHandleSample is { } other && other < outSample
+                ? other
+                : inSample;
+            var fadeOutStart = Math.Clamp(sampleOffset, minStart, outSample);
+            next = RegionEdgeFade.WithFadeOutStart(
+                inSample,
+                outSample,
+                _fadeDragOtherHandleSample is { } o && o > inSample ? o : null,
+                fadeOutStart,
+                inCurve,
+                outCurve);
+        }
+
+        if (_fadeDragPreview is { } current
+            && current.FadeInEndSample == next.FadeInEndSample
+            && current.FadeOutStartSample == next.FadeOutStartSample)
+        {
+            return;
+        }
+
+        _fadeDragPreview = next;
+        RebuildPresentationLayers(clearDetailPeaks: false);
+    }
+
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
@@ -2423,6 +2781,36 @@ internal sealed class WaveformView : Control
             _markerDragPreviewSample = sampleOffset;
             RebuildPresentationLayers(clearDetailPeaks: false);
             return;
+        }
+
+        if (_isDraggingFadeHandle)
+        {
+            if (!_fadeDragMoved
+                && Math.Abs(e.X - _fadeDragStartX) < 3)
+            {
+                return;
+            }
+
+            _fadeDragMoved = true;
+            if (!TryGetSampleFromX(e.X, out var sampleOffset))
+            {
+                return;
+            }
+
+            UpdateFadeDragPreview(sampleOffset);
+            return;
+        }
+
+        if (!_isDraggingSeek
+            && !_isDraggingMarker
+            && !_isDraggingFadeHandle
+            && TryHitFadeHandle(e.Location, out _))
+        {
+            Cursor = Cursors.SizeWE;
+        }
+        else if (!_isDraggingSeek && !_isDraggingMarker && !_isDraggingFadeHandle)
+        {
+            Cursor = Cursors.Default;
         }
 
         if (!_isDraggingSeek || !TryGetProgressFromX(e.X, out var progress))
@@ -2487,6 +2875,26 @@ internal sealed class WaveformView : Control
             return;
         }
 
+        if (e.Button == MouseButtons.Left && _isDraggingFadeHandle)
+        {
+            var preview = _fadeDragPreview;
+            var fadeMoved = _fadeDragMoved;
+            ClearFadeDragState();
+            Capture = false;
+            Cursor = Cursors.Default;
+
+            if (fadeMoved && preview is { } fade)
+            {
+                RegionFadeChanged?.Invoke(this, new RegionFadeChangedEventArgs(fade.Normalized()));
+            }
+            else
+            {
+                RebuildPresentationLayers(clearDetailPeaks: false);
+            }
+
+            return;
+        }
+
         if (e.Button != MouseButtons.Left || !_isDraggingSeek)
         {
             return;
@@ -2513,7 +2921,7 @@ internal sealed class WaveformView : Control
         UpdateTimelineToolTip(null);
         SetSourceNameHovered(false);
         SetHoveredPlaylistPart(null);
-        if (_isDraggingSeek || _isDraggingMarker || _markerEditMode is not null)
+        if (_isDraggingSeek || _isDraggingMarker || _isDraggingFadeHandle || _markerEditMode is not null)
         {
             return;
         }
@@ -2785,12 +3193,23 @@ internal sealed class WaveformView : Control
         {
             text = UiStrings.TipWaveformEditSourceName;
         }
-        else if (mouseLocation is { } location
+        else if (mouseLocation is { } fadeLocation
             && !_isDraggingSeek
             && !_isDraggingMarker
+            && !_isDraggingFadeHandle
+            && _markerEditMode is null
+            && (TryHitFadeHandle(fadeLocation, out _) || TryHitFadeArea(fadeLocation, out _))
+            && GetTimelineContentRect().Contains(fadeLocation))
+        {
+            text = UiStrings.TipWaveformRegionFadeHandle;
+        }
+        else if (mouseLocation is { } markerLaneLocation
+            && !_isDraggingSeek
+            && !_isDraggingMarker
+            && !_isDraggingFadeHandle
             && _markerEditMode is null
             && TryGetMarkerLane(out var markerLane, out _)
-            && markerLane.Contains(location)
+            && markerLane.Contains(markerLaneLocation)
             && _allowsSessionMarkerEdit)
         {
             text = UiStrings.TipWaveformMarkerLaneSessionEdit;
@@ -2798,6 +3217,7 @@ internal sealed class WaveformView : Control
         else if (mouseLocation is { } zoomLocation
             && !_isDraggingSeek
             && !_isDraggingMarker
+            && !_isDraggingFadeHandle
             && _markerEditMode is null
             && _outputParts.Count > 0
             && GetTimelineContentRect().Contains(zoomLocation))
@@ -3285,6 +3705,8 @@ internal sealed class WaveformView : Control
         DrawNameLaneBackgrounds(g, playlistLane, segmentLane);
         DrawWaveform(g, wave);
         DrawBars(g, labels, wave, rowHeight);
+        // Entry/Exit の上にマーカーを重ねる（同位置でもマーカーを優先表示）
+        DrawContiguousRegionCueMarkers(g, wave, labels, rowHeight);
         DrawMarkers(g, labels, rowHeight);
         DrawPlaylistNameLabels(g, wave, playlistLane);
         DrawSegmentNameLabels(g, wave, segmentLane);
@@ -3617,6 +4039,8 @@ internal sealed class WaveformView : Control
         // 縦ズーム込み。±1.0 が既定で波形上下端、それ以上はクリップ
         var amplitude = wave.Height * 0.5f * (float)_ampZoom;
         using var wavePen = new Pen(UiColors.WaveFill, 1f);
+        var displayFades = GetDisplayRegionEdgeFades();
+        var frameCount = peaks.FrameCount;
 
         // 縦 1px 線に AA は不要。無効化すると列描画が大幅に速くなる
         var smoothing = g.SmoothingMode;
@@ -3635,8 +4059,21 @@ internal sealed class WaveformView : Control
                             Math.Floor((px + 0.5d) / wave.Width * bucketCount),
                             0,
                             bucketCount - 1);
-                    DrawPeakColumn(g, wavePen, wave, midY, amplitude, wave.Left + px + 0.5f,
-                        detail.Mins[bucket], detail.Maxs[bucket]);
+                    var abs = _viewStart + ((px + 0.5d) / wave.Width) * ViewSpan;
+                    var sample = (long)Math.Clamp(
+                        Math.Floor(abs * frameCount),
+                        0,
+                        Math.Max(0L, frameCount - 1));
+                    var gain = RegionEdgeFade.GainAt(sample, displayFades);
+                    DrawPeakColumn(
+                        g,
+                        wavePen,
+                        wave,
+                        midY,
+                        amplitude * gain,
+                        wave.Left + px + 0.5f,
+                        detail.Mins[bucket],
+                        detail.Maxs[bucket]);
                 }
             }
             else
@@ -3647,8 +4084,20 @@ internal sealed class WaveformView : Control
                 {
                     var abs = _viewStart + ((px + 0.5d) / wave.Width) * ViewSpan;
                     var bucket = (int)Math.Clamp(Math.Floor(abs * overviewCount), 0, overviewCount - 1);
-                    DrawPeakColumn(g, wavePen, wave, midY, amplitude, wave.Left + px + 0.5f,
-                        peaks.Mins[bucket], peaks.Maxs[bucket]);
+                    var sample = (long)Math.Clamp(
+                        Math.Floor(abs * frameCount),
+                        0,
+                        Math.Max(0L, frameCount - 1));
+                    var gain = RegionEdgeFade.GainAt(sample, displayFades);
+                    DrawPeakColumn(
+                        g,
+                        wavePen,
+                        wave,
+                        midY,
+                        amplitude * gain,
+                        wave.Left + px + 0.5f,
+                        peaks.Mins[bucket],
+                        peaks.Maxs[bucket]);
                 }
             }
         }
@@ -3659,37 +4108,44 @@ internal sealed class WaveformView : Control
 
         // -R だけ波形の上に重ねる（境界線・Cue 線は別描画）
         DrawExcludedRegionOverlays(g, wave);
-
-        // 連続リージョン固まりの境界（白）→ Entry/Exit Cue（ライム／赤・白より手前）
-        DrawContiguousRegionCueMarkers(g, wave);
     }
 
     /// <summary>
     /// 除外で区切られた連続リージョン固まりごとに:
     /// <list type="bullet">
-    /// <item>白: 固まりの頭／末尾、および Music Segment の分かれ目（下部の半四角）</item>
-    /// <item>ライム Entry: 頭。ただし先頭が -A ならその直後（開始形）。白より手前</item>
-    /// <item>赤 Exit: 末尾。ただし末尾が -E ならその直前（終了形）。白より手前</item>
+    /// <item>白: 固まりの頭／末尾のみ。縦線は端、半三角はフェード端（波形上端）</item>
+    /// <item>ライム Entry: 頭。ただし先頭が -A ならその直後（開始形）。Marker 段の半三角。白より手前、通常マーカーより奥</item>
+    /// <item>赤 Exit: 末尾。ただし末尾が -E ならその直前（終了形）。Marker 段の半三角。白より手前、通常マーカーより奥</item>
     /// </list>
     /// </summary>
-    private void DrawContiguousRegionCueMarkers(Graphics g, Rectangle wave)
+    private void DrawContiguousRegionCueMarkers(
+        Graphics g,
+        Rectangle wave,
+        Rectangle labels,
+        float rowHeight)
     {
+        _fadeHandleHitRegions.Clear();
+        _fadeAreaHitRegions.Clear();
         if (_peaks is null || _peaks.FrameCount <= 0 || _regions.Count == 0)
         {
             return;
         }
 
         var frameCount = _peaks.FrameCount;
+        var markerRowTop = labels.Top + rowHeight * 3f;
         var white = UiColors.ForControlBack(UiColors.RegionBoundaryMarker);
         var entryColor = UiColors.ForControlBack(UiColors.EntryCueMarker);
         var exitColor = UiColors.ForControlBack(UiColors.ExitCueMarker);
+        var fadeCurve = UiColors.ForControlBack(UiColors.RegionFadeCurve);
+        var displayFades = GetDisplayRegionEdgeFades();
 
-        using var whitePen = new Pen(white, 2f);
+        using var whiteHandlePen = new Pen(white, 1f);
         using var whiteBrush = new SolidBrush(white);
         using var entryPen = new Pen(entryColor, 2f);
         using var entryBrush = new SolidBrush(entryColor);
         using var exitPen = new Pen(exitColor, 2f);
         using var exitBrush = new SolidBrush(exitColor);
+        using var fadePen = new Pen(fadeCurve, 1.5f);
 
         foreach (var run in CollectNonExcludedRuns(_regions))
         {
@@ -3700,68 +4156,222 @@ internal sealed class WaveformView : Control
 
             var first = run[0];
             var last = run[^1];
-
-            // 白: 固まりの頭と末尾（先に描画＝奥）。下部の半四角
-            if (TryGetWaveX(first.StartSampleOffset, frameCount, wave, out var xHead))
+            var inSample = first.StartSampleOffset;
+            var outSample = last.EndSampleOffset;
+            var fade = displayFades.FirstOrDefault(f =>
+                f.InSample == inSample && f.OutSample == outSample);
+            if (fade.OutSample <= fade.InSample)
             {
-                DrawRegionEdgeGlyph(g, whitePen, whiteBrush, wave, xHead, isStart: true, atBottom: true, square: true);
+                fade = new RegionEdgeFade(inSample, outSample, null, null);
             }
 
-            if (TryGetWaveX(last.EndSampleOffset, frameCount, wave, out var xTail))
+            var fadeInEnd = fade.EffectiveFadeInEnd;
+            var fadeOutStart = fade.EffectiveFadeOutStart;
+
+            if (fade.HasFadeIn)
             {
-                DrawRegionEdgeGlyph(g, whitePen, whiteBrush, wave, xTail, isStart: false, atBottom: true, square: true);
+                DrawRegionFadeCurve(
+                    g,
+                    fadePen,
+                    wave,
+                    frameCount,
+                    inSample,
+                    fadeInEnd,
+                    fade.FadeInCurve,
+                    isFadeIn: true);
             }
 
-            // Entry: 頭。先頭 -A ならその後（上部の半三角）
+            if (fade.HasFadeOut)
+            {
+                DrawRegionFadeCurve(
+                    g,
+                    fadePen,
+                    wave,
+                    frameCount,
+                    fadeOutStart,
+                    outSample,
+                    fade.FadeOutCurve,
+                    isFadeIn: false);
+            }
+
+            // 白: 三角はフェードハンドル位置、縦線は三角から真下へ 1px
+            if (TryGetWaveX(inSample, frameCount, wave, out var xInEdge))
+            {
+                var handleSample = fadeInEnd;
+                if (!TryGetWaveX(handleSample, frameCount, wave, out var xInHandle))
+                {
+                    xInHandle = xInEdge;
+                }
+
+                DrawRegionEdgeGlyph(
+                    g,
+                    whiteHandlePen,
+                    whiteBrush,
+                    wave,
+                    xInHandle,
+                    xInHandle,
+                    isStart: true,
+                    dropLineAtGlyph: true);
+                _fadeHandleHitRegions.Add(CreateFadeHandleHit(xInHandle, wave.Top, isStart: true, inSample, outSample, isFadeIn: true));
+                if (fade.HasFadeIn
+                    && TryMapAbsoluteRange(
+                        SampleToAbsolute(inSample, frameCount),
+                        SampleToAbsolute(fadeInEnd, frameCount),
+                        wave,
+                        out var fadeInX0,
+                        out var fadeInX1))
+                {
+                    _fadeAreaHitRegions.Add(new FadeAreaHitRegion(
+                        inSample,
+                        outSample,
+                        IsFadeIn: true,
+                        RectangleF.FromLTRB(
+                            Math.Min(fadeInX0, fadeInX1),
+                            wave.Top,
+                            Math.Max(fadeInX0, fadeInX1),
+                            wave.Bottom)));
+                }
+            }
+
+            if (TryGetWaveX(outSample, frameCount, wave, out var xOutEdge))
+            {
+                var handleSample = fadeOutStart;
+                if (!TryGetWaveX(handleSample, frameCount, wave, out var xOutHandle))
+                {
+                    xOutHandle = xOutEdge;
+                }
+
+                DrawRegionEdgeGlyph(
+                    g,
+                    whiteHandlePen,
+                    whiteBrush,
+                    wave,
+                    xOutHandle,
+                    xOutHandle,
+                    isStart: false,
+                    dropLineAtGlyph: true);
+                _fadeHandleHitRegions.Add(CreateFadeHandleHit(xOutHandle, wave.Top, isStart: false, inSample, outSample, isFadeIn: false));
+                if (fade.HasFadeOut
+                    && TryMapAbsoluteRange(
+                        SampleToAbsolute(fadeOutStart, frameCount),
+                        SampleToAbsolute(outSample, frameCount),
+                        wave,
+                        out var fadeOutX0,
+                        out var fadeOutX1))
+                {
+                    _fadeAreaHitRegions.Add(new FadeAreaHitRegion(
+                        inSample,
+                        outSample,
+                        IsFadeIn: false,
+                        RectangleF.FromLTRB(
+                            Math.Min(fadeOutX0, fadeOutX1),
+                            wave.Top,
+                            Math.Max(fadeOutX0, fadeOutX1),
+                            wave.Bottom)));
+                }
+            }
+
+            // Entry: 頭。先頭 -A ならその後（Marker 段の半三角）
             var entrySample = IsAnacrusisSuffix(first) && run.Count > 1
                 ? run[1].StartSampleOffset
                 : first.StartSampleOffset;
             if (TryGetWaveX(entrySample, frameCount, wave, out var xEntry))
             {
-                DrawRegionEdgeGlyph(g, entryPen, entryBrush, wave, xEntry, isStart: true);
+                DrawRegionEdgeGlyph(
+                    g,
+                    entryPen,
+                    entryBrush,
+                    wave,
+                    xEntry,
+                    xEntry,
+                    isStart: true,
+                    glyphAnchorY: markerRowTop);
             }
 
-            // Exit: 末尾。末尾が -E ならその前（上部の半三角）
+            // Exit: 末尾。末尾が -E ならその前（Marker 段の半三角）
             var exitSample = IsExitSuffix(last) && run.Count > 1
                 ? last.StartSampleOffset
                 : last.EndSampleOffset;
             if (TryGetWaveX(exitSample, frameCount, wave, out var xExit))
             {
-                DrawRegionEdgeGlyph(g, exitPen, exitBrush, wave, xExit, isStart: false);
+                DrawRegionEdgeGlyph(
+                    g,
+                    exitPen,
+                    exitBrush,
+                    wave,
+                    xExit,
+                    xExit,
+                    isStart: false,
+                    glyphAnchorY: markerRowTop);
             }
         }
-
-        // Wwise Music Segment の境界（固まり内で _a / _b が分かれる位置など）
-        DrawWwiseSegmentBoundaryMarkers(g, wave, frameCount, whitePen, whiteBrush);
     }
 
-    /// <summary>
-    /// Music Segment 名レーンと同じ範囲の頭／末尾に白境界を追加する。
-    /// 固まり境界と重なる位置は重ね描きになるが見た目は同じ。
-    /// </summary>
-    private void DrawWwiseSegmentBoundaryMarkers(
+    private static FadeHandleHitRegion CreateFadeHandleHit(
+        float glyphX,
+        float baseY,
+        bool isStart,
+        long inSample,
+        long outSample,
+        bool isFadeIn)
+    {
+        const float halfW = 18f;
+        var triH = halfW * MathF.Sqrt(3f) / 2f;
+        var left = isStart ? glyphX - 2f : glyphX - halfW - 2f;
+        var right = isStart ? glyphX + halfW + 2f : glyphX + 2f;
+        return new FadeHandleHitRegion(
+            inSample,
+            outSample,
+            isFadeIn,
+            RectangleF.FromLTRB(left, baseY - 2f, right, baseY + triH + 2f));
+    }
+
+    private void DrawRegionFadeCurve(
         Graphics g,
+        Pen pen,
         Rectangle wave,
         long frameCount,
-        Pen whitePen,
-        Brush whiteBrush)
+        long startSample,
+        long endSample,
+        RegionFadeCurveKind curveKind,
+        bool isFadeIn)
     {
-        if (_segmentNames.Count == 0)
+        if (endSample <= startSample || frameCount <= 0)
         {
             return;
         }
 
-        foreach (var segment in _segmentNames)
+        var topY = wave.Top;
+        var bottomY = wave.Bottom - 1f;
+        // 表示幅に応じてサンプルし、スプラインではなく折れ線で正確に描く
+        var pixelSpan = Math.Max(
+            2f,
+            Math.Abs(
+                AbsoluteToX(SampleToAbsolute(endSample, frameCount), wave)
+                - AbsoluteToX(SampleToAbsolute(startSample, frameCount), wave)));
+        var steps = Math.Clamp((int)Math.Ceiling(pixelSpan), 16, 256);
+        var points = new List<PointF>(steps + 1);
+        for (var i = 0; i <= steps; i++)
         {
-            if (TryGetWaveX(segment.StartSampleOffset, frameCount, wave, out var xHead))
+            var t = i / (double)steps;
+            var sample = startSample + (long)Math.Round((endSample - startSample) * t);
+            var abs = SampleToAbsolute(sample, frameCount);
+            if (abs < _viewStart - 1e-9 || abs > ViewEnd + 1e-9)
             {
-                DrawRegionEdgeGlyph(g, whitePen, whiteBrush, wave, xHead, isStart: true, atBottom: true, square: true);
+                continue;
             }
 
-            if (TryGetWaveX(segment.EndSampleOffset, frameCount, wave, out var xTail))
-            {
-                DrawRegionEdgeGlyph(g, whitePen, whiteBrush, wave, xTail, isStart: false, atBottom: true, square: true);
-            }
+            var x = AbsoluteToX(abs, wave);
+            var gain = isFadeIn
+                ? RegionEdgeFade.EvaluateRising(curveKind, t)
+                : RegionEdgeFade.EvaluateFalling(curveKind, t);
+            var y = bottomY - (bottomY - topY) * gain;
+            points.Add(new PointF(x, y));
+        }
+
+        if (points.Count >= 2)
+        {
+            g.DrawLines(pen, points.ToArray());
         }
     }
 
@@ -3779,49 +4389,50 @@ internal sealed class WaveformView : Control
     }
 
     /// <summary>
-    /// DAW 風エッジ: 縦線＋半欠けグリフ（開始=右半分、終了=左半分）。
-    /// 既定は上部の半三角。境界マーカーは下部の半四角。
+    /// DAW 風エッジ: 縦線＋半欠け三角（開始=右半分、終了=左半分）。
+    /// 既定は <paramref name="lineX"/> に太線。白ハンドルは <paramref name="dropLineAtGlyph"/> で
+    /// 三角位置から真下へ 1px 線を引く。
+    /// Entry/Exit Cue は <paramref name="glyphAnchorY"/> で Marker 段へ置く。
     /// </summary>
     private static void DrawRegionEdgeGlyph(
         Graphics g,
         Pen pen,
         Brush brush,
         Rectangle wave,
-        float x,
+        float lineX,
+        float glyphX,
         bool isStart,
-        bool atBottom = false,
-        bool square = false)
+        float? glyphAnchorY = null,
+        bool dropLineAtGlyph = false)
     {
         const float halfW = 18f;
 
-        g.DrawLine(pen, x, wave.Top, x, wave.Bottom);
-
-        if (square)
+        var baseY = glyphAnchorY ?? wave.Top;
+        if (dropLineAtGlyph)
         {
-            var side = halfW * 2f / 3f * 0.75f;
-            var top = atBottom ? wave.Bottom - side : wave.Top;
-            var left = isStart ? x : x - side;
-            g.FillRectangle(brush, left, top, side, side);
-            return;
+            g.DrawLine(pen, glyphX, baseY, glyphX, wave.Bottom);
+        }
+        else
+        {
+            g.DrawLine(pen, lineX, baseY, lineX, wave.Bottom);
         }
 
         // 半欠けの ▼ は「正三角形の半分」(高さ=半幅×√3) だと縦長に見えるため、
         // 見かけのバランスを優先して高さ = 半幅 × √3/2 にする。
         var triH = halfW * MathF.Sqrt(3f) / 2f;
-        var baseY = atBottom ? wave.Bottom : wave.Top;
-        var tipY = atBottom ? wave.Bottom - triH : wave.Top + triH;
+        var tipY = baseY + triH;
         PointF[] triangle = isStart
             ?
             [
-                new(x, baseY),
-                new(x + halfW, baseY),
-                new(x, tipY),
+                new(glyphX, baseY),
+                new(glyphX + halfW, baseY),
+                new(glyphX, tipY),
             ]
             :
             [
-                new(x - halfW, baseY),
-                new(x, baseY),
-                new(x, tipY),
+                new(glyphX - halfW, baseY),
+                new(glyphX, baseY),
+                new(glyphX, tipY),
             ];
         g.FillPolygon(brush, triangle);
     }

@@ -79,6 +79,7 @@ internal sealed class WaveformPreviewSession
     private IReadOnlyList<WaveformMarkerMark> _effectiveMarkers;
     private IReadOnlyList<WaveformMarkerMark> _wwiseMarkers;
     private MarkerCommentRule _commentRule = MarkerCommentRule.Default;
+    private IReadOnlyList<RegionEdgeFade> _regionEdgeFades = [];
 
     public WaveformPreviewSession(WaveformPreviewData preview)
     {
@@ -136,6 +137,36 @@ internal sealed class WaveformPreviewSession
     /// </summary>
     public IReadOnlyList<WaveformOutputPart> EffectiveOutputParts =>
         _waveOnlyOutputParts ?? Preview.OutputParts;
+
+    /// <summary>
+    /// 連続リージョン固まりのイン／アウト端フェード（プレビュー用・非破壊）。
+    /// </summary>
+    public IReadOnlyList<RegionEdgeFade> RegionEdgeFades => _regionEdgeFades;
+
+    /// <summary>フェード一覧を差し替える（正規化＋現行リージョンへ再マップ）。</summary>
+    public void SetRegionEdgeFades(IReadOnlyList<RegionEdgeFade>? fades)
+    {
+        _regionEdgeFades = RegionEdgeFade.RemapToRuns(
+            fades ?? [],
+            EffectiveRegions);
+    }
+
+    /// <summary>1 固まり分のフェードを更新する。長さ 0 なら一覧から外す。</summary>
+    public void UpsertRegionEdgeFade(RegionEdgeFade fade)
+    {
+        var normalized = fade.Normalized();
+        var next = _regionEdgeFades
+            .Where(existing =>
+                existing.InSample != normalized.InSample
+                || existing.OutSample != normalized.OutSample)
+            .ToList();
+        if (normalized.HasAnyFade)
+        {
+            next.Add(normalized);
+        }
+
+        _regionEdgeFades = RegionEdgeFade.RemapToRuns(next, EffectiveRegions);
+    }
 
     /// <summary>
     /// アプリ追加マーカーのサンプル位置（投影は含まない実体のみ）。
@@ -619,6 +650,7 @@ internal sealed class WaveformPreviewSession
         _waveOnlyOutputParts = _waveOnlyRegions.Count == 0
             ? []
             : WaveformRegionBuilder.BuildOutputParts(_waveOnlyRegions, Preview.SourcePath);
+        _regionEdgeFades = RegionEdgeFade.RemapToRuns(_regionEdgeFades, _waveOnlyRegions);
     }
 
     /// <summary>
