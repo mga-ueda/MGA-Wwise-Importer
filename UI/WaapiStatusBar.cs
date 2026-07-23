@@ -117,6 +117,18 @@ internal sealed class WaapiStatusBar : Panel
     /// <summary>ロック中プロジェクト名のクリック（開く／前面化）。</summary>
     public event EventHandler? ProjectNameClick;
 
+    /// <summary>プロジェクト名リンクがクリック可能なら、クリック相当のイベントを発火する。</summary>
+    public bool TryInvokeProjectNameClick()
+    {
+        if (!_projectNameClickable)
+        {
+            return false;
+        }
+
+        ProjectNameClick?.Invoke(this, EventArgs.Empty);
+        return true;
+    }
+
     public bool KeepTargetChecked
     {
         get => _keepTargetChecked;

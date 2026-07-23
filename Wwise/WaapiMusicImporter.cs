@@ -1270,8 +1270,8 @@ internal static class WaapiMusicImporter
                     UiStrings.ErrSlicedWavMissing(segment.Name, track.Name));
             }
 
-            // 先頭セグメント内の全トラック（グループ化レイヤー含む）を Zero latency にする。
-            // Prefetch は従来どおり先頭トラックのみ。
+            // 先頭セグメント内の全トラック（グループ化レイヤー含む）に
+            // Zero latency ＋ Prefetch を付け、2 番目以降は Look-ahead のみ。
             var zeroLatency = streamEnabled && isFirstSegment;
             var trackProps = new Dictionary<string, object?>
             {
@@ -1290,7 +1290,7 @@ internal static class WaapiMusicImporter
             {
                 trackProps["@IsZeroLatency"] = zeroLatency;
                 trackProps["@LookAheadTime"] = zeroLatency ? 0 : lookAheadMs;
-                if (isFirstSegment && t == 0)
+                if (zeroLatency)
                 {
                     trackProps["@PreFetchLength"] = prefetchLengthMs;
                 }

@@ -46,7 +46,7 @@ internal sealed class ProjectProfile
     /// <summary>2 番目以降のセグメントの Look-ahead time（ms）。</summary>
     public int LookAheadMs { get; set; } = 500;
 
-    /// <summary>Playlist 先頭セグメント先頭トラックの Prefetch Length（ms）。</summary>
+    /// <summary>Playlist 先頭セグメント内全トラックの Prefetch Length（ms）。</summary>
     public int PrefetchLengthMs { get; set; } = 500;
 
     /// <summary>EXPORT 時のラウドネス正規化（既定オフ）。</summary>

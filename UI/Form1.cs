@@ -1219,6 +1219,12 @@ public partial class Form1 : Form, IMessageFilter
             return true;
         }
 
+        if (keyData == (Keys.Control | Keys.Shift | Keys.W))
+        {
+            waapiStatusBar.TryInvokeProjectNameClick();
+            return true;
+        }
+
         var keyCode = keyData & Keys.KeyCode;
         if (keyCode is Keys.Left or Keys.Right
             && (keyData & Keys.Control) == Keys.Control

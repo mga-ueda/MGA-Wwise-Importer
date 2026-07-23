@@ -16,7 +16,7 @@ internal sealed class WwiseImportSettings
     /// <summary>2 番目以降のセグメントの Look-ahead time（ms）。</summary>
     public int LookAheadMs { get; init; } = DefaultLookAheadMs;
 
-    /// <summary>Playlist 先頭セグメント先頭トラックの Prefetch Length（ms）。ストリーミング時に有効。</summary>
+    /// <summary>Playlist 先頭セグメント内全トラックの Prefetch Length（ms）。ストリーミング時に有効。</summary>
     public int PrefetchLengthMs { get; init; } = DefaultPrefetchLengthMs;
 
     /// <summary>

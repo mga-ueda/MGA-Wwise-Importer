@@ -416,16 +416,16 @@ internal static class UiStrings
         "Look-ahead Time (ms). 0–9999. Default 500. Only when Stream is on.");
 
     public static string TipPrefetchLabel => Get(
-        "Playlist 先頭セグメント先頭トラックの Prefetch Length（ms、0〜9999。既定 500）。Stream オン時のみ有効。"
-        + " 先頭セグメントの 2 番目以降トラック（グループ化レイヤー）には Zero latency のみ適用します。",
-        "Prefetch Length for the first track of the first playlist segment (ms, 0–9999, default 500). Only when Stream is on."
-        + " Later tracks in the first segment (layered groups) get Zero latency only.");
+        "Playlist 先頭セグメント内の全トラック（グループ化レイヤー含む）の Prefetch Length（ms、0〜9999。既定 500）。"
+        + " Stream オン時のみ有効。Zero latency と同じ範囲に適用します。",
+        "Prefetch Length for all tracks in the first playlist segment, including layered groups"
+        + " (ms, 0–9999, default 500). Only when Stream is on. Same scope as Zero latency.");
 
     public static string TipPrefetchBox => Get(
         "Prefetch Length（ms）。0〜9999。既定は 500 です。"
-        + " Playlist 先頭セグメント先頭トラックにだけ反映されます。Stream オン時のみ有効。",
+        + " Playlist 先頭セグメント内の全トラックに反映されます。Stream オン時のみ有効。",
         "Prefetch Length (ms). 0–9999. Default 500."
-        + " Applied only to the first track of the first playlist segment. Only when Stream is on.");
+        + " Applied to all tracks in the first playlist segment. Only when Stream is on.");
 
     public static string TipLoudnessHeader => Get(
         "このアプリ独自のラウドネス正規化です（Wwise の非破壊 Loudness Normalize とは無関係）。"
@@ -578,8 +578,8 @@ internal static class UiStrings
         "Unlock the destination path (this project setting).");
 
     public static string TipWwiseProjectNameOpen => Get(
-        "クリックでこの Wwise プロジェクトを開きます（既に開いていれば前面に表示）。",
-        "Click to open this Wwise project (or bring it to the front if already open).");
+        "クリックでこの Wwise プロジェクトを開きます（既に開いていれば前面に表示）。  [Ctrl+Shift+W]",
+        "Click to open this Wwise project (or bring it to the front if already open).  [Ctrl+Shift+W]");
 
     public static string KeepTargetOnLabel => Get("- Keep Target -", "- Keep Target -");
     public static string KeepTargetOffLabel => Get("- Not Keep Target -", "- Not Keep Target -");
