@@ -1193,7 +1193,7 @@ partial class Form1
         MinimumSize = new Size(480, 320);
         Name = "Form1";
         StartPosition = FormStartPosition.CenterScreen;
-        Text = "MGA Wwise IMImporter - Version 1.0.5-beta";
+        Text = "MGA Wwise IMImporter - Version 1.0.6-beta";
         ((System.ComponentModel.ISupportInitialize)brandLogoPictureBox).EndInit();
         projectActionPanel.ResumeLayout(false);
         projectActionPanel.PerformLayout();
