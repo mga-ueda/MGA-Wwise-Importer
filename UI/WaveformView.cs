@@ -2097,6 +2097,12 @@ internal sealed class WaveformView : Control
             return;
         }
 
+        // ログ等からフォーカスを奪い、ショートカット（ジャンプ系含む）を復帰させる。
+        if (CanFocus)
+        {
+            Focus();
+        }
+
         if (TryBeginMarkerStroke(e.Location))
         {
             return;
@@ -2107,7 +2113,6 @@ internal sealed class WaveformView : Control
         {
             EndMarkerCommentEdit(commit: true);
             SetSelectedMarker(hit.SampleOffset);
-            Focus();
             _isDraggingMarker = true;
             _markerDragFromSample = hit.SampleOffset;
             _markerDragPreviewSample = hit.SampleOffset;

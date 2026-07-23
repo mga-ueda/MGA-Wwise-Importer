@@ -495,6 +495,17 @@ public partial class Form1 : Form, IMessageFilter
 
     bool IMessageFilter.PreFilterMessage(ref Message m)
     {
+        const int wmLButtonDown = 0x0201;
+        const int wmRButtonDown = 0x0204;
+        const int wmMButtonDown = 0x0207;
+        if (m.Msg is wmLButtonDown or wmRButtonDown or wmMButtonDown)
+        {
+            // 操作系 UI は Selectable=false が多く、クリックしてもログからフォーカスが移らない。
+            // ログ外をクリックしたら波形へ戻し、ジャンプ系などのショートカットを復帰させる。
+            TryReleaseLogFocusOnOutsideMouseDown();
+            return false;
+        }
+
         const int wmKeyDown = 0x0100;
         const int wmSysKeyDown = 0x0104;
         if (m.Msg is not (wmKeyDown or wmSysKeyDown)
@@ -518,6 +529,29 @@ public partial class Form1 : Form, IMessageFilter
 
         var keyCode = (Keys)((int)m.WParam & 0xFFFF);
         return TryNudgeSeekByArrowKey(keyCode);
+    }
+
+    /// <summary>
+    /// ログ本文以外をクリックしたとき、ログに残ったフォーカスを波形へ戻す。
+    /// </summary>
+    private void TryReleaseLogFocusOnOutsideMouseDown()
+    {
+        if (IsDisposed || !Visible || !ContainsFocus || !editorTextBox.ContainsFocus)
+        {
+            return;
+        }
+
+        // スクロールバー含むログ本文上は選択・コピーのためフォーカスを維持する。
+        if (editorTextBox.IsHandleCreated)
+        {
+            var pt = editorTextBox.PointToClient(Control.MousePosition);
+            if (pt.X >= 0 && pt.Y >= 0 && pt.X < editorTextBox.Width && pt.Y < editorTextBox.Height)
+            {
+                return;
+            }
+        }
+
+        ReleaseFocusToWaveform();
     }
 
     protected override void OnShown(EventArgs e)
@@ -4327,6 +4361,7 @@ public partial class Form1 : Form, IMessageFilter
             });
         ShowTransitionSettingsForPart(part.Number);
         RequestPlaylistPlayback(part);
+        ReleaseFocusToWaveform();
     }
 
     private void PlaylistGroupTarget_MouseDown(object? sender, MouseEventArgs e)
